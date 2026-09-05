@@ -661,35 +661,35 @@ function buildPayload(form: FormState): StrategyCreateDto {
       },
       signal: {
         direction: form.direction as StrategyCreateDto["config"]["signal"]["direction"],
-        emaFastPeriod: Number(form.emaFastPeriod),
-        emaSlowPeriod: Number(form.emaSlowPeriod),
-        rsiPeriod: Number(form.rsiPeriod),
-        rsiOversold: Number(form.rsiOversold),
-        rsiOverbought: Number(form.rsiOverbought),
+        emaFastPeriod: toNumber(form.emaFastPeriod),
+        emaSlowPeriod: toNumber(form.emaSlowPeriod),
+        rsiPeriod: toNumber(form.rsiPeriod),
+        rsiOversold: toNumber(form.rsiOversold),
+        rsiOverbought: toNumber(form.rsiOverbought),
       },
       filters: {
-        minimumVolume24hUsdt: Number(form.minimumVolume24hUsdt),
-        minimumAtrPercent: Number(form.minimumAtrPercent),
-        maximumAtrPercent: Number(form.maximumAtrPercent),
+        minimumVolume24hUsdt: toNumber(form.minimumVolume24hUsdt),
+        minimumAtrPercent: toNumber(form.minimumAtrPercent),
+        maximumAtrPercent: toNumber(form.maximumAtrPercent),
       },
       risk: {
-        riskPerTradePercent: Number(form.riskPerTradePercent),
-        maxOpenPositions: Number(form.maxOpenPositions),
-        maxDailyLossPercent: Number(form.maxDailyLossPercent),
+        riskPerTradePercent: toNumber(form.riskPerTradePercent),
+        maxOpenPositions: toNumber(form.maxOpenPositions),
+        maxDailyLossPercent: toNumber(form.maxDailyLossPercent),
       },
       entry: {
         orderType: form.orderType as StrategyCreateDto["config"]["entry"]["orderType"],
-        limitOffsetBps: Number(form.limitOffsetBps),
+        limitOffsetBps: toNumber(form.limitOffsetBps),
       },
       exit: {
-        stopLossPercent: Number(form.stopLossPercent),
-        takeProfitPercent: Number(form.takeProfitPercent),
-        trailingStopPercent: Number(form.trailingStopPercent),
+        stopLossPercent: toNumber(form.stopLossPercent),
+        takeProfitPercent: toNumber(form.takeProfitPercent),
+        trailingStopPercent: toNumber(form.trailingStopPercent),
       },
       costs: {
-        makerFeeBps: Number(form.makerFeeBps),
-        takerFeeBps: Number(form.takerFeeBps),
-        slippageBps: Number(form.slippageBps),
+        makerFeeBps: toNumber(form.makerFeeBps),
+        takerFeeBps: toNumber(form.takerFeeBps),
+        slippageBps: toNumber(form.slippageBps),
       },
       schedule: {
         timezone: form.timezone,
@@ -697,6 +697,10 @@ function buildPayload(form: FormState): StrategyCreateDto {
       },
     },
   };
+}
+
+function toNumber(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
 }
 
 const sections = [

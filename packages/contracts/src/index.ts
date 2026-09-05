@@ -305,9 +305,7 @@ export const strategyConfigSchema = z
     }),
     schedule: z.object({
       timezone: z.string().trim().min(1).max(64),
-      activeDays: z
-        .array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]))
-        .min(1),
+      activeDays: z.array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])).min(1),
     }),
   })
   .superRefine((config, context) => {

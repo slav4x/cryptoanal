@@ -398,6 +398,92 @@ export const strategyStatusChangedSchema = z.object({
   status: strategyStatusSchema,
 });
 
+export const validationKindSchema = z.enum(["backtest", "walk-forward", "holdout"]);
+export const validationQueueKindSchema = z.enum(["backtest", "walk-forward"]);
+
+export const validationRunInputSchema = z
+  .object({
+    strategyVersionId: z.uuid(),
+    kind: validationQueueKindSchema,
+    dataset: z.object({
+      startDate: z.iso.date(),
+      endDate: z.iso.date(),
+      symbols: z
+        .array(z.string().regex(/^[A-Z0-9]{4,24}$/))
+        .min(1)
+        .max(50),
+      timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+    }),
+    initialCapital: z.string().regex(/^\d+(?:\.\d{1,8})?$/),
+    walkForward: z
+      .object({
+        trainingDays: z.number().int().min(7).max(3650),
+        testDays: z.number().int().min(1).max(365),
+      })
+      .nullable(),
+    idempotencyKey: z.uuid(),
+  })
+  .superRefine((input, context) => {
+    if (input.dataset.startDate >= input.dataset.endDate) {
+      context.addIssue({
+        code: "custom",
+        message: "Дата начала должна быть раньше даты окончания",
+        path: ["dataset", "startDate"],
+      });
+    }
+    if (input.kind === "walk-forward" && input.walkForward === null) {
+      context.addIssue({
+        code: "custom",
+        message: "Для walk-forward нужны размеры training и test окон",
+        path: ["walkForward"],
+      });
+    }
+  });
+
+export const validationExecutionInputSchema = validationRunInputSchema
+  .omit({ strategyVersionId: true, idempotencyKey: true })
+  .extend({ kind: validationKindSchema });
+
+export const validationRunSchema = z.object({
+  id: z.string(),
+  strategy: z.object({ id: z.string(), name: z.string() }),
+  strategyVersion: z.object({ id: z.string(), version: z.number().int().positive() }),
+  kind: validationKindSchema,
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+  verdict: z.enum(["pending", "passed", "failed", "warning"]),
+  datasetId: z.string(),
+  datasetAsOf: z.iso.datetime(),
+  engineVersion: z.string(),
+  configHash: z.string(),
+  input: validationExecutionInputSchema,
+  failureCode: z.string().nullable(),
+  failureMessage: z.string().nullable(),
+  queuedAt: z.iso.datetime(),
+  startedAt: z.iso.datetime().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+});
+
+export const validationsSchema = z.object({
+  items: z.array(validationRunSchema),
+  total: z.number().int().nonnegative(),
+  counts: z.object({
+    queued: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+  }),
+});
+
+export const validationRunQueuedSchema = z.object({
+  run: validationRunSchema,
+  job: z.object({
+    id: z.string(),
+    status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+    replayed: z.boolean(),
+  }),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -446,5 +532,11 @@ export type StrategyLifecycleDto = z.infer<typeof strategyLifecycleSchema>;
 export type StrategyManualStatusDto = z.infer<typeof strategyManualStatusSchema>;
 export type StrategyStatusTransitionDto = z.infer<typeof strategyStatusTransitionSchema>;
 export type StrategyStatusChangedDto = z.infer<typeof strategyStatusChangedSchema>;
+export type ValidationKindDto = z.infer<typeof validationKindSchema>;
+export type ValidationRunInputDto = z.infer<typeof validationRunInputSchema>;
+export type ValidationExecutionInputDto = z.infer<typeof validationExecutionInputSchema>;
+export type ValidationRunDto = z.infer<typeof validationRunSchema>;
+export type ValidationsDto = z.infer<typeof validationsSchema>;
+export type ValidationRunQueuedDto = z.infer<typeof validationRunQueuedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

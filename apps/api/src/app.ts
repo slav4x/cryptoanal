@@ -28,6 +28,10 @@ import {
   tradeDetailSchema,
   tradeIdParamsSchema,
   tradingLedgerSchema,
+  validationExecutionInputSchema,
+  validationRunInputSchema,
+  validationRunQueuedSchema,
+  validationsSchema,
   watchlistStateSchema,
 } from "@cryptoanal/contracts";
 import {
@@ -39,6 +43,11 @@ import {
   StrategyRepository,
   StrategyStatusConflictError,
   StrategyVersionNotAllowedError,
+  ValidationAlreadyActiveError,
+  ValidationNotEligibleError,
+  ValidationRepository,
+  ValidationStrategyNotFoundError,
+  ValidationVersionMismatchError,
 } from "@cryptoanal/persistence";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
@@ -74,6 +83,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   const repository = new DashboardRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
+  const validationRepository = new ValidationRepository(prisma);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -657,6 +667,132 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   );
 
   app.get(
+    "/api/v1/validations",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(validationsSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const runs = await validationRepository.list(workspace.id);
+      const counts = {
+        queued: 0,
+        running: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+      };
+      const items = runs.map((run) => {
+        counts[runStatus[run.status]] += 1;
+        return serializeValidationRun(run);
+      });
+
+      return {
+        data: { items, total: items.length, counts },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/strategies/:strategyId/validations",
+    {
+      schema: {
+        params: strategyIdParamsSchema,
+        body: validationRunInputSchema,
+        response: {
+          202: apiEnvelopeSchema(validationRunQueuedSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = await requireWorkspace();
+      const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
+      if (!strategy) {
+        throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+      }
+      const version = strategy.versions.find(
+        (candidate) => candidate.id === request.body.strategyVersionId,
+      );
+      if (!version) {
+        throw new ApiError(
+          409,
+          "VALIDATION_VERSION_MISMATCH",
+          "Для проверки нужно выбрать последнюю версию стратегии",
+        );
+      }
+
+      const { strategyVersionId, idempotencyKey, ...executionInput } = request.body;
+      const datasetHash = createHash("sha256")
+        .update(JSON.stringify(executionInput.dataset))
+        .digest("hex");
+
+      try {
+        const queued = await validationRepository.queue({
+          workspaceId: workspace.id,
+          strategyId: strategy.id,
+          strategyVersionId,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          kind: persistedValidationKind[executionInput.kind],
+          datasetId: `market-candles-request:${datasetHash}`,
+          datasetAsOf: new Date(),
+          engineVersion: validationEngineVersion,
+          configHash: version.configHash,
+          input: executionInput,
+          idempotencyKey,
+        });
+
+        return reply.status(202).send({
+          data: {
+            run: serializeValidationRun(queued.run),
+            job: {
+              id: queued.job.id,
+              status: runStatus[queued.job.status],
+              replayed: queued.replayed,
+            },
+          },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        if (error instanceof ValidationStrategyNotFoundError) {
+          throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+        }
+        if (error instanceof ValidationVersionMismatchError) {
+          throw new ApiError(
+            409,
+            "VALIDATION_VERSION_MISMATCH",
+            "Для проверки нужно выбрать последнюю версию стратегии",
+          );
+        }
+        if (error instanceof ValidationNotEligibleError) {
+          throw new ApiError(
+            409,
+            "VALIDATION_NOT_ELIGIBLE",
+            "Текущий статус стратегии не разрешает новую проверку",
+          );
+        }
+        if (error instanceof ValidationAlreadyActiveError) {
+          throw new ApiError(
+            409,
+            "VALIDATION_ALREADY_ACTIVE",
+            "У стратегии уже есть активная проверка",
+          );
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get(
     "/api/v1/markets/:symbol",
     {
       schema: {
@@ -997,6 +1133,44 @@ function createStrategyLifecycleProjection(strategy: {
   });
 }
 
+function serializeValidationRun(run: {
+  id: string;
+  kind: keyof typeof validationKind;
+  status: keyof typeof runStatus;
+  verdict: keyof typeof validationVerdict;
+  datasetId: string;
+  datasetAsOf: Date;
+  engineVersion: string;
+  configHash: string;
+  input: unknown;
+  failureCode: string | null;
+  failureMessage: string | null;
+  queuedAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  strategy: { id: string; name: string };
+  strategyVersion: { id: string; version: number };
+}) {
+  return {
+    id: run.id,
+    strategy: run.strategy,
+    strategyVersion: run.strategyVersion,
+    kind: validationKind[run.kind],
+    status: runStatus[run.status],
+    verdict: validationVerdict[run.verdict],
+    datasetId: run.datasetId,
+    datasetAsOf: run.datasetAsOf.toISOString(),
+    engineVersion: run.engineVersion,
+    configHash: run.configHash,
+    input: validationExecutionInputSchema.parse(run.input),
+    failureCode: run.failureCode,
+    failureMessage: run.failureMessage,
+    queuedAt: run.queuedAt.toISOString(),
+    startedAt: run.startedAt?.toISOString() ?? null,
+    completedAt: run.completedAt?.toISOString() ?? null,
+  };
+}
+
 function getValidationMessages(error: unknown): string[] | null {
   if (
     !error ||
@@ -1087,6 +1261,13 @@ const validationKind = {
   WALK_FORWARD: "walk-forward",
   HOLDOUT: "holdout",
 } as const;
+
+const persistedValidationKind = {
+  backtest: "BACKTEST",
+  "walk-forward": "WALK_FORWARD",
+} as const;
+
+const validationEngineVersion = "cryptoanal-validation@0.1.0";
 
 const validationVerdict = {
   PENDING: "pending",

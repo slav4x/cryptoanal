@@ -17,3 +17,11 @@ export {
   type MarketCandleInput,
   type MarketSnapshotInput,
 } from "./market-data-repository";
+export {
+  ValidationAlreadyActiveError,
+  ValidationNotEligibleError,
+  ValidationRepository,
+  ValidationStrategyNotFoundError,
+  ValidationVersionMismatchError,
+  type QueueValidationRunInput,
+} from "./validation-repository";

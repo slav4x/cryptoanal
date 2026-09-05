@@ -5,9 +5,12 @@ export {
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
   StrategyNotFoundError,
+  StrategyStatusConflictError,
+  StrategyVersionNotAllowedError,
   StrategyRepository,
   type CreateStrategyInput,
   type CreateStrategyVersionInput,
+  type TransitionStrategyStatusInput,
 } from "./strategy-repository";
 export {
   MarketDataRepository,

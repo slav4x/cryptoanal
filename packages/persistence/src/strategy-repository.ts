@@ -16,6 +16,19 @@ export type CreateStrategyVersionInput = Omit<CreateStrategyInput, "name" | "des
   changeSummary: string;
 };
 
+type PersistedStrategyStatus =
+  "DRAFT" | "VALIDATING" | "APPROVED" | "DEPLOYED" | "PAUSED" | "ARCHIVED";
+
+export type TransitionStrategyStatusInput = {
+  workspaceId: string;
+  strategyId: string;
+  actorId: string;
+  requestId: string;
+  expectedStatus: PersistedStrategyStatus;
+  targetStatus: "DRAFT" | "APPROVED" | "ARCHIVED";
+  reason: string;
+};
+
 export class StrategyNameConflictError extends Error {
   public constructor() {
     super("A strategy with this name already exists in the workspace");
@@ -31,6 +44,18 @@ export class StrategyNotFoundError extends Error {
 export class StrategyConfigUnchangedError extends Error {
   public constructor() {
     super("Strategy configuration is unchanged");
+  }
+}
+
+export class StrategyVersionNotAllowedError extends Error {
+  public constructor() {
+    super("Strategy status does not allow creating a version");
+  }
+}
+
+export class StrategyStatusConflictError extends Error {
+  public constructor() {
+    super("Strategy status changed before the command was applied");
   }
 }
 
@@ -102,14 +127,14 @@ export class StrategyRepository {
         },
         validationRuns: {
           orderBy: { queuedAt: "desc" },
-          take: 1,
+          take: 20,
           select: {
             id: true,
             kind: true,
             status: true,
             verdict: true,
             completedAt: true,
-            strategyVersion: { select: { version: true } },
+            strategyVersion: { select: { id: true, version: true } },
           },
         },
         deployments: {
@@ -130,13 +155,19 @@ export class StrategyRepository {
 
   public async createVersion(input: CreateStrategyVersionInput) {
     return this.prisma.$transaction(async (transaction) => {
-      const lockedStrategies = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        SELECT "id"
+      const lockedStrategies = await transaction.$queryRaw<
+        Array<{ id: string; status: PersistedStrategyStatus }>
+      >(Prisma.sql`
+        SELECT "id", "status"
         FROM "Strategy"
         WHERE "id" = ${input.strategyId} AND "workspaceId" = ${input.workspaceId}
         FOR UPDATE
       `);
-      if (lockedStrategies.length === 0) throw new StrategyNotFoundError();
+      const lockedStrategy = lockedStrategies[0];
+      if (!lockedStrategy) throw new StrategyNotFoundError();
+      if (lockedStrategy.status !== "DRAFT" && lockedStrategy.status !== "APPROVED") {
+        throw new StrategyVersionNotAllowedError();
+      }
 
       const latestVersion = await transaction.strategyVersion.findFirst({
         where: { strategyId: input.strategyId, workspaceId: input.workspaceId },
@@ -163,10 +194,63 @@ export class StrategyRepository {
       });
       await transaction.strategy.update({
         where: { id: input.strategyId },
-        data: { updatedByActorId: input.actorId },
+        data: { updatedByActorId: input.actorId, status: "DRAFT", activeVersionId: null },
       });
 
       return version;
+    });
+  }
+
+  public async transitionStatus(input: TransitionStrategyStatusInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      const lockedStrategies = await transaction.$queryRaw<
+        Array<{ id: string; status: PersistedStrategyStatus }>
+      >(Prisma.sql`
+        SELECT "id", "status"
+        FROM "Strategy"
+        WHERE "id" = ${input.strategyId} AND "workspaceId" = ${input.workspaceId}
+        FOR UPDATE
+      `);
+      const current = lockedStrategies[0];
+      if (!current) throw new StrategyNotFoundError();
+      if (current.status !== input.expectedStatus) throw new StrategyStatusConflictError();
+
+      const latestVersion =
+        input.targetStatus === "APPROVED"
+          ? await transaction.strategyVersion.findFirst({
+              where: { strategyId: input.strategyId, workspaceId: input.workspaceId },
+              orderBy: { version: "desc" },
+              select: { id: true },
+            })
+          : null;
+      if (input.targetStatus === "APPROVED" && !latestVersion) {
+        throw new StrategyNotFoundError();
+      }
+
+      const strategy = await transaction.strategy.update({
+        where: { id: input.strategyId },
+        data: {
+          status: input.targetStatus,
+          activeVersionId: input.targetStatus === "APPROVED" ? (latestVersion?.id ?? null) : null,
+          updatedByActorId: input.actorId,
+        },
+        select: { id: true, status: true },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          action: "strategy.status.transition",
+          resourceType: "strategy",
+          resourceId: input.strategyId,
+          outcome: "COMPLETED",
+          reason: input.reason,
+          requestId: input.requestId,
+          metadata: { from: current.status, to: input.targetStatus },
+        },
+      });
+
+      return strategy;
     });
   }
 }

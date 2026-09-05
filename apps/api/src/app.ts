@@ -1,4 +1,9 @@
-import { calculateMarketAnalysis, createDevelopmentContext } from "@cryptoanal/application";
+import {
+  calculateMarketAnalysis,
+  canTransitionStrategyStatus,
+  createDevelopmentContext,
+  evaluateStrategyLifecycle,
+} from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
@@ -16,6 +21,8 @@ import {
   strategyCreatedSchema,
   strategyDetailSchema,
   strategyIdParamsSchema,
+  strategyStatusChangedSchema,
+  strategyStatusTransitionSchema,
   strategyVersionCreateSchema,
   strategyVersionCreatedSchema,
   tradeDetailSchema,
@@ -30,6 +37,8 @@ import {
   StrategyConfigUnchangedError,
   StrategyNotFoundError,
   StrategyRepository,
+  StrategyStatusConflictError,
+  StrategyVersionNotAllowedError,
 } from "@cryptoanal/persistence";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
@@ -488,6 +497,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
               }
             : null,
           updatedAt: strategy.updatedAt.toISOString(),
+          lifecycle: createStrategyLifecycleProjection(strategy),
           versions: strategy.versions.map((version) => ({
             id: version.id,
             version: version.version,
@@ -555,6 +565,90 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             409,
             "STRATEGY_CONFIG_UNCHANGED",
             "Конфигурация не отличается от последней версии",
+          );
+        }
+        if (error instanceof StrategyVersionNotAllowedError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_VERSION_NOT_ALLOWED",
+            "Новая версия доступна только для черновика или одобренной стратегии",
+          );
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/strategies/:strategyId/status",
+    {
+      schema: {
+        params: strategyIdParamsSchema,
+        body: strategyStatusTransitionSchema,
+        response: {
+          200: apiEnvelopeSchema(strategyStatusChangedSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
+      if (!strategy) {
+        throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+      }
+
+      const currentStatus = strategyStatus[strategy.status];
+      if (currentStatus !== request.body.expectedStatus) {
+        throw new ApiError(
+          409,
+          "STRATEGY_STATUS_CONFLICT",
+          "Статус стратегии уже изменился. Обновите страницу",
+        );
+      }
+      if (!canTransitionStrategyStatus(currentStatus, request.body.target)) {
+        throw new ApiError(409, "STRATEGY_TRANSITION_INVALID", "Недопустимый переход статуса");
+      }
+
+      const lifecycle = createStrategyLifecycleProjection(strategy);
+      const transition = lifecycle.transitions.find(
+        (candidate) => candidate.target === request.body.target,
+      );
+      if (!transition?.allowed) {
+        throw new ApiError(
+          409,
+          "STRATEGY_TRANSITION_BLOCKED",
+          transition?.reason ?? "Переход должен выполняться отдельной доменной командой",
+        );
+      }
+
+      try {
+        const changed = await strategyRepository.transitionStatus({
+          workspaceId: workspace.id,
+          strategyId: strategy.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          expectedStatus: persistedStrategyStatus[request.body.expectedStatus],
+          targetStatus: persistedManualStrategyStatus[request.body.target],
+          reason: request.body.reason,
+        });
+
+        return {
+          data: { strategyId: changed.id, status: strategyStatus[changed.status] },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        if (error instanceof StrategyNotFoundError) {
+          throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+        }
+        if (error instanceof StrategyStatusConflictError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_STATUS_CONFLICT",
+            "Статус стратегии уже изменился. Обновите страницу",
           );
         }
         throw error;
@@ -876,6 +970,33 @@ function serializeStrategyVersion(
     : null;
 }
 
+function createStrategyLifecycleProjection(strategy: {
+  status: keyof typeof strategyStatus;
+  versions: Array<{ id: string }>;
+  validationRuns: Array<{
+    status: keyof typeof runStatus;
+    verdict: keyof typeof validationVerdict;
+    strategyVersion: { id: string };
+  }>;
+  deployments: Array<{ status: keyof typeof deploymentStatus }>;
+}) {
+  return evaluateStrategyLifecycle({
+    status: strategyStatus[strategy.status],
+    latestVersionId: strategy.versions[0]?.id ?? null,
+    validations: strategy.validationRuns.map((validation) => ({
+      strategyVersionId: validation.strategyVersion.id,
+      status: runStatus[validation.status],
+      verdict: validationVerdict[validation.verdict],
+    })),
+    hasActiveDeployment: strategy.deployments.some(
+      (deployment) =>
+        deployment.status === "READY" ||
+        deployment.status === "RUNNING" ||
+        deployment.status === "PAUSED",
+    ),
+  });
+}
+
 function getValidationMessages(error: unknown): string[] | null {
   if (
     !error ||
@@ -944,6 +1065,21 @@ const strategyStatus = {
   DEPLOYED: "deployed",
   PAUSED: "paused",
   ARCHIVED: "archived",
+} as const;
+
+const persistedStrategyStatus = {
+  draft: "DRAFT",
+  validating: "VALIDATING",
+  approved: "APPROVED",
+  deployed: "DEPLOYED",
+  paused: "PAUSED",
+  archived: "ARCHIVED",
+} as const;
+
+const persistedManualStrategyStatus = {
+  draft: "DRAFT",
+  approved: "APPROVED",
+  archived: "ARCHIVED",
 } as const;
 
 const validationKind = {

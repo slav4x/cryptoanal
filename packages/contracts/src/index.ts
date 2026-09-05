@@ -356,8 +356,25 @@ export const strategyVersionDetailSchema = strategyVersionSummarySchema.extend({
   createdByActorId: z.string(),
 });
 
+export const strategyManualStatusSchema = z.enum(["draft", "approved", "archived"]);
+
+export const strategyLifecycleSchema = z.object({
+  validation: z.object({
+    eligible: z.boolean(),
+    reasons: z.array(z.string()),
+  }),
+  transitions: z.array(
+    z.object({
+      target: strategyManualStatusSchema,
+      allowed: z.boolean(),
+      reason: z.string().nullable(),
+    }),
+  ),
+});
+
 export const strategyDetailSchema = strategySummarySchema.extend({
   versions: z.array(strategyVersionDetailSchema),
+  lifecycle: strategyLifecycleSchema,
 });
 
 export const strategyVersionCreateSchema = z.object({
@@ -368,6 +385,17 @@ export const strategyVersionCreateSchema = z.object({
 export const strategyVersionCreatedSchema = z.object({
   strategyId: z.string(),
   version: strategyVersionSummarySchema,
+});
+
+export const strategyStatusTransitionSchema = z.object({
+  expectedStatus: strategyStatusSchema,
+  target: strategyManualStatusSchema,
+  reason: z.string().trim().min(3).max(300),
+});
+
+export const strategyStatusChangedSchema = z.object({
+  strategyId: z.string(),
+  status: strategyStatusSchema,
 });
 
 export const healthSchema = z.object({
@@ -414,5 +442,9 @@ export type StrategyVersionDetailDto = z.infer<typeof strategyVersionDetailSchem
 export type StrategyDetailDto = z.infer<typeof strategyDetailSchema>;
 export type StrategyVersionCreateDto = z.infer<typeof strategyVersionCreateSchema>;
 export type StrategyVersionCreatedDto = z.infer<typeof strategyVersionCreatedSchema>;
+export type StrategyLifecycleDto = z.infer<typeof strategyLifecycleSchema>;
+export type StrategyManualStatusDto = z.infer<typeof strategyManualStatusSchema>;
+export type StrategyStatusTransitionDto = z.infer<typeof strategyStatusTransitionSchema>;
+export type StrategyStatusChangedDto = z.infer<typeof strategyStatusChangedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

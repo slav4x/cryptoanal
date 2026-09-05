@@ -13,6 +13,7 @@ const StrategiesPage = lazy(() => import("../features/strategies/StrategiesPage"
 const NewStrategyPage = lazy(() => import("../features/strategies/NewStrategyPage"));
 const StrategyDetailPage = lazy(() => import("../features/strategies/StrategyDetailPage"));
 const NewStrategyVersionPage = lazy(() => import("../features/strategies/NewStrategyVersionPage"));
+const ValidationPage = lazy(() => import("../features/validation/ValidationPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 
 export function App() {
@@ -89,6 +90,14 @@ export function App() {
             element={
               <Suspense fallback={<RouteFallback />}>
                 <NewStrategyVersionPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="validation"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <ValidationPage />
               </Suspense>
             }
           />

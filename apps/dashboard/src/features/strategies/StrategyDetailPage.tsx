@@ -17,7 +17,15 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ArrowLeft, Check, GitCompareArrows, Plus, RotateCcw } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  Check,
+  FlaskConical,
+  GitCompareArrows,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiClientError, changeStrategyStatus, fetchStrategyDetail } from "../../shared/api";
@@ -222,9 +230,17 @@ function LifecycleCard({ strategy }: { strategy: StrategyDetailDto }) {
         <div>
           <p className="text-xs font-medium text-secondary-foreground">Validation</p>
           {strategy.lifecycle.validation.reasons.length === 0 ? (
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Последнюю версию можно передать в Validation Center после реализации очереди runs.
-            </p>
+            <div className="mt-2 space-y-3">
+              <p className="text-sm leading-6 text-muted-foreground">
+                Последнюю версию можно передать в durable очередь Validation Center.
+              </p>
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/validation?strategy=${strategy.id}`}>
+                  <FlaskConical aria-hidden="true" />
+                  Новая проверка
+                </Link>
+              </Button>
+            </div>
           ) : (
             <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
               {strategy.lifecycle.validation.reasons.map((validationReason) => (

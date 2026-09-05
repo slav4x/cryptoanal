@@ -11,6 +11,8 @@ import {
   strategyVersionCreatedSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
+  validationRunQueuedSchema,
+  validationsSchema,
   watchlistStateSchema,
   type MarketsDto,
   type MarketDetailDto,
@@ -27,6 +29,9 @@ import {
   type StrategyVersionCreatedDto,
   type TradeDetailDto,
   type TradingLedgerDto,
+  type ValidationRunInputDto,
+  type ValidationRunQueuedDto,
+  type ValidationsDto,
   type WatchlistStateDto,
 } from "@cryptoanal/contracts";
 import type { z } from "zod";
@@ -95,6 +100,8 @@ const strategyCreatedEnvelopeSchema = apiEnvelopeSchema(strategyCreatedSchema);
 const strategyDetailEnvelopeSchema = apiEnvelopeSchema(strategyDetailSchema);
 const strategyStatusChangedEnvelopeSchema = apiEnvelopeSchema(strategyStatusChangedSchema);
 const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCreatedSchema);
+const validationsEnvelopeSchema = apiEnvelopeSchema(validationsSchema);
+const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -168,5 +175,20 @@ export function changeStrategyStatus(
     `/api/v1/strategies/${encodeURIComponent(strategyId)}/status`,
     strategyStatusChangedEnvelopeSchema,
     { method: "POST", body: JSON.stringify(transition) },
+  );
+}
+
+export function fetchValidations(): Promise<ApiEnvelope<ValidationsDto>> {
+  return request("/api/v1/validations", validationsEnvelopeSchema);
+}
+
+export function queueValidationRun(
+  strategyId: string,
+  input: ValidationRunInputDto,
+): Promise<ApiEnvelope<ValidationRunQueuedDto>> {
+  return request(
+    `/api/v1/strategies/${encodeURIComponent(strategyId)}/validations`,
+    validationRunQueuedEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
   );
 }

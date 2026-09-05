@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   Box,
   ChevronsUpDown,
+  FlaskConical,
   Layers3,
   LayoutDashboard,
   Menu,
@@ -19,6 +20,7 @@ const navigation = [
   { label: "Рынки", href: "/markets", icon: Activity, end: false },
   { label: "Сделки", href: "/trades", icon: ArrowLeftRight, end: false },
   { label: "Стратегии", href: "/strategies", icon: Layers3, end: false },
+  { label: "Валидация", href: "/validation", icon: FlaskConical, end: false },
 ] as const;
 
 export function AppShell() {

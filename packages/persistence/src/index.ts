@@ -3,8 +3,11 @@ export { AccountSnapshotRepository } from "./account-snapshot-repository";
 export { DashboardRepository } from "./dashboard-repository";
 export {
   StrategyNameConflictError,
+  StrategyConfigUnchangedError,
+  StrategyNotFoundError,
   StrategyRepository,
   type CreateStrategyInput,
+  type CreateStrategyVersionInput,
 } from "./strategy-repository";
 export {
   MarketDataRepository,

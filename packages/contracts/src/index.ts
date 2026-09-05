@@ -345,6 +345,31 @@ export const strategyCreatedSchema = z.object({
   version: strategyVersionSummarySchema,
 });
 
+export const strategyIdParamsSchema = z.object({
+  strategyId: z.uuid(),
+});
+
+export const strategyVersionDetailSchema = strategyVersionSummarySchema.extend({
+  configSchemaVersion: z.number().int().positive(),
+  config: strategyConfigSchema,
+  changeSummary: z.string().nullable(),
+  createdByActorId: z.string(),
+});
+
+export const strategyDetailSchema = strategySummarySchema.extend({
+  versions: z.array(strategyVersionDetailSchema),
+});
+
+export const strategyVersionCreateSchema = z.object({
+  config: strategyConfigSchema,
+  changeSummary: z.string().trim().min(3).max(300),
+});
+
+export const strategyVersionCreatedSchema = z.object({
+  strategyId: z.string(),
+  version: strategyVersionSummarySchema,
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -385,5 +410,9 @@ export type StrategyCatalogDto = z.infer<typeof strategyCatalogSchema>;
 export type StrategyConfigDto = z.infer<typeof strategyConfigSchema>;
 export type StrategyCreateDto = z.infer<typeof strategyCreateSchema>;
 export type StrategyCreatedDto = z.infer<typeof strategyCreatedSchema>;
+export type StrategyVersionDetailDto = z.infer<typeof strategyVersionDetailSchema>;
+export type StrategyDetailDto = z.infer<typeof strategyDetailSchema>;
+export type StrategyVersionCreateDto = z.infer<typeof strategyVersionCreateSchema>;
+export type StrategyVersionCreatedDto = z.infer<typeof strategyVersionCreatedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

@@ -11,8 +11,13 @@ import {
   overviewSchema,
   requestContextSchema,
   strategyCatalogSchema,
+  strategyConfigSchema,
   strategyCreateSchema,
   strategyCreatedSchema,
+  strategyDetailSchema,
+  strategyIdParamsSchema,
+  strategyVersionCreateSchema,
+  strategyVersionCreatedSchema,
   tradeDetailSchema,
   tradeIdParamsSchema,
   tradingLedgerSchema,
@@ -22,6 +27,8 @@ import {
   type CryptoAnalPrismaClient,
   DashboardRepository,
   StrategyNameConflictError,
+  StrategyConfigUnchangedError,
+  StrategyNotFoundError,
   StrategyRepository,
 } from "@cryptoanal/persistence";
 import cors from "@fastify/cors";
@@ -422,6 +429,132 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             409,
             "STRATEGY_NAME_CONFLICT",
             "Стратегия с таким названием уже существует",
+          );
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/strategies/:strategyId",
+    {
+      schema: {
+        params: strategyIdParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(strategyDetailSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
+      if (!strategy) {
+        throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+      }
+
+      const latestVersion = strategy.versions[0] ?? null;
+      const lastValidation = strategy.validationRuns[0] ?? null;
+      const deployment = strategy.deployments[0] ?? null;
+
+      return {
+        data: {
+          id: strategy.id,
+          name: strategy.name,
+          description: strategy.description,
+          status: strategyStatus[strategy.status],
+          versionsCount: strategy._count.versions,
+          activeVersion: serializeStrategyVersion(strategy.activeVersion),
+          latestVersion: serializeStrategyVersion(latestVersion),
+          lastValidation: lastValidation
+            ? {
+                id: lastValidation.id,
+                kind: validationKind[lastValidation.kind],
+                status: runStatus[lastValidation.status],
+                verdict: validationVerdict[lastValidation.verdict],
+                strategyVersion: lastValidation.strategyVersion.version,
+                completedAt: lastValidation.completedAt?.toISOString() ?? null,
+              }
+            : null,
+          deployment: deployment
+            ? {
+                id: deployment.id,
+                environment: tradingEnvironment[deployment.environment],
+                status: deploymentStatus[deployment.status],
+                strategyVersion: deployment.strategyVersion.version,
+                updatedAt: deployment.updatedAt.toISOString(),
+              }
+            : null,
+          updatedAt: strategy.updatedAt.toISOString(),
+          versions: strategy.versions.map((version) => ({
+            id: version.id,
+            version: version.version,
+            configSchemaVersion: version.configSchemaVersion,
+            config: strategyConfigSchema.parse(version.config),
+            configHash: version.configHash,
+            changeSummary: version.changeSummary,
+            createdByActorId: version.createdByActorId,
+            createdAt: version.createdAt.toISOString(),
+          })),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/strategies/:strategyId/versions",
+    {
+      schema: {
+        params: strategyIdParamsSchema,
+        body: strategyVersionCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(strategyVersionCreatedSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = await requireWorkspace();
+      const configHash = createHash("sha256")
+        .update(JSON.stringify(request.body.config))
+        .digest("hex");
+
+      try {
+        const version = await strategyRepository.createVersion({
+          workspaceId: workspace.id,
+          strategyId: request.params.strategyId,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          configSchemaVersion: request.body.config.schemaVersion,
+          config: request.body.config,
+          configHash,
+          changeSummary: request.body.changeSummary,
+        });
+
+        return reply.status(201).send({
+          data: {
+            strategyId: request.params.strategyId,
+            version: {
+              ...version,
+              createdAt: version.createdAt.toISOString(),
+            },
+          },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        if (error instanceof StrategyNotFoundError) {
+          throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+        }
+        if (error instanceof StrategyConfigUnchangedError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_CONFIG_UNCHANGED",
+            "Конфигурация не отличается от последней версии",
           );
         }
         throw error;

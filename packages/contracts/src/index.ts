@@ -1,0 +1,87 @@
+import { z } from "zod";
+
+export const freshnessSchema = z.enum(["fresh", "stale", "unavailable"]);
+export const runtimeStateSchema = z.enum(["offline", "idle", "running", "paused", "error"]);
+
+export const responseMetaSchema = z.object({
+  requestId: z.string(),
+  generatedAt: z.iso.datetime(),
+  freshness: freshnessSchema,
+});
+
+export function apiEnvelopeSchema<T extends z.ZodType>(dataSchema: T) {
+  return z.object({
+    data: dataSchema,
+    meta: responseMetaSchema,
+  });
+}
+
+export const requestContextSchema = z.object({
+  actorId: z.string(),
+  workspaceId: z.string(),
+  workspaceName: z.string(),
+  role: z.enum(["owner", "member", "system"]),
+  environment: z.enum(["development", "test", "production"]),
+});
+
+export const overviewSchema = z.object({
+  runtimeState: runtimeStateSchema,
+  tradingEnvironment: z.enum(["dry-run", "demo", "live"]),
+  equity: z.string().nullable(),
+  dayPnl: z.string(),
+  totalPnl: z.string(),
+  openExposure: z.string().nullable(),
+  openPositions: z.number().int().nonnegative(),
+  activeStrategies: z.number().int().nonnegative(),
+  alerts: z.array(
+    z.object({
+      id: z.string(),
+      severity: z.enum(["info", "warning", "critical"]),
+      title: z.string(),
+      description: z.string(),
+    }),
+  ),
+});
+
+export const marketSchema = z.object({
+  symbol: z.string(),
+  baseAsset: z.string(),
+  quoteAsset: z.string(),
+  exchange: z.string(),
+  instrumentType: z.string(),
+  watchlisted: z.boolean(),
+  price: z.string().nullable(),
+  change24hPercent: z.string().nullable(),
+  volume24h: z.string().nullable(),
+  regime: z.enum(["bull", "bear", "neutral", "unknown"]),
+  freshness: freshnessSchema,
+});
+
+export const marketsSchema = z.object({
+  items: z.array(marketSchema),
+  total: z.number().int().nonnegative(),
+});
+
+export const healthSchema = z.object({
+  status: z.enum(["ok", "degraded"]),
+  service: z.literal("api"),
+  version: z.string(),
+  database: z.enum(["connected", "unavailable"]),
+  timestamp: z.iso.datetime(),
+});
+
+export const errorEnvelopeSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    fields: z.record(z.string(), z.array(z.string())).optional(),
+    requestId: z.string(),
+  }),
+});
+
+export type RequestContextDto = z.infer<typeof requestContextSchema>;
+export type OverviewDto = z.infer<typeof overviewSchema>;
+export type MarketDto = z.infer<typeof marketSchema>;
+export type MarketsDto = z.infer<typeof marketsSchema>;
+export type HealthDto = z.infer<typeof healthSchema>;
+export type Freshness = z.infer<typeof freshnessSchema>;

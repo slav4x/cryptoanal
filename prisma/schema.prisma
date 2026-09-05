@@ -1,0 +1,504 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/persistence/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum StrategyStatus {
+  DRAFT
+  VALIDATING
+  APPROVED
+  DEPLOYED
+  PAUSED
+  ARCHIVED
+}
+
+enum ValidationKind {
+  BACKTEST
+  WALK_FORWARD
+  HOLDOUT
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ValidationVerdict {
+  PENDING
+  PASSED
+  FAILED
+  WARNING
+}
+
+enum TradingEnvironment {
+  DRY_RUN
+  DEMO
+  LIVE
+}
+
+enum DeploymentStatus {
+  DRAFT
+  READY
+  RUNNING
+  PAUSED
+  STOPPED
+  FAILED
+}
+
+enum PositionStatus {
+  OPEN
+  CLOSING
+  CLOSED
+  RECONCILIATION_REQUIRED
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  REJECTED
+}
+
+enum DecisionAction {
+  OPEN
+  CLOSE
+  HOLD
+  SKIP
+  ERROR
+}
+
+enum JobKind {
+  BACKTEST
+  WALK_FORWARD
+  IMPORT
+  EXPORT
+  PROJECTION
+}
+
+enum AuditOutcome {
+  ACCEPTED
+  REJECTED
+  COMPLETED
+  FAILED
+}
+
+model Workspace {
+  id               String             @id @default(uuid())
+  slug             String             @unique
+  name             String
+  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
+  settings         WorkspaceSettings?
+  watchlistItems   WatchlistItem[]
+  strategies       Strategy[]
+  strategyVersions StrategyVersion[]
+  validationRuns   ValidationRun[]
+  deployments      Deployment[]
+  executionRuns    ExecutionRun[]
+  positions        Position[]
+  orders           Order[]
+  fills            Fill[]
+  trades           Trade[]
+  decisions        Decision[]
+  jobs             Job[]
+  auditEvents      AuditEvent[]
+  outboxEvents     OutboxEvent[]
+  accountSnapshots AccountSnapshot[]
+}
+
+model WorkspaceSettings {
+  workspaceId  String    @id
+  timezone     String    @default("UTC")
+  currency     String    @default("USDT")
+  tableDensity String    @default("compact")
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model MarketInstrument {
+  symbol         String           @id
+  baseAsset      String
+  quoteAsset     String
+  exchange       String
+  instrumentType String
+  enabled        Boolean          @default(true)
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
+  watchlistItems WatchlistItem[]
+  positions      Position[]
+  orders         Order[]
+  trades         Trade[]
+  decisions      Decision[]
+  snapshots      MarketSnapshot[]
+
+  @@index([exchange, enabled])
+}
+
+model MarketSnapshot {
+  id               String           @id @default(uuid())
+  symbol           String
+  price            Decimal          @db.Decimal(38, 18)
+  change24hPercent Decimal?         @db.Decimal(18, 8)
+  volume24h        Decimal?         @db.Decimal(38, 8)
+  regime           String           @default("unknown")
+  observedAt       DateTime         @db.Timestamptz(3)
+  instrument       MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@unique([symbol, observedAt])
+  @@index([symbol, observedAt(sort: Desc)])
+}
+
+model AccountSnapshot {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  exchangeAccountId String
+  environment       TradingEnvironment
+  equity            Decimal            @db.Decimal(38, 18)
+  availableBalance  Decimal?           @db.Decimal(38, 18)
+  observedAt        DateTime           @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, exchangeAccountId, environment, observedAt])
+  @@index([workspaceId, observedAt(sort: Desc)])
+}
+
+model WatchlistItem {
+  workspaceId String
+  symbol      String
+  position    Int              @default(0)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instrument  MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@id([workspaceId, symbol])
+  @@index([workspaceId, position])
+}
+
+model Strategy {
+  id               String            @id @default(uuid())
+  workspaceId      String
+  name             String
+  description      String?
+  status           StrategyStatus    @default(DRAFT)
+  activeVersionId  String?           @unique
+  createdByActorId String
+  updatedByActorId String
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions         StrategyVersion[] @relation("StrategyVersions")
+  activeVersion    StrategyVersion?  @relation("ActiveStrategyVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  validationRuns   ValidationRun[]
+  deployments      Deployment[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, status])
+}
+
+model StrategyVersion {
+  id                  String          @id @default(uuid())
+  workspaceId         String
+  strategyId          String
+  version             Int
+  configSchemaVersion Int             @default(1)
+  config              Json
+  configHash          String
+  changeSummary       String?
+  createdByActorId    String
+  createdAt           DateTime        @default(now()) @db.Timestamptz(3)
+  workspace           Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy            Strategy        @relation("StrategyVersions", fields: [strategyId], references: [id], onDelete: Cascade)
+  activeForStrategy   Strategy?       @relation("ActiveStrategyVersion")
+  validationRuns      ValidationRun[]
+  deployments         Deployment[]
+  executionRuns       ExecutionRun[]
+  positions           Position[]
+  trades              Trade[]
+  decisions           Decision[]
+
+  @@unique([strategyId, version])
+  @@unique([strategyId, configHash])
+  @@index([workspaceId, createdAt])
+}
+
+model ValidationRun {
+  id                String            @id @default(uuid())
+  workspaceId       String
+  strategyId        String
+  strategyVersionId String
+  kind              ValidationKind
+  status            RunStatus         @default(QUEUED)
+  verdict           ValidationVerdict @default(PENDING)
+  datasetId         String
+  datasetAsOf       DateTime          @db.Timestamptz(3)
+  engineVersion     String
+  configHash        String
+  input             Json
+  metrics           Json?
+  failureCode       String?
+  failureMessage    String?
+  createdByActorId  String
+  queuedAt          DateTime          @default(now()) @db.Timestamptz(3)
+  startedAt         DateTime?         @db.Timestamptz(3)
+  completedAt       DateTime?         @db.Timestamptz(3)
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy          Strategy          @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  strategyVersion   StrategyVersion   @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, status, queuedAt])
+  @@index([strategyVersionId, queuedAt])
+}
+
+model Deployment {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  strategyId        String
+  strategyVersionId String
+  environment       TradingEnvironment
+  exchangeAccountId String
+  status            DeploymentStatus   @default(DRAFT)
+  createdByActorId  String
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy          Strategy           @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  executionRuns     ExecutionRun[]
+
+  @@index([workspaceId, status])
+  @@index([exchangeAccountId, status])
+}
+
+model ExecutionRun {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  deploymentId      String
+  strategyVersionId String
+  environment       TradingEnvironment
+  configHash        String
+  engineVersion     String
+  status            RunStatus          @default(QUEUED)
+  startedAt         DateTime?          @db.Timestamptz(3)
+  stoppedAt         DateTime?          @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deployment        Deployment         @relation(fields: [deploymentId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  positions         Position[]
+  orders            Order[]
+  trades            Trade[]
+  decisions         Decision[]
+
+  @@index([workspaceId, status, createdAt])
+  @@index([deploymentId, createdAt])
+}
+
+model Position {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  executionRunId    String
+  strategyVersionId String
+  symbol            String
+  environment       TradingEnvironment
+  side              OrderSide
+  status            PositionStatus     @default(OPEN)
+  quantity          Decimal            @db.Decimal(38, 18)
+  entryPrice        Decimal            @db.Decimal(38, 18)
+  markPrice         Decimal?           @db.Decimal(38, 18)
+  realizedPnl       Decimal            @default(0) @db.Decimal(38, 18)
+  unrealizedPnl     Decimal            @default(0) @db.Decimal(38, 18)
+  openedAt          DateTime           @db.Timestamptz(3)
+  closedAt          DateTime?          @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun      ExecutionRun       @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  orders            Order[]
+  trade             Trade?
+
+  @@index([workspaceId, status, openedAt])
+  @@index([workspaceId, symbol, status])
+}
+
+model Order {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  executionRunId  String
+  positionId      String?
+  symbol          String
+  exchangeOrderId String?
+  clientOrderId   String
+  side            OrderSide
+  type            OrderType
+  status          OrderStatus
+  quantity        Decimal          @db.Decimal(38, 18)
+  price           Decimal?         @db.Decimal(38, 18)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(3)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun    ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  position        Position?        @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  instrument      MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  fills           Fill[]
+
+  @@unique([workspaceId, clientOrderId])
+  @@index([workspaceId, status, createdAt])
+}
+
+model Fill {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  orderId        String
+  exchangeFillId String?
+  quantity       Decimal   @db.Decimal(38, 18)
+  price          Decimal   @db.Decimal(38, 18)
+  fee            Decimal   @default(0) @db.Decimal(38, 18)
+  feeAsset       String?
+  filledAt       DateTime  @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, exchangeFillId])
+  @@index([orderId, filledAt])
+}
+
+model Trade {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  positionId        String             @unique
+  executionRunId    String
+  strategyVersionId String
+  symbol            String
+  environment       TradingEnvironment
+  side              OrderSide
+  quantity          Decimal            @db.Decimal(38, 18)
+  averageEntryPrice Decimal            @db.Decimal(38, 18)
+  averageExitPrice  Decimal            @db.Decimal(38, 18)
+  grossPnl          Decimal            @db.Decimal(38, 18)
+  fees              Decimal            @default(0) @db.Decimal(38, 18)
+  funding           Decimal            @default(0) @db.Decimal(38, 18)
+  slippage          Decimal            @default(0) @db.Decimal(38, 18)
+  netPnl            Decimal            @db.Decimal(38, 18)
+  exitReason        String
+  openedAt          DateTime           @db.Timestamptz(3)
+  closedAt          DateTime           @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  position          Position           @relation(fields: [positionId], references: [id], onDelete: Restrict)
+  executionRun      ExecutionRun       @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@index([workspaceId, closedAt])
+  @@index([workspaceId, strategyVersionId, closedAt])
+}
+
+model Decision {
+  id                String           @id @default(uuid())
+  workspaceId       String
+  executionRunId    String
+  strategyVersionId String
+  symbol            String
+  action            DecisionAction
+  reasonCode        String
+  summary           String
+  factors           Json
+  marketSnapshotRef String?
+  correlationId     String
+  decidedAt         DateTime         @db.Timestamptz(3)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun      ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion  @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@index([workspaceId, decidedAt])
+  @@index([workspaceId, symbol, decidedAt])
+  @@index([correlationId])
+}
+
+model Job {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  kind             JobKind
+  status           RunStatus @default(QUEUED)
+  input            Json
+  resultRef        String?
+  progress         Int       @default(0)
+  idempotencyKey   String
+  createdByActorId String
+  queuedAt         DateTime  @default(now()) @db.Timestamptz(3)
+  startedAt        DateTime? @db.Timestamptz(3)
+  completedAt      DateTime? @db.Timestamptz(3)
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([status, queuedAt])
+}
+
+model AuditEvent {
+  id           String       @id @default(uuid())
+  workspaceId  String
+  actorId      String
+  action       String
+  resourceType String
+  resourceId   String?
+  outcome      AuditOutcome
+  reason       String?
+  requestId    String
+  metadata     Json?
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([requestId])
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  topic         String
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  attempts      Int       @default(0)
+  availableAt   DateTime  @default(now()) @db.Timestamptz(3)
+  processedAt   DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([processedAt, availableAt])
+  @@index([workspaceId, createdAt])
+}
+
+model WorkerHeartbeat {
+  workerId   String   @id
+  service    String
+  version    String
+  lastSeenAt DateTime @db.Timestamptz(3)
+  metadata   Json?
+}

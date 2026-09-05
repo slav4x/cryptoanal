@@ -381,6 +381,53 @@ export class DashboardRepository {
     });
   }
 
+  public listStrategies(workspaceId: string) {
+    return this.prisma.strategy.findMany({
+      where: { workspaceId },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        status: true,
+        updatedAt: true,
+        activeVersion: {
+          select: { id: true, version: true, configHash: true, createdAt: true },
+        },
+        versions: {
+          orderBy: { version: "desc" },
+          take: 1,
+          select: { id: true, version: true, configHash: true, createdAt: true },
+        },
+        validationRuns: {
+          orderBy: { queuedAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            kind: true,
+            status: true,
+            verdict: true,
+            completedAt: true,
+            strategyVersion: { select: { version: true } },
+          },
+        },
+        deployments: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            environment: true,
+            status: true,
+            updatedAt: true,
+            strategyVersion: { select: { version: true } },
+          },
+        },
+        _count: { select: { versions: true } },
+      },
+    });
+  }
+
   public async ping(): Promise<boolean> {
     try {
       await this.prisma.$queryRaw`SELECT 1`;

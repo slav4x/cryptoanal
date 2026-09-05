@@ -209,6 +209,58 @@ export const tradeDetailSchema = z.object({
   orders: z.array(orderSchema),
 });
 
+export const strategyStatusSchema = z.enum([
+  "draft",
+  "validating",
+  "approved",
+  "deployed",
+  "paused",
+  "archived",
+]);
+
+export const strategyVersionSummarySchema = z.object({
+  id: z.string(),
+  version: z.number().int().positive(),
+  configHash: z.string(),
+  createdAt: z.iso.datetime(),
+});
+
+export const strategyValidationSummarySchema = z.object({
+  id: z.string(),
+  kind: z.enum(["backtest", "walk-forward", "holdout"]),
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+  verdict: z.enum(["pending", "passed", "failed", "warning"]),
+  strategyVersion: z.number().int().positive(),
+  completedAt: z.iso.datetime().nullable(),
+});
+
+export const strategyDeploymentSummarySchema = z.object({
+  id: z.string(),
+  environment: z.enum(["dry-run", "demo", "live"]),
+  status: z.enum(["draft", "ready", "running", "paused", "stopped", "failed"]),
+  strategyVersion: z.number().int().positive(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const strategySummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  status: strategyStatusSchema,
+  versionsCount: z.number().int().nonnegative(),
+  activeVersion: strategyVersionSummarySchema.nullable(),
+  latestVersion: strategyVersionSummarySchema.nullable(),
+  lastValidation: strategyValidationSummarySchema.nullable(),
+  deployment: strategyDeploymentSummarySchema.nullable(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const strategyCatalogSchema = z.object({
+  items: z.array(strategySummarySchema),
+  total: z.number().int().nonnegative(),
+  counts: z.record(strategyStatusSchema, z.number().int().nonnegative()),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -243,5 +295,8 @@ export type TradingLedgerDto = z.infer<typeof tradingLedgerSchema>;
 export type FillDto = z.infer<typeof fillSchema>;
 export type OrderDto = z.infer<typeof orderSchema>;
 export type TradeDetailDto = z.infer<typeof tradeDetailSchema>;
+export type StrategyStatusDto = z.infer<typeof strategyStatusSchema>;
+export type StrategySummaryDto = z.infer<typeof strategySummarySchema>;
+export type StrategyCatalogDto = z.infer<typeof strategyCatalogSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

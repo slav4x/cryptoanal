@@ -10,6 +10,7 @@ import {
   overviewQuerySchema,
   overviewSchema,
   requestContextSchema,
+  strategyCatalogSchema,
   tradeDetailSchema,
   tradeIdParamsSchema,
   tradingLedgerSchema,
@@ -297,6 +298,69 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           request.id,
           items.some((item) => item.freshness === "fresh") ? "fresh" : "unavailable",
         ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/strategies",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(strategyCatalogSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const strategies = await repository.listStrategies(workspace.id);
+      const counts = Object.fromEntries(strategyStatuses.map((status) => [status, 0])) as Record<
+        (typeof strategyStatuses)[number],
+        number
+      >;
+
+      const items = strategies.map((strategy) => {
+        const status = strategyStatus[strategy.status];
+        counts[status] += 1;
+        const latestVersion = strategy.versions[0] ?? null;
+        const lastValidation = strategy.validationRuns[0] ?? null;
+        const deployment = strategy.deployments[0] ?? null;
+
+        return {
+          id: strategy.id,
+          name: strategy.name,
+          description: strategy.description,
+          status,
+          versionsCount: strategy._count.versions,
+          activeVersion: serializeStrategyVersion(strategy.activeVersion),
+          latestVersion: serializeStrategyVersion(latestVersion),
+          lastValidation: lastValidation
+            ? {
+                id: lastValidation.id,
+                kind: validationKind[lastValidation.kind],
+                status: runStatus[lastValidation.status],
+                verdict: validationVerdict[lastValidation.verdict],
+                strategyVersion: lastValidation.strategyVersion.version,
+                completedAt: lastValidation.completedAt?.toISOString() ?? null,
+              }
+            : null,
+          deployment: deployment
+            ? {
+                id: deployment.id,
+                environment: tradingEnvironment[deployment.environment],
+                status: deploymentStatus[deployment.status],
+                strategyVersion: deployment.strategyVersion.version,
+                updatedAt: deployment.updatedAt.toISOString(),
+              }
+            : null,
+          updatedAt: strategy.updatedAt.toISOString(),
+        };
+      });
+
+      return {
+        data: { items, total: items.length, counts },
+        meta: createMeta(request.id, "fresh"),
       };
     },
   );
@@ -602,6 +666,19 @@ function serializeMetric(value: number | null): string | null {
   return value === null || !Number.isFinite(value) ? null : String(value);
 }
 
+function serializeStrategyVersion(
+  version: { id: string; version: number; configHash: string; createdAt: Date } | null,
+) {
+  return version
+    ? {
+        id: version.id,
+        version: version.version,
+        configHash: version.configHash,
+        createdAt: version.createdAt.toISOString(),
+      }
+    : null;
+}
+
 function getValidationMessages(error: unknown): string[] | null {
   if (
     !error ||
@@ -652,4 +729,44 @@ const runStatus = {
   COMPLETED: "completed",
   FAILED: "failed",
   CANCELLED: "cancelled",
+} as const;
+
+const strategyStatuses = [
+  "draft",
+  "validating",
+  "approved",
+  "deployed",
+  "paused",
+  "archived",
+] as const;
+
+const strategyStatus = {
+  DRAFT: "draft",
+  VALIDATING: "validating",
+  APPROVED: "approved",
+  DEPLOYED: "deployed",
+  PAUSED: "paused",
+  ARCHIVED: "archived",
+} as const;
+
+const validationKind = {
+  BACKTEST: "backtest",
+  WALK_FORWARD: "walk-forward",
+  HOLDOUT: "holdout",
+} as const;
+
+const validationVerdict = {
+  PENDING: "pending",
+  PASSED: "passed",
+  FAILED: "failed",
+  WARNING: "warning",
+} as const;
+
+const deploymentStatus = {
+  DRAFT: "draft",
+  READY: "ready",
+  RUNNING: "running",
+  PAUSED: "paused",
+  STOPPED: "stopped",
+  FAILED: "failed",
 } as const;

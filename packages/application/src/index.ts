@@ -6,6 +6,7 @@ export type RequestContext = {
 };
 
 export * from "./market-analysis";
+export * from "./strategy-lifecycle";
 
 export type DevelopmentIdentity = Pick<RequestContext, "actorId" | "workspaceId" | "role">;
 

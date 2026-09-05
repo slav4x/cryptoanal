@@ -1,6 +1,10 @@
 import { loadServerConfig } from "@cryptoanal/config";
 import { BybitPublicMarketClient } from "@cryptoanal/exchange-bybit";
-import { createPrismaClient, MarketDataRepository } from "@cryptoanal/persistence";
+import {
+  AccountSnapshotRepository,
+  createPrismaClient,
+  MarketDataRepository,
+} from "@cryptoanal/persistence";
 import pino from "pino";
 
 const heartbeatIntervalMs = 15_000;
@@ -8,6 +12,7 @@ const workerId = `worker-${process.pid}`;
 const config = loadServerConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
 const marketDataRepository = new MarketDataRepository(prisma);
+const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
 const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 
@@ -84,6 +89,26 @@ async function candleDataLoop() {
   }
 }
 
+async function accountSnapshotLoop() {
+  while (!stopping) {
+    try {
+      const snapshot = await accountSnapshotRepository.captureDryRunSnapshot({
+        workspaceId: config.DEVELOPMENT_WORKSPACE_ID,
+        exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
+        initialBalance: String(config.DRY_RUN_INITIAL_BALANCE),
+      });
+      logger.debug(
+        { equity: snapshot.equity.toFixed(), observedAt: snapshot.observedAt },
+        "Dry-run account snapshot updated",
+      );
+    } catch (error) {
+      logger.error({ err: error }, "Failed to update dry-run account snapshot");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, config.ACCOUNT_SNAPSHOT_INTERVAL_MS));
+  }
+}
+
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
@@ -97,4 +122,4 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 logger.info({ workerId }, "Worker started");
-await Promise.all([heartbeatLoop(), marketDataLoop(), candleDataLoop()]);
+await Promise.all([heartbeatLoop(), marketDataLoop(), candleDataLoop(), accountSnapshotLoop()]);

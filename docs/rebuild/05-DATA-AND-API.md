@@ -154,6 +154,12 @@ Raw application logs остаются в log storage; не нужно дубли
 Это private dashboard API. Public API появляется только на landing-этапе как отдельная
 sanitized projection.
 
+Реализованный срез этапа 2 использует `GET /api/v1/trades` как единый trading
+read-model для summary, открытых позиций и последних завершённых сделок. Watchlist
+изменяется идемпотентными командами `PUT /api/v1/watchlist/:symbol` и
+`DELETE /api/v1/watchlist/:symbol`; текущее состояние входит в market DTO. Отдельные
+orders/fills и детальная сделка остаются следующим срезом.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

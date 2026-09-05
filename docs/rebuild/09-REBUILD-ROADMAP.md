@@ -18,15 +18,15 @@
 
 ## Этап 1. Foundation и дизайн-система
 
-- [ ] Создать monorepo skeleton: dashboard, API, worker, packages.
-- [ ] Настроить typed config и environment validation.
-- [ ] Создать `RequestContext` с fixed development workspace.
-- [ ] Поднять baseline PostgreSQL schema с ownership полями.
-- [ ] Настроить contracts/schema-first API skeleton.
-- [ ] Подключить shadcn/ui и перенести primitives в `packages/ui`.
-- [ ] Описать semantic design tokens, dark theme, typography и density.
-- [ ] Собрать AppShell, navigation, error/loading/empty/stale patterns.
-- [ ] Настроить route lazy loading и TanStack Query providers.
+- [x] Создать monorepo skeleton: dashboard, API, worker, packages.
+- [x] Настроить typed config и environment validation.
+- [x] Создать `RequestContext` с fixed development workspace.
+- [x] Поднять baseline PostgreSQL schema с ownership полями.
+- [x] Настроить contracts/schema-first API skeleton.
+- [x] Подключить shadcn/ui и перенести primitives в `packages/ui`.
+- [x] Описать semantic design tokens, dark theme, typography и density.
+- [x] Собрать AppShell, navigation, error/loading/empty/stale patterns.
+- [x] Настроить route lazy loading и TanStack Query providers.
 - [ ] Если стенд удалённый — поставить proxy/dev access gate.
 
 **Готово, когда:** пустой, но целостный CryptoAnal shell использует токены и fixed
@@ -34,13 +34,15 @@ workspace context; private API нельзя случайно открыть бе
 
 ## Этап 2. Markets, overview и trading data
 
-- [ ] Реализовать market data adapter и нормализованные snapshots.
-- [ ] Реализовать `/markets` и watchlist.
-- [ ] Реализовать `/markets/:symbol` со свечами/режимом/событиями.
-- [ ] Реализовать canonical positions/orders/fills/trades storage.
-- [ ] Реализовать `/trades` и `/trades/:tradeId`.
-- [ ] Реализовать overview projections и `/`.
-- [ ] Добавить route-level query/freshness policies.
+- [x] Реализовать market data adapter и нормализованные snapshots.
+- [x] Реализовать `/markets` и watchlist.
+- [x] Реализовать `/markets/:symbol` со свечами и режимом; события остаются следующим срезом.
+- [x] Реализовать canonical positions/trades storage и read-model.
+- [ ] Добавить repositories и API для orders/fills.
+- [x] Реализовать `/trades`.
+- [ ] Реализовать `/trades/:tradeId` с timeline исполнений.
+- [x] Реализовать базовые overview projections и `/`.
+- [x] Добавить route-level query/freshness policies.
 - [ ] Связать environment/source/provenance со всеми показателями.
 
 **Готово, когда:** dashboard даёт целостный обзор рынка, позиций и истории без global

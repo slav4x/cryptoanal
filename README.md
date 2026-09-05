@@ -47,8 +47,16 @@ pnpm dev
 Основные рабочие маршруты:
 
 - `/` — обзор;
-- `/markets` — список инструментов;
-- `/markets/:symbol` — реальные свечи и техническая сводка пары.
+- `/markets` — список инструментов и watchlist;
+- `/markets/:symbol` — реальные свечи, техническая сводка и торговый контекст пары;
+- `/trades` — открытые позиции и история завершённых сделок.
+
+Реализованный private API:
+
+- `GET /api/v1/overview`;
+- `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
+- `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
+- `GET /api/v1/trades`.
 
 ## Проверки
 

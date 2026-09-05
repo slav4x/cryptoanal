@@ -14,6 +14,10 @@
 - Persisted Bybit 15-minute candle ingestion.
 - Market detail API with EMA, RSI, ATR and regime analysis.
 - Market pair page with a tokenized SVG candlestick chart.
+- Watchlist commands with controls on market list and pair pages.
+- Trading ledger API for open positions and completed trades.
+- Trades workspace with positions and history views.
+- Position and recent trade context on Overview and market pair pages.
 
 ### Changed
 

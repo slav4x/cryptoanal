@@ -18,11 +18,13 @@
 ## Этап 2 — Trading data
 
 - [x] Market snapshots и 15m candle history ingestion.
-- [ ] Watchlist mutations.
+- [x] Watchlist mutations.
 - [x] Страница пары со свечами, EMA, RSI, ATR и regime.
-- [ ] Positions, orders, fills и trades repositories.
-- [ ] Страницы открытых позиций, истории и сделки.
-- [ ] Полный overview projection.
+- [x] Read-model позиций и завершённых сделок.
+- [x] Страница открытых позиций и истории сделок.
+- [x] Торговый контекст на Overview и странице пары.
+- [ ] Orders, fills и детальная страница сделки.
+- [ ] Полный overview projection с account snapshots.
 
 ## Этап 3 — Strategies и runtime
 

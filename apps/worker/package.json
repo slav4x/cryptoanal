@@ -1,0 +1,18 @@
+{
+  "name": "@cryptoanal/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/worker.ts",
+    "build": "tsup src/worker.ts --format esm --clean --sourcemap",
+    "start": "node dist/worker.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cryptoanal/config": "workspace:*",
+    "@cryptoanal/exchange-bybit": "workspace:*",
+    "@cryptoanal/persistence": "workspace:*",
+    "pino": "10.3.1"
+  }
+}

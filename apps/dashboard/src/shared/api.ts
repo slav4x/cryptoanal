@@ -4,12 +4,14 @@ import {
   marketsSchema,
   overviewSchema,
   requestContextSchema,
+  tradeDetailSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
   type MarketsDto,
   type MarketDetailDto,
   type OverviewDto,
   type RequestContextDto,
+  type TradeDetailDto,
   type TradingLedgerDto,
   type WatchlistStateDto,
 } from "@cryptoanal/contracts";
@@ -68,6 +70,7 @@ const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
 const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
 const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
+const tradeDetailEnvelopeSchema = apiEnvelopeSchema(tradeDetailSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -96,4 +99,8 @@ export function setWatchlisted(
 
 export function fetchTradingLedger(): Promise<ApiEnvelope<TradingLedgerDto>> {
   return request("/api/v1/trades", tradingLedgerEnvelopeSchema);
+}
+
+export function fetchTradeDetail(tradeId: string): Promise<ApiEnvelope<TradeDetailDto>> {
+  return request(`/api/v1/trades/${encodeURIComponent(tradeId)}`, tradeDetailEnvelopeSchema);
 }

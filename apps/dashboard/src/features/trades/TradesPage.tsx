@@ -288,8 +288,13 @@ function TradesTable({
                     {formatMoney(trade.netPnl)}
                   </td>
                   <td className="px-3 py-3 text-muted-foreground">{trade.exitReason}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {trade.strategy.name} · v{trade.strategy.version}
+                  <td className="px-4 py-3">
+                    <Link
+                      to={`/trades/${trade.id}`}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      {trade.strategy.name} · v{trade.strategy.version}
+                    </Link>
                   </td>
                 </tr>
               ))}

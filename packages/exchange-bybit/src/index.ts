@@ -18,12 +18,36 @@ const tickerResponseSchema = z.object({
   }),
 });
 
+const klineResponseSchema = z.object({
+  retCode: z.number(),
+  retMsg: z.string(),
+  result: z.object({
+    category: z.string(),
+    symbol: z.string(),
+    list: z.array(
+      z.tuple([z.string(), z.string(), z.string(), z.string(), z.string(), z.string(), z.string()]),
+    ),
+  }),
+});
+
 export type BybitMarketTicker = {
   symbol: string;
   price: string;
   change24hPercent: string;
   volume24h: string;
   observedAt: Date;
+};
+
+export type BybitMarketCandle = {
+  symbol: string;
+  interval: string;
+  openTime: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  turnover: string;
 };
 
 export class BybitPublicMarketClient {
@@ -57,5 +81,47 @@ export class BybitPublicMarketClient {
       volume24h: ticker.turnover24h,
       observedAt,
     }));
+  }
+
+  public async getLinearKlines(
+    symbol: string,
+    interval = "15",
+    limit = 200,
+    signal?: AbortSignal,
+  ): Promise<BybitMarketCandle[]> {
+    const url = new URL("/v5/market/kline", this.baseUrl);
+    url.searchParams.set("category", "linear");
+    url.searchParams.set("symbol", symbol);
+    url.searchParams.set("interval", interval);
+    url.searchParams.set("limit", String(limit));
+
+    const requestInit: RequestInit = {
+      headers: { Accept: "application/json" },
+    };
+    if (signal) requestInit.signal = signal;
+
+    const response = await fetch(url, requestInit);
+    if (!response.ok) {
+      throw new Error(`Bybit kline request failed with HTTP ${response.status}`);
+    }
+
+    const payload = klineResponseSchema.parse(await response.json());
+    if (payload.retCode !== 0) {
+      throw new Error(`Bybit kline request failed: ${payload.retCode} ${payload.retMsg}`);
+    }
+
+    return payload.result.list
+      .map(([openTime, open, high, low, close, volume, turnover]) => ({
+        symbol: payload.result.symbol,
+        interval,
+        openTime: new Date(Number(openTime)),
+        open,
+        high,
+        low,
+        close,
+        volume,
+        turnover,
+      }))
+      .reverse();
   }
 }

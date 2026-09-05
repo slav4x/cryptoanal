@@ -151,6 +151,7 @@ model MarketInstrument {
   trades         Trade[]
   decisions      Decision[]
   snapshots      MarketSnapshot[]
+  candles        MarketCandle[]
 
   @@index([exchange, enabled])
 }
@@ -167,6 +168,22 @@ model MarketSnapshot {
 
   @@unique([symbol, observedAt])
   @@index([symbol, observedAt(sort: Desc)])
+}
+
+model MarketCandle {
+  symbol     String
+  interval   String
+  openTime   DateTime         @db.Timestamptz(3)
+  open       Decimal          @db.Decimal(38, 18)
+  high       Decimal          @db.Decimal(38, 18)
+  low        Decimal          @db.Decimal(38, 18)
+  close      Decimal          @db.Decimal(38, 18)
+  volume     Decimal          @db.Decimal(38, 8)
+  turnover   Decimal          @db.Decimal(38, 8)
+  instrument MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@id([symbol, interval, openTime])
+  @@index([symbol, interval, openTime(sort: Desc)])
 }
 
 model AccountSnapshot {

@@ -17,6 +17,7 @@ const serverConfigSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   BYBIT_PUBLIC_BASE_URL: z.url().default("https://api.bybit.com"),
   MARKET_POLL_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
+  CANDLE_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).default(60_000),
   DEV_ACCESS_ENABLED: booleanFromString,
   DEV_ACCESS_USERNAME: z.string().optional(),
   DEV_ACCESS_PASSWORD_HASH: z.string().optional(),

@@ -8,6 +8,18 @@ export type MarketSnapshotInput = {
   observedAt: Date;
 };
 
+export type MarketCandleInput = {
+  symbol: string;
+  interval: string;
+  openTime: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  turnover: string;
+};
+
 export class MarketDataRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
 
@@ -25,6 +37,46 @@ export class MarketDataRepository {
       data: snapshots.map((snapshot) => ({ ...snapshot, regime: "unknown" })),
       skipDuplicates: true,
     });
+    return result.count;
+  }
+
+  public async saveCandles(candles: MarketCandleInput[]): Promise<number> {
+    if (candles.length === 0) return 0;
+
+    const result = await this.prisma.marketCandle.createMany({
+      data: candles,
+      skipDuplicates: true,
+    });
+
+    const latestBySeries = new Map<string, MarketCandleInput>();
+    for (const candle of candles) {
+      const key = `${candle.symbol}:${candle.interval}`;
+      const current = latestBySeries.get(key);
+      if (!current || current.openTime < candle.openTime) latestBySeries.set(key, candle);
+    }
+
+    await this.prisma.$transaction(
+      [...latestBySeries.values()].map((candle) =>
+        this.prisma.marketCandle.update({
+          where: {
+            symbol_interval_openTime: {
+              symbol: candle.symbol,
+              interval: candle.interval,
+              openTime: candle.openTime,
+            },
+          },
+          data: {
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+            volume: candle.volume,
+            turnover: candle.turnover,
+          },
+        }),
+      ),
+    );
+
     return result.count;
   }
 }

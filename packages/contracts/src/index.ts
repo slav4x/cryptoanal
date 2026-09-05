@@ -62,6 +62,36 @@ export const marketsSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 
+export const marketSymbolParamsSchema = z.object({
+  symbol: z.string().regex(/^[A-Z0-9]{4,24}$/),
+});
+
+export const marketCandleSchema = z.object({
+  openTime: z.iso.datetime(),
+  open: z.string(),
+  high: z.string(),
+  low: z.string(),
+  close: z.string(),
+  volume: z.string(),
+  turnover: z.string(),
+});
+
+export const marketAnalysisSchema = z.object({
+  regime: z.enum(["bull", "bear", "neutral", "unknown"]),
+  ema20: z.string().nullable(),
+  ema50: z.string().nullable(),
+  rsi14: z.string().nullable(),
+  atr14: z.string().nullable(),
+  periodChangePercent: z.string().nullable(),
+});
+
+export const marketDetailSchema = z.object({
+  market: marketSchema,
+  interval: z.literal("15"),
+  candles: z.array(marketCandleSchema),
+  analysis: marketAnalysisSchema,
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -83,5 +113,8 @@ export type RequestContextDto = z.infer<typeof requestContextSchema>;
 export type OverviewDto = z.infer<typeof overviewSchema>;
 export type MarketDto = z.infer<typeof marketSchema>;
 export type MarketsDto = z.infer<typeof marketsSchema>;
+export type MarketCandleDto = z.infer<typeof marketCandleSchema>;
+export type MarketAnalysisDto = z.infer<typeof marketAnalysisSchema>;
+export type MarketDetailDto = z.infer<typeof marketDetailSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

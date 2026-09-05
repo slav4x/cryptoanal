@@ -5,6 +5,8 @@ export type RequestContext = {
   requestId: string;
 };
 
+export * from "./market-analysis";
+
 export type DevelopmentIdentity = Pick<RequestContext, "actorId" | "workspaceId" | "role">;
 
 export function createDevelopmentContext(

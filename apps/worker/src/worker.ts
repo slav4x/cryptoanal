@@ -58,6 +58,32 @@ async function marketDataLoop() {
   }
 }
 
+async function candleDataLoop() {
+  while (!stopping) {
+    try {
+      const symbols = await marketDataRepository.listEnabledSymbols();
+      const results = await Promise.allSettled(
+        symbols.map((symbol) => marketClient.getLinearKlines(symbol, "15", 200)),
+      );
+      const candles = results.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : [],
+      );
+      const failedSymbols = results.flatMap((result, index) =>
+        result.status === "rejected" ? [symbols[index]!] : [],
+      );
+      const inserted = await marketDataRepository.saveCandles(candles);
+      logger.debug({ received: candles.length, inserted }, "Market candles updated");
+      if (failedSymbols.length > 0) {
+        logger.warn({ symbols: failedSymbols }, "Some market candle requests failed");
+      }
+    } catch (error) {
+      logger.error({ err: error }, "Failed to update market candles");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, config.CANDLE_POLL_INTERVAL_MS));
+  }
+}
+
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
@@ -71,4 +97,4 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 logger.info({ workerId }, "Worker started");
-await Promise.all([heartbeatLoop(), marketDataLoop()]);
+await Promise.all([heartbeatLoop(), marketDataLoop(), candleDataLoop()]);

@@ -72,8 +72,54 @@ export class DashboardRepository {
             price: true,
             change24hPercent: true,
             volume24h: true,
-            regime: true,
             observedAt: true,
+          },
+        },
+        candles: {
+          where: { interval: "15" },
+          orderBy: { openTime: "desc" },
+          take: 60,
+          select: { open: true, high: true, low: true, close: true },
+        },
+      },
+    });
+  }
+
+  public async getMarket(workspaceId: string, symbol: string) {
+    return this.prisma.marketInstrument.findFirst({
+      where: { symbol, enabled: true },
+      select: {
+        symbol: true,
+        baseAsset: true,
+        quoteAsset: true,
+        exchange: true,
+        instrumentType: true,
+        watchlistItems: {
+          where: { workspaceId },
+          select: { position: true },
+        },
+        snapshots: {
+          orderBy: { observedAt: "desc" },
+          take: 1,
+          select: {
+            price: true,
+            change24hPercent: true,
+            volume24h: true,
+            observedAt: true,
+          },
+        },
+        candles: {
+          where: { interval: "15" },
+          orderBy: { openTime: "desc" },
+          take: 200,
+          select: {
+            openTime: true,
+            open: true,
+            high: true,
+            low: true,
+            close: true,
+            volume: true,
+            turnover: true,
           },
         },
       },

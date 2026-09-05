@@ -1,9 +1,11 @@
-import { createDevelopmentContext } from "@cryptoanal/application";
+import { calculateMarketAnalysis, createDevelopmentContext } from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
   errorEnvelopeSchema,
   healthSchema,
+  marketDetailSchema,
+  marketSymbolParamsSchema,
   marketsSchema,
   overviewSchema,
   requestContextSchema,
@@ -210,17 +212,19 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       const now = Date.now();
       const items = instruments.map((instrument) => {
         const snapshot = instrument.snapshots[0];
+        const analysis = calculateMarketAnalysis(
+          [...instrument.candles].reverse().map((candle) => ({
+            open: candle.open.toNumber(),
+            high: candle.high.toNumber(),
+            low: candle.low.toNumber(),
+            close: candle.close.toNumber(),
+          })),
+        );
         const freshness = !snapshot
           ? ("unavailable" as const)
           : now - snapshot.observedAt.getTime() < 60_000
             ? ("fresh" as const)
             : ("stale" as const);
-        const regime: "bull" | "bear" | "neutral" | "unknown" =
-          snapshot?.regime === "bull" ||
-          snapshot?.regime === "bear" ||
-          snapshot?.regime === "neutral"
-            ? snapshot.regime
-            : "unknown";
 
         return {
           symbol: instrument.symbol,
@@ -232,7 +236,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           price: snapshot?.price.toFixed() ?? null,
           change24hPercent: snapshot?.change24hPercent?.toFixed() ?? null,
           volume24h: snapshot?.volume24h?.toFixed() ?? null,
-          regime,
+          regime: analysis.regime,
           freshness,
         };
       });
@@ -242,6 +246,90 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         meta: createMeta(
           request.id,
           items.some((item) => item.freshness === "fresh") ? "fresh" : "unavailable",
+        ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/markets/:symbol",
+    {
+      schema: {
+        params: marketSymbolParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(marketDetailSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const instrument = await repository.getMarket(workspace.id, request.params.symbol);
+      if (!instrument) {
+        throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
+      }
+
+      const snapshot = instrument.snapshots[0];
+      const candles = [...instrument.candles].reverse();
+      const analysis = calculateMarketAnalysis(
+        candles.map((candle) => ({
+          open: candle.open.toNumber(),
+          high: candle.high.toNumber(),
+          low: candle.low.toNumber(),
+          close: candle.close.toNumber(),
+        })),
+      );
+      const now = Date.now();
+      const marketFreshness = !snapshot
+        ? ("unavailable" as const)
+        : now - snapshot.observedAt.getTime() < 60_000
+          ? ("fresh" as const)
+          : ("stale" as const);
+      const latestCandle = candles.at(-1);
+      const candleFreshness = !latestCandle
+        ? ("unavailable" as const)
+        : now - latestCandle.openTime.getTime() < 30 * 60_000
+          ? ("fresh" as const)
+          : ("stale" as const);
+
+      return {
+        data: {
+          market: {
+            symbol: instrument.symbol,
+            baseAsset: instrument.baseAsset,
+            quoteAsset: instrument.quoteAsset,
+            exchange: instrument.exchange,
+            instrumentType: instrument.instrumentType,
+            watchlisted: instrument.watchlistItems.length > 0,
+            price: snapshot?.price.toFixed() ?? null,
+            change24hPercent: snapshot?.change24hPercent?.toFixed() ?? null,
+            volume24h: snapshot?.volume24h?.toFixed() ?? null,
+            regime: analysis.regime,
+            freshness: marketFreshness,
+          },
+          interval: "15" as const,
+          candles: candles.map((candle) => ({
+            openTime: candle.openTime.toISOString(),
+            open: candle.open.toFixed(),
+            high: candle.high.toFixed(),
+            low: candle.low.toFixed(),
+            close: candle.close.toFixed(),
+            volume: candle.volume.toFixed(),
+            turnover: candle.turnover.toFixed(),
+          })),
+          analysis: {
+            regime: analysis.regime,
+            ema20: serializeMetric(analysis.ema20),
+            ema50: serializeMetric(analysis.ema50),
+            rsi14: serializeMetric(analysis.rsi14),
+            atr14: serializeMetric(analysis.atr14),
+            periodChangePercent: serializeMetric(analysis.periodChangePercent),
+          },
+        },
+        meta: createMeta(
+          request.id,
+          marketFreshness === "fresh" && candleFreshness === "fresh" ? "fresh" : candleFreshness,
         ),
       };
     },
@@ -266,4 +354,8 @@ function createMeta(requestId: string, freshness: "fresh" | "stale" | "unavailab
     generatedAt: new Date().toISOString(),
     freshness,
   };
+}
+
+function serializeMetric(value: number | null): string | null {
+  return value === null || !Number.isFinite(value) ? null : String(value);
 }

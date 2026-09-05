@@ -38,9 +38,9 @@ workspace context; private API нельзя случайно открыть бе
 - [x] Реализовать `/markets` и watchlist.
 - [x] Реализовать `/markets/:symbol` со свечами и режимом; события остаются следующим срезом.
 - [x] Реализовать canonical positions/trades storage и read-model.
-- [ ] Добавить repositories и API для orders/fills.
+- [x] Добавить read repository и API для orders/fills в контексте сделки.
 - [x] Реализовать `/trades`.
-- [ ] Реализовать `/trades/:tradeId` с timeline исполнений.
+- [x] Реализовать `/trades/:tradeId` с timeline исполнений.
 - [x] Реализовать базовые overview projections и `/`.
 - [x] Добавить route-level query/freshness policies.
 - [ ] Связать environment/source/provenance со всеми показателями.

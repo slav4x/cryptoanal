@@ -23,7 +23,7 @@
 - [x] Read-model позиций и завершённых сделок.
 - [x] Страница открытых позиций и истории сделок.
 - [x] Торговый контекст на Overview и странице пары.
-- [ ] Orders, fills и детальная страница сделки.
+- [x] Orders, fills и детальная страница сделки.
 - [ ] Полный overview projection с account snapshots.
 
 ## Этап 3 — Strategies и runtime

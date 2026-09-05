@@ -157,8 +157,10 @@ sanitized projection.
 Реализованный срез этапа 2 использует `GET /api/v1/trades` как единый trading
 read-model для summary, открытых позиций и последних завершённых сделок. Watchlist
 изменяется идемпотентными командами `PUT /api/v1/watchlist/:symbol` и
-`DELETE /api/v1/watchlist/:symbol`; текущее состояние входит в market DTO. Отдельные
-orders/fills и детальная сделка остаются следующим срезом.
+`DELETE /api/v1/watchlist/:symbol`; текущее состояние входит в market DTO. Детальный
+`GET /api/v1/trades/:tradeId` возвращает финансовый результат, immutable runtime
+context, связанные orders и fills. Пагинация торговой истории остаётся следующим
+срезом.
 
 ## 6. Команды и queries
 

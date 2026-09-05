@@ -18,8 +18,10 @@
 - Trading ledger API for open positions and completed trades.
 - Trades workspace with positions and history views.
 - Position and recent trade context on Overview and market pair pages.
+- Trade detail API and page with strategy runtime, orders and fill provenance.
 
 ### Changed
 
 - Dashboard visual system aligned with the approved `crypto-trade/design` direction.
 - Sidebar runtime indicator now reflects the real worker state.
+- Request validation errors now return a structured `400` response.

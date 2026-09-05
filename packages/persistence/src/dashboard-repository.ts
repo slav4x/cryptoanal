@@ -232,6 +232,66 @@ export class DashboardRepository {
     };
   }
 
+  public getTradeDetail(workspaceId: string, tradeId: string) {
+    return this.prisma.trade.findFirst({
+      where: { id: tradeId, workspaceId },
+      select: {
+        id: true,
+        symbol: true,
+        environment: true,
+        side: true,
+        quantity: true,
+        averageEntryPrice: true,
+        averageExitPrice: true,
+        grossPnl: true,
+        fees: true,
+        funding: true,
+        slippage: true,
+        netPnl: true,
+        exitReason: true,
+        openedAt: true,
+        closedAt: true,
+        strategyVersion: {
+          select: { version: true, strategy: { select: { id: true, name: true } } },
+        },
+        executionRun: {
+          select: { id: true, status: true, engineVersion: true, configHash: true },
+        },
+        position: {
+          select: {
+            orders: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                id: true,
+                clientOrderId: true,
+                exchangeOrderId: true,
+                side: true,
+                type: true,
+                status: true,
+                quantity: true,
+                price: true,
+                createdAt: true,
+                updatedAt: true,
+                fills: {
+                  orderBy: { filledAt: "asc" },
+                  select: {
+                    id: true,
+                    exchangeFillId: true,
+                    quantity: true,
+                    price: true,
+                    fee: true,
+                    feeAsset: true,
+                    filledAt: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
   public async ping(): Promise<boolean> {
     try {
       await this.prisma.$queryRaw`SELECT 1`;

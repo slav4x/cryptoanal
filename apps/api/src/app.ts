@@ -9,6 +9,8 @@ import {
   marketsSchema,
   overviewSchema,
   requestContextSchema,
+  tradeDetailSchema,
+  tradeIdParamsSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
 } from "@cryptoanal/contracts";
@@ -55,11 +57,23 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   });
 
   app.setErrorHandler((error, request, reply) => {
-    const statusCode = error instanceof ApiError ? error.statusCode : 500;
-    const code = error instanceof ApiError ? error.code : "INTERNAL_ERROR";
-    const message = error instanceof ApiError ? error.message : "Внутренняя ошибка сервера";
+    const validationMessages = getValidationMessages(error);
+    const statusCode =
+      error instanceof ApiError ? error.statusCode : validationMessages ? 400 : 500;
+    const code =
+      error instanceof ApiError
+        ? error.code
+        : validationMessages
+          ? "VALIDATION_ERROR"
+          : "INTERNAL_ERROR";
+    const message =
+      error instanceof ApiError
+        ? error.message
+        : validationMessages
+          ? "Параметры запроса не прошли проверку"
+          : "Внутренняя ошибка сервера";
 
-    if (!(error instanceof ApiError)) {
+    if (!(error instanceof ApiError) && !validationMessages) {
       request.log.error({ err: error }, "Unhandled API error");
     }
 
@@ -67,6 +81,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       error: {
         code,
         message,
+        ...(validationMessages ? { fields: { request: validationMessages } } : {}),
         requestId: request.id,
       },
     });
@@ -447,6 +462,82 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
   );
 
+  app.get(
+    "/api/v1/trades/:tradeId",
+    {
+      schema: {
+        params: tradeIdParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(tradeDetailSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const detail = await repository.getTradeDetail(workspace.id, request.params.tradeId);
+      if (!detail) {
+        throw new ApiError(404, "TRADE_NOT_FOUND", "Сделка не найдена");
+      }
+
+      return {
+        data: {
+          trade: {
+            id: detail.id,
+            symbol: detail.symbol,
+            environment: tradingEnvironment[detail.environment],
+            side: orderSide[detail.side],
+            quantity: detail.quantity.toFixed(),
+            averageEntryPrice: detail.averageEntryPrice.toFixed(),
+            averageExitPrice: detail.averageExitPrice.toFixed(),
+            grossPnl: detail.grossPnl.toFixed(),
+            fees: detail.fees.toFixed(),
+            funding: detail.funding.toFixed(),
+            slippage: detail.slippage.toFixed(),
+            netPnl: detail.netPnl.toFixed(),
+            exitReason: detail.exitReason,
+            openedAt: detail.openedAt.toISOString(),
+            closedAt: detail.closedAt.toISOString(),
+            strategy: {
+              id: detail.strategyVersion.strategy.id,
+              name: detail.strategyVersion.strategy.name,
+              version: detail.strategyVersion.version,
+            },
+          },
+          execution: {
+            runId: detail.executionRun.id,
+            status: runStatus[detail.executionRun.status],
+            engineVersion: detail.executionRun.engineVersion,
+            configHash: detail.executionRun.configHash,
+          },
+          orders: detail.position.orders.map((order) => ({
+            id: order.id,
+            clientOrderId: order.clientOrderId,
+            exchangeOrderId: order.exchangeOrderId,
+            side: orderSide[order.side],
+            type: orderType[order.type],
+            status: orderStatus[order.status],
+            quantity: order.quantity.toFixed(),
+            price: order.price?.toFixed() ?? null,
+            createdAt: order.createdAt.toISOString(),
+            updatedAt: order.updatedAt.toISOString(),
+            fills: order.fills.map((fill) => ({
+              id: fill.id,
+              exchangeFillId: fill.exchangeFillId,
+              quantity: fill.quantity.toFixed(),
+              price: fill.price.toFixed(),
+              fee: fill.fee.toFixed(),
+              feeAsset: fill.feeAsset,
+              filledAt: fill.filledAt.toISOString(),
+            })),
+          })),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
   app.setNotFoundHandler((request, reply) =>
     reply.status(404).send({
       error: {
@@ -472,6 +563,24 @@ function serializeMetric(value: number | null): string | null {
   return value === null || !Number.isFinite(value) ? null : String(value);
 }
 
+function getValidationMessages(error: unknown): string[] | null {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("validation" in error) ||
+    !Array.isArray(error.validation)
+  ) {
+    return null;
+  }
+
+  return error.validation.map((issue) => {
+    if (issue && typeof issue === "object" && "message" in issue) {
+      return String(issue.message);
+    }
+    return "Некорректное значение";
+  });
+}
+
 const tradingEnvironment = {
   DRY_RUN: "dry-run",
   DEMO: "demo",
@@ -481,4 +590,27 @@ const tradingEnvironment = {
 const orderSide = {
   BUY: "buy",
   SELL: "sell",
+} as const;
+
+const orderType = {
+  MARKET: "market",
+  LIMIT: "limit",
+  STOP: "stop",
+} as const;
+
+const orderStatus = {
+  PENDING: "pending",
+  OPEN: "open",
+  PARTIALLY_FILLED: "partially-filled",
+  FILLED: "filled",
+  CANCELLED: "cancelled",
+  REJECTED: "rejected",
+} as const;
+
+const runStatus = {
+  QUEUED: "queued",
+  RUNNING: "running",
+  COMPLETED: "completed",
+  FAILED: "failed",
+  CANCELLED: "cancelled",
 } as const;

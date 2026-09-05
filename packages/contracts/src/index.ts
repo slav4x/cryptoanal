@@ -149,6 +149,45 @@ export const tradingLedgerSchema = z.object({
   trades: z.array(tradeSchema),
 });
 
+export const tradeIdParamsSchema = z.object({
+  tradeId: z.uuid(),
+});
+
+export const fillSchema = z.object({
+  id: z.string(),
+  exchangeFillId: z.string().nullable(),
+  quantity: z.string(),
+  price: z.string(),
+  fee: z.string(),
+  feeAsset: z.string().nullable(),
+  filledAt: z.iso.datetime(),
+});
+
+export const orderSchema = z.object({
+  id: z.string(),
+  clientOrderId: z.string(),
+  exchangeOrderId: z.string().nullable(),
+  side: z.enum(["buy", "sell"]),
+  type: z.enum(["market", "limit", "stop"]),
+  status: z.enum(["pending", "open", "partially-filled", "filled", "cancelled", "rejected"]),
+  quantity: z.string(),
+  price: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  fills: z.array(fillSchema),
+});
+
+export const tradeDetailSchema = z.object({
+  trade: tradeSchema,
+  execution: z.object({
+    runId: z.string(),
+    status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+    engineVersion: z.string(),
+    configHash: z.string(),
+  }),
+  orders: z.array(orderSchema),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -177,5 +216,8 @@ export type WatchlistStateDto = z.infer<typeof watchlistStateSchema>;
 export type PositionDto = z.infer<typeof positionSchema>;
 export type TradeDto = z.infer<typeof tradeSchema>;
 export type TradingLedgerDto = z.infer<typeof tradingLedgerSchema>;
+export type FillDto = z.infer<typeof fillSchema>;
+export type OrderDto = z.infer<typeof orderSchema>;
+export type TradeDetailDto = z.infer<typeof tradeDetailSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

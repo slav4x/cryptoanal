@@ -10,6 +10,7 @@ const MarketDetailPage = lazy(() => import("../features/markets/MarketDetailPage
 const TradesPage = lazy(() => import("../features/trades/TradesPage"));
 const TradeDetailPage = lazy(() => import("../features/trades/TradeDetailPage"));
 const StrategiesPage = lazy(() => import("../features/strategies/StrategiesPage"));
+const NewStrategyPage = lazy(() => import("../features/strategies/NewStrategyPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 
 export function App() {
@@ -62,6 +63,14 @@ export function App() {
             element={
               <Suspense fallback={<RouteFallback />}>
                 <StrategiesPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="strategies/new"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <NewStrategyPage />
               </Suspense>
             }
           />

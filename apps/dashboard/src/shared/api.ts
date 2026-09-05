@@ -5,6 +5,7 @@ import {
   overviewSchema,
   requestContextSchema,
   strategyCatalogSchema,
+  strategyCreatedSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
@@ -14,6 +15,8 @@ import {
   type OverviewDto,
   type RequestContextDto,
   type StrategyCatalogDto,
+  type StrategyCreateDto,
+  type StrategyCreatedDto,
   type TradeDetailDto,
   type TradingLedgerDto,
   type WatchlistStateDto,
@@ -46,10 +49,15 @@ async function request<T>(
   schema: z.ZodType<ApiEnvelope<T>>,
   init?: RequestInit,
 ): Promise<ApiEnvelope<T>> {
+  const headers = new Headers(init?.headers);
+  headers.set("Accept", "application/json");
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { Accept: "application/json" },
     credentials: "include",
     ...init,
+    headers,
   });
   const payload: unknown = await response.json();
 
@@ -75,6 +83,7 @@ const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
 const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
 const tradeDetailEnvelopeSchema = apiEnvelopeSchema(tradeDetailSchema);
 const strategyCatalogEnvelopeSchema = apiEnvelopeSchema(strategyCatalogSchema);
+const strategyCreatedEnvelopeSchema = apiEnvelopeSchema(strategyCreatedSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -111,4 +120,13 @@ export function fetchTradeDetail(tradeId: string): Promise<ApiEnvelope<TradeDeta
 
 export function fetchStrategies(): Promise<ApiEnvelope<StrategyCatalogDto>> {
   return request("/api/v1/strategies", strategyCatalogEnvelopeSchema);
+}
+
+export function createStrategy(
+  strategy: StrategyCreateDto,
+): Promise<ApiEnvelope<StrategyCreatedDto>> {
+  return request("/api/v1/strategies", strategyCreatedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(strategy),
+  });
 }

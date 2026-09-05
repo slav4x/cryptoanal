@@ -13,8 +13,9 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiClientError, fetchStrategies } from "../../shared/api";
 
 type StatusFilter = "all" | StrategyStatusDto;
@@ -72,9 +73,17 @@ export default function StrategiesPage() {
         title="Стратегии"
         description="Версии, валидация и состояние запуска в одном каталоге."
         actions={
-          <span className="text-xs text-stale">
-            обновлено {new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
-          </span>
+          <>
+            <span className="text-xs text-stale">
+              обновлено {new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
+            </span>
+            <Button asChild>
+              <Link to="/strategies/new">
+                <Plus aria-hidden="true" />
+                Создать стратегию
+              </Link>
+            </Button>
+          </>
         }
       />
 

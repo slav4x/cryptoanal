@@ -8,4 +8,5 @@ export { Input } from "./components/input";
 export { MetricCard } from "./components/metric-card";
 export { PageHeader } from "./components/page-header";
 export { Skeleton } from "./components/skeleton";
+export { Textarea } from "./components/textarea";
 export { cn } from "./lib/cn";

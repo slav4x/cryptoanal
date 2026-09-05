@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+@source "../../../../apps/dashboard/src/**/*.{ts,tsx}";
+@source "../**/*.{ts,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-profit: var(--profit);
+  --color-loss: var(--loss);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-live: var(--live);
+  --color-paper: var(--paper);
+  --color-backtest: var(--backtest);
+  --color-stale: var(--stale);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-avatar: var(--avatar);
+  --color-avatar-foreground: var(--avatar-foreground);
+  --color-row-border: var(--row-border);
+  --color-row-hover: var(--row-hover);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  color-scheme: dark;
+  --font-sans: "Inter", "SF Pro Display", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --background: #0a0b0c;
+  --foreground: #f2f4f8;
+  --card: #141517;
+  --card-foreground: #f2f4f8;
+  --popover: #141517;
+  --popover-foreground: #f2f4f8;
+  --primary: #f2f4f8;
+  --primary-foreground: #0a0b0c;
+  --secondary: #1a1c20;
+  --secondary-foreground: #cdd2dd;
+  --muted: #1a1c20;
+  --muted-foreground: #888d97;
+  --accent: rgba(255, 255, 255, 0.06);
+  --accent-foreground: #ffffff;
+  --destructive: #ff6577;
+  --destructive-foreground: #ffffff;
+  --border: #1f2127;
+  --input: #232529;
+  --ring: #888d97;
+  --profit: #39d98a;
+  --loss: #ff6577;
+  --warning: #f5b94c;
+  --info: #6f8cff;
+  --live: #39d98a;
+  --paper: #888d97;
+  --backtest: #6f8cff;
+  --stale: #5f636b;
+  --sidebar: #0a0b0c;
+  --sidebar-foreground: #f2f4f8;
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-border: #232529;
+  --avatar: #262931;
+  --avatar-foreground: #cdd2dd;
+  --row-border: #17181c;
+  --row-hover: rgba(255, 255, 255, 0.02);
+  --chart-grid: #1b1d22;
+  --chart-axis: #54585f;
+  --chart-series-1: #39d98a;
+  --chart-series-2: #6f8cff;
+  --radius: 0.875rem;
+  --sidebar-width: 12.5rem;
+  --header-height: 3.5rem;
+  --content-max-width: none;
+  --table-row-height: 2.75rem;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 28%, transparent);
+}

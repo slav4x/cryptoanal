@@ -6,6 +6,8 @@ import {
   requestContextSchema,
   strategyCatalogSchema,
   strategyCreatedSchema,
+  strategyDetailSchema,
+  strategyVersionCreatedSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
@@ -17,6 +19,9 @@ import {
   type StrategyCatalogDto,
   type StrategyCreateDto,
   type StrategyCreatedDto,
+  type StrategyDetailDto,
+  type StrategyVersionCreateDto,
+  type StrategyVersionCreatedDto,
   type TradeDetailDto,
   type TradingLedgerDto,
   type WatchlistStateDto,
@@ -84,6 +89,8 @@ const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
 const tradeDetailEnvelopeSchema = apiEnvelopeSchema(tradeDetailSchema);
 const strategyCatalogEnvelopeSchema = apiEnvelopeSchema(strategyCatalogSchema);
 const strategyCreatedEnvelopeSchema = apiEnvelopeSchema(strategyCreatedSchema);
+const strategyDetailEnvelopeSchema = apiEnvelopeSchema(strategyDetailSchema);
+const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCreatedSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -129,4 +136,22 @@ export function createStrategy(
     method: "POST",
     body: JSON.stringify(strategy),
   });
+}
+
+export function fetchStrategyDetail(strategyId: string): Promise<ApiEnvelope<StrategyDetailDto>> {
+  return request(
+    `/api/v1/strategies/${encodeURIComponent(strategyId)}`,
+    strategyDetailEnvelopeSchema,
+  );
+}
+
+export function createStrategyVersion(
+  strategyId: string,
+  version: StrategyVersionCreateDto,
+): Promise<ApiEnvelope<StrategyVersionCreatedDto>> {
+  return request(
+    `/api/v1/strategies/${encodeURIComponent(strategyId)}/versions`,
+    strategyVersionCreatedEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(version) },
+  );
 }

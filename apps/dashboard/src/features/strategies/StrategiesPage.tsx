@@ -171,7 +171,12 @@ function StrategyRow({ strategy }: { strategy: StrategySummaryDto }) {
   return (
     <tr className="border-t border-row-border hover:bg-row-hover">
       <td className="px-[18px] py-3.5">
-        <p className="text-base font-normal text-foreground">{strategy.name}</p>
+        <Link
+          to={`/strategies/${strategy.id}`}
+          className="text-base font-normal text-foreground hover:underline"
+        >
+          {strategy.name}
+        </Link>
         <p className="mt-1 max-w-xl truncate text-xs text-stale">
           {strategy.description ?? "Описание не добавлено"}
         </p>

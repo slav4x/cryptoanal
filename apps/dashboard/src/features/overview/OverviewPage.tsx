@@ -10,10 +10,12 @@ import {
   MetricCard,
   PageHeader,
   Skeleton,
+  cn,
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
 import { ShieldAlert } from "lucide-react";
-import { ApiClientError, fetchMarkets, fetchOverview } from "../../shared/api";
+import { Link } from "react-router-dom";
+import { ApiClientError, fetchMarkets, fetchOverview, fetchTradingLedger } from "../../shared/api";
 import { formatMoney, formatPercent, formatPrice } from "../../shared/format";
 
 export default function OverviewPage() {
@@ -27,6 +29,12 @@ export default function OverviewPage() {
     queryKey: ["markets"],
     queryFn: fetchMarkets,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+  const tradingQuery = useQuery({
+    queryKey: ["trading-ledger"],
+    queryFn: fetchTradingLedger,
+    refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
 
@@ -160,6 +168,98 @@ export default function OverviewPage() {
         </CardContent>
       </Card>
 
+      <div className="grid gap-3 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between border-b">
+            <div>
+              <CardTitle>Открытые позиции</CardTitle>
+              <CardDescription>Активная экспозиция торгового контура.</CardDescription>
+            </div>
+            <Badge variant="outline">{tradingQuery.data?.data.positions.length ?? 0}</Badge>
+          </CardHeader>
+          <CardContent className="px-0 pb-0">
+            {tradingQuery.isPending ? <CompactRowsSkeleton /> : null}
+            {tradingQuery.isError ? <CompactUnavailable /> : null}
+            {tradingQuery.isSuccess && tradingQuery.data.data.positions.length === 0 ? (
+              <CompactEmpty>Открытых позиций нет.</CompactEmpty>
+            ) : null}
+            {tradingQuery.data?.data.positions.slice(0, 4).map((position) => (
+              <div
+                key={position.id}
+                className="grid grid-cols-[1fr_auto_auto] items-center gap-4 border-t border-row-border px-4 py-3 text-[13px] first:border-t-0"
+              >
+                <div>
+                  <Link
+                    to={`/markets/${position.symbol}`}
+                    className="font-mono font-medium hover:text-white"
+                  >
+                    {position.symbol}
+                  </Link>
+                  <p className="mt-0.5 text-xs text-stale">{position.strategy.name}</p>
+                </div>
+                <Badge variant={position.side === "buy" ? "profit" : "loss"}>
+                  {position.side === "buy" ? "Лонг" : "Шорт"}
+                </Badge>
+                <span
+                  className={cn(
+                    "min-w-24 text-right font-mono",
+                    Number(position.unrealizedPnl) >= 0 ? "text-profit" : "text-loss",
+                  )}
+                >
+                  {formatMoney(position.unrealizedPnl)}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between border-b">
+            <div>
+              <CardTitle>Последние сделки</CardTitle>
+              <CardDescription>Недавние завершённые исполнения.</CardDescription>
+            </div>
+            <Link to="/trades?view=history" className="text-xs text-accent hover:text-accent/80">
+              Вся история
+            </Link>
+          </CardHeader>
+          <CardContent className="px-0 pb-0">
+            {tradingQuery.isPending ? <CompactRowsSkeleton /> : null}
+            {tradingQuery.isError ? <CompactUnavailable /> : null}
+            {tradingQuery.isSuccess && tradingQuery.data.data.trades.length === 0 ? (
+              <CompactEmpty>Завершённых сделок пока нет.</CompactEmpty>
+            ) : null}
+            {tradingQuery.data?.data.trades.slice(0, 4).map((trade) => (
+              <div
+                key={trade.id}
+                className="grid grid-cols-[1fr_auto_auto] items-center gap-4 border-t border-row-border px-4 py-3 text-[13px] first:border-t-0"
+              >
+                <div>
+                  <Link
+                    to={`/markets/${trade.symbol}`}
+                    className="font-mono font-medium hover:text-white"
+                  >
+                    {trade.symbol}
+                  </Link>
+                  <p className="mt-0.5 text-xs text-stale">{formatCompactDate(trade.closedAt)}</p>
+                </div>
+                <Badge variant={trade.side === "buy" ? "profit" : "loss"}>
+                  {trade.side === "buy" ? "Лонг" : "Шорт"}
+                </Badge>
+                <span
+                  className={cn(
+                    "min-w-24 text-right font-mono",
+                    Number(trade.netPnl) >= 0 ? "text-profit" : "text-loss",
+                  )}
+                >
+                  {formatMoney(trade.netPnl)}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="grid gap-3 xl:grid-cols-[1.4fr_1fr]">
         <Card>
           <CardHeader>
@@ -211,6 +311,33 @@ export default function OverviewPage() {
       </div>
     </div>
   );
+}
+
+function CompactRowsSkeleton() {
+  return (
+    <div className="space-y-1 p-4">
+      {Array.from({ length: 3 }, (_, index) => (
+        <Skeleton key={index} className="h-11" />
+      ))}
+    </div>
+  );
+}
+
+function CompactEmpty({ children }: { children: string }) {
+  return <p className="py-12 text-center text-sm text-muted-foreground">{children}</p>;
+}
+
+function CompactUnavailable() {
+  return <p className="py-12 text-center text-sm text-loss">Торговые данные недоступны.</p>;
+}
+
+function formatCompactDate(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function ContextRow({

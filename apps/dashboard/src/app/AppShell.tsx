@@ -1,6 +1,6 @@
 import { Badge, Button, cn } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, LayoutDashboard, Menu, Orbit, X } from "lucide-react";
+import { Activity, ArrowLeftRight, LayoutDashboard, Menu, Orbit, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { fetchOverview, fetchRequestContext } from "../shared/api";
@@ -8,6 +8,7 @@ import { fetchOverview, fetchRequestContext } from "../shared/api";
 const navigation = [
   { label: "Главная", href: "/", icon: LayoutDashboard, end: true },
   { label: "Рынки", href: "/markets", icon: Activity, end: false },
+  { label: "Сделки", href: "/trades", icon: ArrowLeftRight, end: false },
 ] as const;
 
 export function AppShell() {

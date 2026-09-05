@@ -1,5 +1,6 @@
 import {
   Badge,
+  Button,
   Card,
   CardContent,
   CardDescription,
@@ -13,18 +14,27 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Database, Star } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ApiClientError, fetchMarketDetail } from "../../shared/api";
+import { ApiClientError, fetchMarketDetail, fetchTradingLedger } from "../../shared/api";
 import { formatPercent, formatPrice } from "../../shared/format";
 import { CandlestickChart } from "./CandlestickChart";
+import { PairTradingContext } from "./PairTradingContext";
+import { useWatchlistMutation } from "./useWatchlistMutation";
 
 export default function MarketDetailPage() {
   const { symbol = "" } = useParams();
   const normalizedSymbol = symbol.toUpperCase();
+  const watchlistMutation = useWatchlistMutation();
   const marketQuery = useQuery({
     queryKey: ["market", normalizedSymbol],
     queryFn: () => fetchMarketDetail(normalizedSymbol),
     enabled: normalizedSymbol.length > 0,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+  const ledgerQuery = useQuery({
+    queryKey: ["trading-ledger"],
+    queryFn: fetchTradingLedger,
+    refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
 
@@ -66,12 +76,39 @@ export default function MarketDetailPage() {
             </Badge>
             <Badge variant={regime.variant}>{regime.label}</Badge>
           </div>
-          <div className="flex items-center gap-2 text-xs text-stale">
-            <Database className="size-3.5" aria-hidden="true" />
-            обновлено {new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-pressed={data.market.watchlisted}
+              disabled={watchlistMutation.isPending}
+              onClick={() =>
+                watchlistMutation.mutate({
+                  symbol: data.market.symbol,
+                  watchlisted: !data.market.watchlisted,
+                })
+              }
+            >
+              <Star
+                className={data.market.watchlisted ? "fill-warning text-warning" : ""}
+                aria-hidden="true"
+              />
+              {data.market.watchlisted ? "В watchlist" : "Добавить"}
+            </Button>
+            <span className="flex items-center gap-2 text-xs text-stale">
+              <Database className="size-3.5" aria-hidden="true" />
+              обновлено {new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
+            </span>
           </div>
         </div>
       </div>
+
+      {watchlistMutation.isError ? (
+        <p className="rounded-[10px] border border-loss/20 bg-loss/5 px-4 py-2.5 text-xs text-loss">
+          Не удалось изменить watchlist: {watchlistMutation.error.message}
+        </p>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
@@ -108,6 +145,21 @@ export default function MarketDetailPage() {
           <CandlestickChart candles={data.candles} symbol={data.market.symbol} />
         </CardContent>
       </Card>
+
+      <PairTradingContext
+        positions={
+          ledgerQuery.data?.data.positions.filter(
+            (position) => position.symbol === data.market.symbol,
+          ) ?? []
+        }
+        trades={
+          ledgerQuery.data?.data.trades
+            .filter((trade) => trade.symbol === data.market.symbol)
+            .slice(0, 5) ?? []
+        }
+        loading={ledgerQuery.isPending}
+        unavailable={ledgerQuery.isError}
+      />
 
       <div className="grid gap-3 xl:grid-cols-[1.2fr_0.8fr]">
         <Card>

@@ -4,10 +4,14 @@ import {
   marketsSchema,
   overviewSchema,
   requestContextSchema,
+  tradingLedgerSchema,
+  watchlistStateSchema,
   type MarketsDto,
   type MarketDetailDto,
   type OverviewDto,
   type RequestContextDto,
+  type TradingLedgerDto,
+  type WatchlistStateDto,
 } from "@cryptoanal/contracts";
 import type { z } from "zod";
 
@@ -32,10 +36,15 @@ type ApiEnvelope<T> = {
   };
 };
 
-async function get<T>(path: string, schema: z.ZodType<ApiEnvelope<T>>): Promise<ApiEnvelope<T>> {
+async function request<T>(
+  path: string,
+  schema: z.ZodType<ApiEnvelope<T>>,
+  init?: RequestInit,
+): Promise<ApiEnvelope<T>> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     headers: { Accept: "application/json" },
     credentials: "include",
+    ...init,
   });
   const payload: unknown = await response.json();
 
@@ -57,19 +66,34 @@ const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
+const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
+const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
-  return get("/api/v1/context", contextEnvelopeSchema);
+  return request("/api/v1/context", contextEnvelopeSchema);
 }
 
 export function fetchOverview(): Promise<ApiEnvelope<OverviewDto>> {
-  return get("/api/v1/overview", overviewEnvelopeSchema);
+  return request("/api/v1/overview", overviewEnvelopeSchema);
 }
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {
-  return get("/api/v1/markets", marketsEnvelopeSchema);
+  return request("/api/v1/markets", marketsEnvelopeSchema);
 }
 
 export function fetchMarketDetail(symbol: string): Promise<ApiEnvelope<MarketDetailDto>> {
-  return get(`/api/v1/markets/${encodeURIComponent(symbol)}`, marketDetailEnvelopeSchema);
+  return request(`/api/v1/markets/${encodeURIComponent(symbol)}`, marketDetailEnvelopeSchema);
+}
+
+export function setWatchlisted(
+  symbol: string,
+  watchlisted: boolean,
+): Promise<ApiEnvelope<WatchlistStateDto>> {
+  return request(`/api/v1/watchlist/${encodeURIComponent(symbol)}`, watchlistStateEnvelopeSchema, {
+    method: watchlisted ? "PUT" : "DELETE",
+  });
+}
+
+export function fetchTradingLedger(): Promise<ApiEnvelope<TradingLedgerDto>> {
+  return request("/api/v1/trades", tradingLedgerEnvelopeSchema);
 }

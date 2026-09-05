@@ -23,5 +23,6 @@
 ### Changed
 
 - Dashboard visual system aligned with the approved `crypto-trade/design` direction.
+- Dashboard typography, control geometry, semantic metrics and desktop shell refined against the source HTML mockups.
 - Sidebar runtime indicator now reflects the real worker state.
 - Request validation errors now return a structured `400` response.

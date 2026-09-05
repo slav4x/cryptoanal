@@ -11,6 +11,7 @@
 - [x] Создать worker foundation с heartbeat.
 - [x] Создать shadcn-compatible UI package и semantic tokens.
 - [x] Перенести визуальное направление из `crypto-trade/design` в tokens и dashboard shell.
+- [x] Сверить desktop-примитивы и ключевые страницы с HTML-мокапами `crypto-trade/design`.
 - [x] Собрать dashboard shell, Overview и Markets.
 - [x] Подключить реальный public Bybit market data adapter.
 - [ ] Добавить временный access gate перед первым удалённым deployment.

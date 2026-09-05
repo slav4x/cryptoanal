@@ -7,6 +7,7 @@ import {
   strategyCatalogSchema,
   strategyCreatedSchema,
   strategyDetailSchema,
+  strategyStatusChangedSchema,
   strategyVersionCreatedSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
@@ -20,6 +21,8 @@ import {
   type StrategyCreateDto,
   type StrategyCreatedDto,
   type StrategyDetailDto,
+  type StrategyStatusChangedDto,
+  type StrategyStatusTransitionDto,
   type StrategyVersionCreateDto,
   type StrategyVersionCreatedDto,
   type TradeDetailDto,
@@ -90,6 +93,7 @@ const tradeDetailEnvelopeSchema = apiEnvelopeSchema(tradeDetailSchema);
 const strategyCatalogEnvelopeSchema = apiEnvelopeSchema(strategyCatalogSchema);
 const strategyCreatedEnvelopeSchema = apiEnvelopeSchema(strategyCreatedSchema);
 const strategyDetailEnvelopeSchema = apiEnvelopeSchema(strategyDetailSchema);
+const strategyStatusChangedEnvelopeSchema = apiEnvelopeSchema(strategyStatusChangedSchema);
 const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCreatedSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
@@ -153,5 +157,16 @@ export function createStrategyVersion(
     `/api/v1/strategies/${encodeURIComponent(strategyId)}/versions`,
     strategyVersionCreatedEnvelopeSchema,
     { method: "POST", body: JSON.stringify(version) },
+  );
+}
+
+export function changeStrategyStatus(
+  strategyId: string,
+  transition: StrategyStatusTransitionDto,
+): Promise<ApiEnvelope<StrategyStatusChangedDto>> {
+  return request(
+    `/api/v1/strategies/${encodeURIComponent(strategyId)}/status`,
+    strategyStatusChangedEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(transition) },
   );
 }

@@ -74,7 +74,9 @@ export function evaluateStrategyLifecycle(state: StrategyLifecycleState) {
     },
     transitions: candidateTargets.map((target) => {
       let reason: string | null = null;
-      if (target === "approved" && !latestVersionPassed) {
+      if (target === "approved" && state.hasActiveDeployment) {
+        reason = "Сначала остановите активный deployment";
+      } else if (target === "approved" && !latestVersionPassed) {
         reason = "Последняя версия не имеет успешно завершённой проверки";
       } else if ((target === "draft" || target === "archived") && activeValidation) {
         reason = "Дождитесь завершения активной проверки";

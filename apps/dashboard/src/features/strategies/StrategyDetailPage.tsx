@@ -1,6 +1,7 @@
 import type {
   StrategyConfigDto,
   StrategyDetailDto,
+  StrategyManualStatusDto,
   StrategyStatusDto,
 } from "@cryptoanal/contracts";
 import {
@@ -10,15 +11,16 @@ import {
   CardContent,
   CardHeader,
   ErrorState,
+  Input,
   PageHeader,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, GitCompareArrows, Plus } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Archive, ArrowLeft, Check, GitCompareArrows, Plus, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ApiClientError, fetchStrategyDetail } from "../../shared/api";
+import { ApiClientError, changeStrategyStatus, fetchStrategyDetail } from "../../shared/api";
 
 type Tab = "overview" | "config" | "versions";
 
@@ -70,12 +72,19 @@ export default function StrategyDetailPage() {
           actions={
             <>
               <StrategyStatusBadge status={strategy.status} />
-              <Button asChild>
-                <Link to={`/strategies/${strategy.id}/versions/new`}>
+              {strategy.status === "draft" || strategy.status === "approved" ? (
+                <Button asChild>
+                  <Link to={`/strategies/${strategy.id}/versions/new`}>
+                    <Plus aria-hidden="true" />
+                    Новая версия
+                  </Link>
+                </Button>
+              ) : (
+                <Button disabled title="Текущий статус запрещает создавать версии">
                   <Plus aria-hidden="true" />
                   Новая версия
-                </Link>
-              </Button>
+                </Button>
+              )}
             </>
           }
         />
@@ -161,8 +170,132 @@ function OverviewTab({ strategy }: { strategy: StrategyDetailDto }) {
           <MetaRow label="Обновлена" value={formatDateTime(strategy.updatedAt)} />
         </CardContent>
       </Card>
+
+      <LifecycleCard strategy={strategy} />
     </div>
   );
+}
+
+function LifecycleCard({ strategy }: { strategy: StrategyDetailDto }) {
+  const [reason, setReason] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const transitionMutation = useMutation({
+    mutationFn: (target: StrategyManualStatusDto) =>
+      changeStrategyStatus(strategy.id, {
+        expectedStatus: strategy.status,
+        target,
+        reason,
+      }),
+    onSuccess: () => {
+      setReason("");
+      void queryClient.invalidateQueries({ queryKey: ["strategy", strategy.id] });
+      void queryClient.invalidateQueries({ queryKey: ["strategies"] });
+    },
+  });
+
+  function runTransition(target: StrategyManualStatusDto) {
+    if (reason.trim().length < 3) {
+      setLocalError("Добавьте комментарий к изменению статуса");
+      return;
+    }
+    setLocalError(null);
+    transitionMutation.mutate(target);
+  }
+
+  return (
+    <Card className="lg:col-span-3">
+      <CardHeader className="border-b">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-medium">Lifecycle и validation eligibility</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Доступность действий рассчитана сервером из текущей версии, проверок и deployment.
+            </p>
+          </div>
+          <Badge variant={strategy.lifecycle.validation.eligible ? "profit" : "warning"}>
+            {strategy.lifecycle.validation.eligible ? "Готова к проверке" : "Проверка недоступна"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-[18px] p-[18px] lg:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium text-secondary-foreground">Validation</p>
+          {strategy.lifecycle.validation.reasons.length === 0 ? (
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Последнюю версию можно передать в Validation Center после реализации очереди runs.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
+              {strategy.lifecycle.validation.reasons.map((validationReason) => (
+                <li key={validationReason}>— {validationReason}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
+            Комментарий к изменению статуса
+            <Input
+              value={reason}
+              onChange={(event) => {
+                setReason(event.target.value);
+                setLocalError(null);
+                transitionMutation.reset();
+              }}
+              placeholder="Почему меняется статус"
+              maxLength={300}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {strategy.lifecycle.transitions.map((transition) => (
+              <Button
+                key={transition.target}
+                type="button"
+                size="sm"
+                variant={transition.target === "archived" ? "destructive" : "outline"}
+                disabled={!transition.allowed || transitionMutation.isPending}
+                title={transition.reason ?? undefined}
+                onClick={() => runTransition(transition.target)}
+              >
+                <TransitionIcon target={transition.target} />
+                {transitionLabels[transition.target]}
+              </Button>
+            ))}
+            {strategy.lifecycle.transitions.length === 0 ? (
+              <span className="text-xs text-stale">Ручных переходов нет</span>
+            ) : null}
+          </div>
+          {localError || transitionMutation.error ? (
+            <p className="text-xs text-loss">
+              {localError ??
+                (transitionMutation.error instanceof ApiClientError
+                  ? transitionMutation.error.message
+                  : "Не удалось изменить статус")}
+            </p>
+          ) : null}
+          {strategy.lifecycle.transitions.some((transition) => !transition.allowed) ? (
+            <div className="space-y-1 text-[11px] text-stale">
+              {strategy.lifecycle.transitions
+                .filter((transition) => !transition.allowed)
+                .map((transition) => (
+                  <p key={transition.target}>
+                    {transitionLabels[transition.target]}: {transition.reason}
+                  </p>
+                ))}
+            </div>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TransitionIcon({ target }: { target: StrategyManualStatusDto }) {
+  if (target === "archived") return <Archive aria-hidden="true" />;
+  if (target === "approved") return <Check aria-hidden="true" />;
+  return <RotateCcw aria-hidden="true" />;
 }
 
 function ConfigTab({ strategy }: { strategy: StrategyDetailDto }) {
@@ -465,6 +598,12 @@ const tabs: Array<{ value: Tab; label: string }> = [
   { value: "config", label: "Конфигурация" },
   { value: "versions", label: "Версии" },
 ];
+
+const transitionLabels: Record<StrategyManualStatusDto, string> = {
+  draft: "Вернуть в черновик",
+  approved: "Одобрить",
+  archived: "Архивировать",
+};
 
 const validationLabels = {
   pending: "Ожидает",

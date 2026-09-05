@@ -261,6 +261,92 @@ export const strategyCatalogSchema = z.object({
   counts: z.record(strategyStatusSchema, z.number().int().nonnegative()),
 });
 
+export const strategyConfigSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    universe: z.object({
+      symbols: z
+        .array(z.string().regex(/^[A-Z0-9]{4,24}$/))
+        .min(1)
+        .max(50),
+      timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+    }),
+    signal: z.object({
+      direction: z.enum(["long", "short", "both"]),
+      emaFastPeriod: z.number().int().min(2).max(200),
+      emaSlowPeriod: z.number().int().min(3).max(400),
+      rsiPeriod: z.number().int().min(2).max(100),
+      rsiOversold: z.number().min(1).max(49),
+      rsiOverbought: z.number().min(51).max(99),
+    }),
+    filters: z.object({
+      minimumVolume24hUsdt: z.number().nonnegative(),
+      minimumAtrPercent: z.number().min(0).max(100),
+      maximumAtrPercent: z.number().min(0).max(100),
+    }),
+    risk: z.object({
+      riskPerTradePercent: z.number().positive().max(10),
+      maxOpenPositions: z.number().int().min(1).max(20),
+      maxDailyLossPercent: z.number().positive().max(50),
+    }),
+    entry: z.object({
+      orderType: z.enum(["market", "limit"]),
+      limitOffsetBps: z.number().min(0).max(500),
+    }),
+    exit: z.object({
+      stopLossPercent: z.number().positive().max(100),
+      takeProfitPercent: z.number().positive().max(500),
+      trailingStopPercent: z.number().min(0).max(100),
+    }),
+    costs: z.object({
+      makerFeeBps: z.number().min(0).max(100),
+      takerFeeBps: z.number().min(0).max(100),
+      slippageBps: z.number().min(0).max(500),
+    }),
+    schedule: z.object({
+      timezone: z.string().trim().min(1).max(64),
+      activeDays: z
+        .array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]))
+        .min(1),
+    }),
+  })
+  .superRefine((config, context) => {
+    if (config.signal.emaFastPeriod >= config.signal.emaSlowPeriod) {
+      context.addIssue({
+        code: "custom",
+        message: "Быстрая EMA должна быть меньше медленной EMA",
+        path: ["signal", "emaFastPeriod"],
+      });
+    }
+    if (config.signal.rsiOversold >= config.signal.rsiOverbought) {
+      context.addIssue({
+        code: "custom",
+        message: "Нижний порог RSI должен быть меньше верхнего",
+        path: ["signal", "rsiOversold"],
+      });
+    }
+    if (config.filters.minimumAtrPercent > config.filters.maximumAtrPercent) {
+      context.addIssue({
+        code: "custom",
+        message: "Минимальный ATR не может быть больше максимального",
+        path: ["filters", "minimumAtrPercent"],
+      });
+    }
+  });
+
+export const strategyCreateSchema = z.object({
+  name: z.string().trim().min(3).max(80),
+  description: z.string().trim().max(500).nullable().default(null),
+  config: strategyConfigSchema,
+});
+
+export const strategyCreatedSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.literal("draft"),
+  version: strategyVersionSummarySchema,
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -298,5 +384,8 @@ export type TradeDetailDto = z.infer<typeof tradeDetailSchema>;
 export type StrategyStatusDto = z.infer<typeof strategyStatusSchema>;
 export type StrategySummaryDto = z.infer<typeof strategySummarySchema>;
 export type StrategyCatalogDto = z.infer<typeof strategyCatalogSchema>;
+export type StrategyConfigDto = z.infer<typeof strategyConfigSchema>;
+export type StrategyCreateDto = z.infer<typeof strategyCreateSchema>;
+export type StrategyCreatedDto = z.infer<typeof strategyCreatedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

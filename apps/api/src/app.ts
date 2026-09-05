@@ -11,14 +11,22 @@ import {
   overviewSchema,
   requestContextSchema,
   strategyCatalogSchema,
+  strategyCreateSchema,
+  strategyCreatedSchema,
   tradeDetailSchema,
   tradeIdParamsSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
 } from "@cryptoanal/contracts";
-import { type CryptoAnalPrismaClient, DashboardRepository } from "@cryptoanal/persistence";
+import {
+  type CryptoAnalPrismaClient,
+  DashboardRepository,
+  StrategyNameConflictError,
+  StrategyRepository,
+} from "@cryptoanal/persistence";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { createHash } from "node:crypto";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -49,6 +57,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   }).withTypeProvider<ZodTypeProvider>();
 
   const repository = new DashboardRepository(prisma);
+  const strategyRepository = new StrategyRepository(prisma);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -362,6 +371,61 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         data: { items, total: items.length, counts },
         meta: createMeta(request.id, "fresh"),
       };
+    },
+  );
+
+  app.post(
+    "/api/v1/strategies",
+    {
+      schema: {
+        body: strategyCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(strategyCreatedSchema),
+          400: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = await requireWorkspace();
+      const configHash = createHash("sha256")
+        .update(JSON.stringify(request.body.config))
+        .digest("hex");
+
+      try {
+        const result = await strategyRepository.createWithInitialVersion({
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          name: request.body.name,
+          description: request.body.description,
+          configSchemaVersion: request.body.config.schemaVersion,
+          config: request.body.config,
+          configHash,
+        });
+
+        return reply.status(201).send({
+          data: {
+            id: result.strategy.id,
+            name: result.strategy.name,
+            status: "draft",
+            version: {
+              ...result.version,
+              createdAt: result.version.createdAt.toISOString(),
+            },
+          },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        if (error instanceof StrategyNameConflictError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_NAME_CONFLICT",
+            "Стратегия с таким названием уже существует",
+          );
+        }
+        throw error;
+      }
     },
   );
 

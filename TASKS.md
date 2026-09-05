@@ -29,7 +29,7 @@
 
 ## Этап 3 — Strategies и runtime
 
-- [ ] Strategy catalog и status model.
+- [x] Strategy catalog и status model.
 - [ ] Секционный strategy editor.
 - [ ] Immutable versions и diff.
 - [ ] Deployments и execution runs.

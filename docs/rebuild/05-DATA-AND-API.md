@@ -168,6 +168,11 @@ context, связанные orders и fills. Пагинация торговой
 канонического trading ledger; будущий private exchange adapter сохраняет данные в ту же
 модель без изменения dashboard-контракта.
 
+Первый срез этапа 3 добавляет `GET /api/v1/strategies`: каталог возвращает persisted
+strategy status, active/latest version, последний validation run и последний deployment.
+Разрешённые переходы lifecycle закреплены в application layer; команды переходов будут
+использовать эту модель после реализации strategy workspace.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

@@ -22,6 +22,8 @@
 - Dry-run account snapshot capture derived from the configured balance and canonical trading ledger.
 - Period-aware Overview equity series for 24 hours, 7 days and 30 days.
 - Account equity chart, exposure and realized/unrealized PnL widgets.
+- Strategy lifecycle model with explicit allowed status transitions.
+- Strategy catalog API and dashboard page with version, validation and deployment states.
 
 ### Changed
 

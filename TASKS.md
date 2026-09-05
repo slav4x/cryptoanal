@@ -34,6 +34,7 @@
 - [x] Создание стратегии с immutable версией v1.
 - [x] Strategy workspace с обзором и snapshot конфигурации.
 - [x] Последующие immutable versions и diff.
+- [x] Lifecycle transitions и validation eligibility.
 - [ ] Deployments и execution runs.
 - [ ] Immutable execution context.
 - [ ] Runtime commands и audit trail.

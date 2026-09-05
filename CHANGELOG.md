@@ -30,6 +30,9 @@
 - Strategy workspace with overview, read-only configuration snapshot and version history.
 - Immutable v2+ creation with row locking, change summaries and unchanged-config protection.
 - Human-readable configuration diff between every version and its predecessor.
+- Server-side strategy lifecycle policy with validation eligibility and blocked-action reasons.
+- Audited manual status transitions with optimistic status conflict protection.
+- Lifecycle controls and validation readiness state in the strategy workspace.
 
 ### Changed
 
@@ -38,3 +41,4 @@
 - Overview now reports account freshness and uses bucketed account snapshots instead of placeholder capital data.
 - Sidebar runtime indicator now reflects the real worker state.
 - Request validation errors now return a structured `400` response.
+- Creating a new version from an approved strategy now clears its approval and active version.

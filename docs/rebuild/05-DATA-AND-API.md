@@ -188,6 +188,13 @@ versioned config со схемой `universe/signal/filters/risk/entry/exit/cost
 metadata стратегии, не меняя предыдущий snapshot. Dashboard строит diff выбранной
 версии с её непосредственным предшественником из этих immutable данных.
 
+`POST /api/v1/strategies/:strategyId/status` выполняет только разрешённые ручные
+переходы и требует `expectedStatus` вместе с причиной. Eligibility рассчитывается из
+последней версии, validation runs и активного deployment. Одобрение связывает
+`activeVersionId` только с последней версией, имеющей завершённый passed validation;
+переход и audit event записываются атомарно. Создание новой версии из approved сбрасывает
+стратегию обратно в draft, поскольку результат проверки старой версии нельзя наследовать.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

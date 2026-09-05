@@ -55,7 +55,7 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать каталог стратегий.
 - [x] Реализовать секционный editor и создание первой версии.
 - [x] Реализовать strategy workspace, создание последующих версий и diff.
-- [ ] Реализовать status transitions и validation eligibility.
+- [x] Реализовать status transitions и validation eligibility.
 - [ ] Переписать runtime на immutable `ExecutionContext`.
 - [ ] Реализовать start/pause/stop и manual close как commands.
 - [ ] Добавить confirmations, idempotency, progress и audit events.

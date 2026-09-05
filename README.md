@@ -64,7 +64,14 @@ pnpm dev
 - `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`;
 - `GET /api/v1/strategies` и `POST /api/v1/strategies`;
 - `GET /api/v1/strategies/:strategyId`;
-- `POST /api/v1/strategies/:strategyId/versions`.
+- `POST /api/v1/strategies/:strategyId/versions`;
+- `POST /api/v1/strategies/:strategyId/status`.
+
+Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
+статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit
+event и отклоняется при активной проверке/deployment либо отсутствии успешной проверки
+последней версии. Новая версия разрешена только для draft/approved и возвращает
+approved-стратегию в draft.
 
 ## Проверки
 

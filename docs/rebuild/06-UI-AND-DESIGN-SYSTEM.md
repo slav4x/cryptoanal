@@ -5,6 +5,10 @@
 Использовать shadcn/ui как набор контролируемых исходников компонентов, а не как готовую
 тему. Внешний вид CryptoAnal определяется semantic CSS variables и вариантами компонентов.
 
+Визуальный источник — согласованные решения из `crypto-trade/design`, прежде всего
+`mockups/01-home.html`, `mockups/02-trades.html` и `DESIGN_PLAN.md`. При переносе сохраняем
+язык интерфейса, плотность и композицию, но не копируем старую техническую архитектуру.
+
 Цели:
 
 - широкое изменение темы через один слой tokens;
@@ -132,6 +136,27 @@ Tailwind config связывает utilities с variables. В feature files за
 - `RunProgress`, `ConfigDiff`, `ProvenancePanel`.
 
 ## 5. Визуальное направление
+
+Базовая тема dark-only:
+
+| Назначение     | Значение  |
+| -------------- | --------- |
+| Background     | `#0a0b0c` |
+| Card           | `#141517` |
+| Card border    | `#1f2127` |
+| Control border | `#232529` |
+| Primary text   | `#f2f4f8` |
+| Secondary text | `#888d97` |
+| Stale text     | `#5f636b` |
+| Profit         | `#39d98a` |
+| Loss           | `#ff6577` |
+| Warning        | `#f5b94c` |
+| Info           | `#6f8cff` |
+
+Правила композиции: sidebar `200px`, desktop padding `18px 22px`, основной gap `22px`,
+карточки `14px`, controls `10px`, без теней и градиентов. Текст использует веса `400/500`,
+цвет появляется только для смысловых состояний. Рабочий canvas занимает всю доступную
+ширину без искусственного `max-width`.
 
 Сохранить из текущего проекта:
 

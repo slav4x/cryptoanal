@@ -249,22 +249,22 @@ Backtest и walk-forward — типы одной validation-модели, но �
 
 ## 6. Судьба текущих маршрутов
 
-| Текущий | Новый | Решение |
-| --- | --- | --- |
-| `/` | `/` | Пересобрать overview |
-| `/trades` | `/trades` | Сохранить, разделить open/history |
-| `/trades/:symbol` | `/markets/:symbol` | Исправить идентичность маршрута |
-| `/strategies` | `/strategies` | Пересобрать каталог |
-| `/strategies/:id` | `/strategies/:strategyId` | Разбить editor на табы/modules |
-| `/backtest` | `/validation` | Объединить validation workflow |
-| `/analytics` | `/analytics` | Сохранить и унифицировать filters |
-| `/analytics/health` | `/analytics/health` | Сохранить |
-| `/journal` | `/journal` | Сохранить как связанный workflow |
-| `/playbooks` | `/playbooks` | Сохранить как связанный workflow |
-| `/logs` | `/system/logs` | Понизить в навигации |
-| `/settings` | `/settings` | Реализовать реальными секциями |
-| `/track-record` | поздний public app | Не включать в P0 навигацию |
-| `/login` | dev gate / будущий auth | Не делать фиктивную user-auth страницу |
+| Текущий             | Новый                     | Решение                                |
+| ------------------- | ------------------------- | -------------------------------------- |
+| `/`                 | `/`                       | Пересобрать overview                   |
+| `/trades`           | `/trades`                 | Сохранить, разделить open/history      |
+| `/trades/:symbol`   | `/markets/:symbol`        | Исправить идентичность маршрута        |
+| `/strategies`       | `/strategies`             | Пересобрать каталог                    |
+| `/strategies/:id`   | `/strategies/:strategyId` | Разбить editor на табы/modules         |
+| `/backtest`         | `/validation`             | Объединить validation workflow         |
+| `/analytics`        | `/analytics`              | Сохранить и унифицировать filters      |
+| `/analytics/health` | `/analytics/health`       | Сохранить                              |
+| `/journal`          | `/journal`                | Сохранить как связанный workflow       |
+| `/playbooks`        | `/playbooks`              | Сохранить как связанный workflow       |
+| `/logs`             | `/system/logs`            | Понизить в навигации                   |
+| `/settings`         | `/settings`               | Реализовать реальными секциями         |
+| `/track-record`     | поздний public app        | Не включать в P0 навигацию             |
+| `/login`            | dev gate / будущий auth   | Не делать фиктивную user-auth страницу |
 
 ## 7. Landing после users/workspaces
 

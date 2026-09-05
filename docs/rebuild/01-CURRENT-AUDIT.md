@@ -21,17 +21,17 @@
 
 Фактические показатели:
 
-| Область | Размер |
-| --- | ---: |
-| Dashboard source files | 86 |
-| Bot source files | 114 |
-| Research source/test files | 16 |
-| UI routes | 14 предметных маршрутов + fallback |
-| HTTP endpoints | 71 |
-| Prisma models | 27 |
-| Prisma migrations | 19 |
-| Отслеживаемые строки кода/документации/SQL | около 47 800 |
-| Документация и changelog | около 7 500 строк |
+| Область                                    |                             Размер |
+| ------------------------------------------ | ---------------------------------: |
+| Dashboard source files                     |                                 86 |
+| Bot source files                           |                                114 |
+| Research source/test files                 |                                 16 |
+| UI routes                                  | 14 предметных маршрутов + fallback |
+| HTTP endpoints                             |                                 71 |
+| Prisma models                              |                                 27 |
+| Prisma migrations                          |                                 19 |
+| Отслеживаемые строки кода/документации/SQL |                       около 47 800 |
+| Документация и changelog                   |                  около 7 500 строк |
 
 Это уже не MVP одного продукта. Это trading lab, операторская панель, публичный proof,
 research notebook и заготовка SaaS в одном процессе и одной навигации.
@@ -286,14 +286,14 @@ Journal/playbooks полезны как продолжение этого цик
 
 Проверено в текущем окружении:
 
-| Проверка | Результат |
-| --- | --- |
-| Dashboard tests | 46/46 прошли |
-| Dashboard typecheck | прошёл |
-| Dashboard production build | прошёл, есть warning по размеру bundle |
-| Bot tests | 202 прошли, 1 тест упал; ещё 2 suite не загрузились |
-| Bot/root typecheck | не прошёл |
-| Research unittest | 4/4 прошли |
+| Проверка                   | Результат                                           |
+| -------------------------- | --------------------------------------------------- |
+| Dashboard tests            | 46/46 прошли                                        |
+| Dashboard typecheck        | прошёл                                              |
+| Dashboard production build | прошёл, есть warning по размеру bundle              |
+| Bot tests                  | 202 прошли, 1 тест упал; ещё 2 suite не загрузились |
+| Bot/root typecheck         | не прошёл                                           |
+| Research unittest          | 4/4 прошли                                          |
 
 Две bot-suite не загрузились, потому что в текущем `node_modules` отсутствуют объявленные
 в `package.json` зависимости `argon2` и `@fastify/cookie`. Установка зависимостей в рамках

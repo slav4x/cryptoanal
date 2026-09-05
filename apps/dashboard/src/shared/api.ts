@@ -1,9 +1,11 @@
 import {
   apiEnvelopeSchema,
+  marketDetailSchema,
   marketsSchema,
   overviewSchema,
   requestContextSchema,
   type MarketsDto,
+  type MarketDetailDto,
   type OverviewDto,
   type RequestContextDto,
 } from "@cryptoanal/contracts";
@@ -54,6 +56,7 @@ async function get<T>(path: string, schema: z.ZodType<ApiEnvelope<T>>): Promise<
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
+const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return get("/api/v1/context", contextEnvelopeSchema);
@@ -65,4 +68,8 @@ export function fetchOverview(): Promise<ApiEnvelope<OverviewDto>> {
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {
   return get("/api/v1/markets", marketsEnvelopeSchema);
+}
+
+export function fetchMarketDetail(symbol: string): Promise<ApiEnvelope<MarketDetailDto>> {
+  return get(`/api/v1/markets/${encodeURIComponent(symbol)}`, marketDetailEnvelopeSchema);
 }

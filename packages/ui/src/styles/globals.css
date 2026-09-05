@@ -43,6 +43,7 @@
   --color-avatar-foreground: var(--avatar-foreground);
   --color-row-border: var(--row-border);
   --color-row-hover: var(--row-hover);
+  --color-chart-grid: var(--chart-grid);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

@@ -10,8 +10,9 @@ import {
   Skeleton,
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Star } from "lucide-react";
+import { ArrowUpRight, Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiClientError, fetchMarkets } from "../../shared/api";
 import { formatPercent, formatPrice } from "../../shared/format";
 
@@ -106,7 +107,16 @@ export default function MarketsPage() {
                               aria-label={market.watchlisted ? "В watchlist" : "Не в watchlist"}
                             />
                             <div>
-                              <div className="font-mono font-medium">{market.symbol}</div>
+                              <Link
+                                to={`/markets/${market.symbol}`}
+                                className="group inline-flex items-center gap-1 font-mono font-medium hover:text-white"
+                              >
+                                {market.symbol}
+                                <ArrowUpRight
+                                  className="size-3 text-stale transition-colors group-hover:text-foreground"
+                                  aria-hidden="true"
+                                />
+                              </Link>
                               <div className="text-xs text-muted-foreground">{market.exchange}</div>
                             </div>
                           </div>

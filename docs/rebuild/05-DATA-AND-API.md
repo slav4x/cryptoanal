@@ -132,6 +132,7 @@ Raw application logs остаются в log storage; не нужно дубли
 ```text
 /api/v1/overview
 /api/v1/markets
+/api/v1/markets/:symbol
 /api/v1/watchlist
 /api/v1/positions
 /api/v1/trades

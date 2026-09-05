@@ -44,6 +44,12 @@ pnpm dev
 - API: `http://localhost:3100`;
 - health: `http://localhost:3100/health`.
 
+Основные рабочие маршруты:
+
+- `/` — обзор;
+- `/markets` — список инструментов;
+- `/markets/:symbol` — реальные свечи и техническая сводка пары.
+
 ## Проверки
 
 ```bash

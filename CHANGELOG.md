@@ -11,6 +11,9 @@
 - shadcn-compatible token-based UI package.
 - Dashboard shell with Overview and Markets routes.
 - Public Bybit ticker ingestion with persisted market snapshots.
+- Persisted Bybit 15-minute candle ingestion.
+- Market detail API with EMA, RSI, ATR and regime analysis.
+- Market pair page with a tokenized SVG candlestick chart.
 
 ### Changed
 

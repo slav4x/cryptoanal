@@ -719,14 +719,26 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       if (!strategy) {
         throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
       }
-      const version = strategy.versions.find(
-        (candidate) => candidate.id === request.body.strategyVersionId,
-      );
-      if (!version) {
+      const version = strategy.versions[0];
+      if (!version || version.id !== request.body.strategyVersionId) {
         throw new ApiError(
           409,
           "VALIDATION_VERSION_MISMATCH",
           "Для проверки нужно выбрать последнюю версию стратегии",
+        );
+      }
+      const versionConfig = strategyConfigSchema.parse(version.config);
+      const requestedSymbolsAreCompatible = request.body.dataset.symbols.every((symbol) =>
+        versionConfig.universe.symbols.includes(symbol),
+      );
+      if (
+        request.body.dataset.timeframe !== versionConfig.universe.timeframe ||
+        !requestedSymbolsAreCompatible
+      ) {
+        throw new ApiError(
+          409,
+          "VALIDATION_DATASET_INCOMPATIBLE",
+          "Датасет должен использовать timeframe и пары из конфигурации стратегии",
         );
       }
 

@@ -401,26 +401,30 @@ export const strategyStatusChangedSchema = z.object({
 export const validationKindSchema = z.enum(["backtest", "walk-forward", "holdout"]);
 export const validationQueueKindSchema = z.enum(["backtest", "walk-forward"]);
 
+const validationDatasetSchema = z.object({
+  startDate: z.iso.date(),
+  endDate: z.iso.date(),
+  symbols: z
+    .array(z.string().regex(/^[A-Z0-9]{4,24}$/))
+    .min(1)
+    .max(50),
+  timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+});
+
+const validationWalkForwardSchema = z
+  .object({
+    trainingDays: z.number().int().min(7).max(3650),
+    testDays: z.number().int().min(1).max(365),
+  })
+  .nullable();
+
 export const validationRunInputSchema = z
   .object({
     strategyVersionId: z.uuid(),
     kind: validationQueueKindSchema,
-    dataset: z.object({
-      startDate: z.iso.date(),
-      endDate: z.iso.date(),
-      symbols: z
-        .array(z.string().regex(/^[A-Z0-9]{4,24}$/))
-        .min(1)
-        .max(50),
-      timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
-    }),
+    dataset: validationDatasetSchema,
     initialCapital: z.string().regex(/^\d+(?:\.\d{1,8})?$/),
-    walkForward: z
-      .object({
-        trainingDays: z.number().int().min(7).max(3650),
-        testDays: z.number().int().min(1).max(365),
-      })
-      .nullable(),
+    walkForward: validationWalkForwardSchema,
     idempotencyKey: z.uuid(),
   })
   .superRefine((input, context) => {
@@ -429,6 +433,13 @@ export const validationRunInputSchema = z
         code: "custom",
         message: "Дата начала должна быть раньше даты окончания",
         path: ["dataset", "startDate"],
+      });
+    }
+    if (!Number.isFinite(Number(input.initialCapital)) || Number(input.initialCapital) <= 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Начальный капитал должен быть больше нуля",
+        path: ["initialCapital"],
       });
     }
     if (input.kind === "walk-forward" && input.walkForward === null) {
@@ -440,9 +451,12 @@ export const validationRunInputSchema = z
     }
   });
 
-export const validationExecutionInputSchema = validationRunInputSchema
-  .omit({ strategyVersionId: true, idempotencyKey: true })
-  .extend({ kind: validationKindSchema });
+export const validationExecutionInputSchema = z.object({
+  kind: validationKindSchema,
+  dataset: validationDatasetSchema,
+  initialCapital: z.string().regex(/^\d+(?:\.\d{1,8})?$/),
+  walkForward: validationWalkForwardSchema,
+});
 
 export const validationRunSchema = z.object({
   id: z.string(),

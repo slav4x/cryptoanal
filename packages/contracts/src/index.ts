@@ -92,6 +92,63 @@ export const marketDetailSchema = z.object({
   analysis: marketAnalysisSchema,
 });
 
+export const watchlistStateSchema = z.object({
+  symbol: z.string(),
+  watchlisted: z.boolean(),
+});
+
+export const positionSchema = z.object({
+  id: z.string(),
+  symbol: z.string(),
+  environment: z.enum(["dry-run", "demo", "live"]),
+  side: z.enum(["buy", "sell"]),
+  quantity: z.string(),
+  entryPrice: z.string(),
+  markPrice: z.string().nullable(),
+  unrealizedPnl: z.string(),
+  openedAt: z.iso.datetime(),
+  strategy: z.object({
+    id: z.string(),
+    name: z.string(),
+    version: z.number().int().positive(),
+  }),
+});
+
+export const tradeSchema = z.object({
+  id: z.string(),
+  symbol: z.string(),
+  environment: z.enum(["dry-run", "demo", "live"]),
+  side: z.enum(["buy", "sell"]),
+  quantity: z.string(),
+  averageEntryPrice: z.string(),
+  averageExitPrice: z.string(),
+  grossPnl: z.string(),
+  fees: z.string(),
+  funding: z.string(),
+  slippage: z.string(),
+  netPnl: z.string(),
+  exitReason: z.string(),
+  openedAt: z.iso.datetime(),
+  closedAt: z.iso.datetime(),
+  strategy: z.object({
+    id: z.string(),
+    name: z.string(),
+    version: z.number().int().positive(),
+  }),
+});
+
+export const tradingLedgerSchema = z.object({
+  summary: z.object({
+    openPositions: z.number().int().nonnegative(),
+    openExposure: z.string(),
+    unrealizedPnl: z.string(),
+    closedTrades: z.number().int().nonnegative(),
+    netPnl: z.string(),
+  }),
+  positions: z.array(positionSchema),
+  trades: z.array(tradeSchema),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -116,5 +173,9 @@ export type MarketsDto = z.infer<typeof marketsSchema>;
 export type MarketCandleDto = z.infer<typeof marketCandleSchema>;
 export type MarketAnalysisDto = z.infer<typeof marketAnalysisSchema>;
 export type MarketDetailDto = z.infer<typeof marketDetailSchema>;
+export type WatchlistStateDto = z.infer<typeof watchlistStateSchema>;
+export type PositionDto = z.infer<typeof positionSchema>;
+export type TradeDto = z.infer<typeof tradeSchema>;
+export type TradingLedgerDto = z.infer<typeof tradingLedgerSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

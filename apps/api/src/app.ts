@@ -9,6 +9,8 @@ import {
   marketsSchema,
   overviewSchema,
   requestContextSchema,
+  tradingLedgerSchema,
+  watchlistStateSchema,
 } from "@cryptoanal/contracts";
 import { type CryptoAnalPrismaClient, DashboardRepository } from "@cryptoanal/persistence";
 import cors from "@fastify/cors";
@@ -335,6 +337,116 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
   );
 
+  app.put(
+    "/api/v1/watchlist/:symbol",
+    {
+      schema: {
+        params: marketSymbolParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(watchlistStateSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      if (!(await repository.hasEnabledMarket(request.params.symbol))) {
+        throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
+      }
+      await repository.setWatchlisted(workspace.id, request.params.symbol, true);
+      return {
+        data: { symbol: request.params.symbol, watchlisted: true },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.delete(
+    "/api/v1/watchlist/:symbol",
+    {
+      schema: {
+        params: marketSymbolParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(watchlistStateSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      if (!(await repository.hasEnabledMarket(request.params.symbol))) {
+        throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
+      }
+      await repository.setWatchlisted(workspace.id, request.params.symbol, false);
+      return {
+        data: { symbol: request.params.symbol, watchlisted: false },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/trades",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(tradingLedgerSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const ledger = await repository.getTradingLedger(workspace.id);
+      return {
+        data: {
+          summary: ledger.summary,
+          positions: ledger.positions.map((position) => ({
+            id: position.id,
+            symbol: position.symbol,
+            environment: tradingEnvironment[position.environment],
+            side: orderSide[position.side],
+            quantity: position.quantity.toFixed(),
+            entryPrice: position.entryPrice.toFixed(),
+            markPrice: position.markPrice?.toFixed() ?? null,
+            unrealizedPnl: position.unrealizedPnl.toFixed(),
+            openedAt: position.openedAt.toISOString(),
+            strategy: {
+              id: position.strategyVersion.strategy.id,
+              name: position.strategyVersion.strategy.name,
+              version: position.strategyVersion.version,
+            },
+          })),
+          trades: ledger.trades.map((trade) => ({
+            id: trade.id,
+            symbol: trade.symbol,
+            environment: tradingEnvironment[trade.environment],
+            side: orderSide[trade.side],
+            quantity: trade.quantity.toFixed(),
+            averageEntryPrice: trade.averageEntryPrice.toFixed(),
+            averageExitPrice: trade.averageExitPrice.toFixed(),
+            grossPnl: trade.grossPnl.toFixed(),
+            fees: trade.fees.toFixed(),
+            funding: trade.funding.toFixed(),
+            slippage: trade.slippage.toFixed(),
+            netPnl: trade.netPnl.toFixed(),
+            exitReason: trade.exitReason,
+            openedAt: trade.openedAt.toISOString(),
+            closedAt: trade.closedAt.toISOString(),
+            strategy: {
+              id: trade.strategyVersion.strategy.id,
+              name: trade.strategyVersion.strategy.name,
+              version: trade.strategyVersion.version,
+            },
+          })),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
   app.setNotFoundHandler((request, reply) =>
     reply.status(404).send({
       error: {
@@ -359,3 +471,14 @@ function createMeta(requestId: string, freshness: "fresh" | "stale" | "unavailab
 function serializeMetric(value: number | null): string | null {
   return value === null || !Number.isFinite(value) ? null : String(value);
 }
+
+const tradingEnvironment = {
+  DRY_RUN: "dry-run",
+  DEMO: "demo",
+  LIVE: "live",
+} as const;
+
+const orderSide = {
+  BUY: "buy",
+  SELL: "sell",
+} as const;

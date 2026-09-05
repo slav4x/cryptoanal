@@ -33,10 +33,7 @@ export default function TradesPage() {
   if (ledgerQuery.isError) {
     return (
       <div className="space-y-[18px]">
-        <PageHeader
-          title="Сделки"
-          description="Открытые позиции и завершённые торговые операции."
-        />
+        <PageHeader eyebrow="Позиции и сделки" title="История и открытые позиции" />
         <ErrorState
           description={ledgerQuery.error.message}
           requestId={
@@ -57,8 +54,8 @@ export default function TradesPage() {
   return (
     <div className="space-y-[18px]">
       <PageHeader
-        title="Сделки"
-        description="Открытые позиции и завершённые торговые операции development workspace."
+        eyebrow="Позиции и сделки"
+        title="История и открытые позиции"
         actions={
           <span className="text-xs text-stale">
             обновлено {new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
@@ -81,11 +78,13 @@ export default function TradesPage() {
           label="Нереализованный PnL"
           value={formatMoney(data.summary.unrealizedPnl)}
           hint="Только открытые позиции"
+          tone={metricTone(data.summary.unrealizedPnl)}
         />
         <MetricCard
           label="Закрытый PnL"
           value={formatMoney(data.summary.netPnl)}
           hint={`${data.summary.closedTrades} завершённых сделок`}
+          tone={metricTone(data.summary.netPnl)}
         />
       </div>
 
@@ -105,6 +104,11 @@ export default function TradesPage() {
       {view === "history" ? <TradesTable trades={data.trades} /> : null}
     </div>
   );
+}
+
+function metricTone(value: string | number): "neutral" | "profit" | "loss" {
+  const numericValue = Number(value);
+  return numericValue > 0 ? "profit" : numericValue < 0 ? "loss" : "neutral";
 }
 
 function ViewButton({

@@ -81,6 +81,7 @@ export default function OverviewPage() {
           label="PnL сегодня"
           value={formatMoney(data.dayPnl)}
           hint="UTC, закрытые сделки"
+          tone={metricTone(data.dayPnl)}
         />
         <MetricCard
           label="Открытые позиции"
@@ -311,6 +312,11 @@ export default function OverviewPage() {
       </div>
     </div>
   );
+}
+
+function metricTone(value: string | number): "neutral" | "profit" | "loss" {
+  const numericValue = Number(value);
+  return numericValue > 0 ? "profit" : numericValue < 0 ? "loss" : "neutral";
 }
 
 function CompactRowsSkeleton() {

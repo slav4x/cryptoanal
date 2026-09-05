@@ -1,6 +1,14 @@
 import { Badge, Button, cn } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ArrowLeftRight, LayoutDashboard, Menu, Orbit, X } from "lucide-react";
+import {
+  Activity,
+  ArrowLeftRight,
+  Box,
+  ChevronsUpDown,
+  LayoutDashboard,
+  Menu,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { fetchOverview, fetchRequestContext } from "../shared/api";
@@ -108,16 +116,20 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
   return (
     <>
       <div className="flex items-center gap-2 px-1 py-0.5">
-        <span className="grid size-7 place-items-center rounded-lg bg-foreground text-background">
-          <Orbit className="size-[17px]" aria-hidden="true" />
+        <span className="grid size-7 place-items-center rounded-[8px] bg-brand-mark text-background">
+          <Activity className="size-[17px]" aria-hidden="true" />
         </span>
         <span className="text-sm font-medium tracking-[0.08em] text-sidebar-foreground">
           CRYPTOANAL
         </span>
       </div>
 
-      <div className="mt-4 flex min-h-10 w-full items-center rounded-[10px] border border-input bg-card px-3 py-2 text-[13px]">
-        <span className="min-w-0 truncate">{workspaceName ?? "Development workspace"}</span>
+      <div className="mt-4 flex min-h-10 w-full items-center justify-between gap-1.5 rounded-[10px] border border-input bg-card px-[11px] py-2 text-[13px]">
+        <span className="flex min-w-0 items-center gap-2">
+          <Box className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="truncate">{workspaceName ?? "Development workspace"}</span>
+        </span>
+        <ChevronsUpDown className="size-[15px] shrink-0 text-muted-foreground" aria-hidden="true" />
       </div>
 
       <nav className="mt-4 flex flex-col gap-0.5" aria-label="Основная навигация">
@@ -148,11 +160,11 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
             />
             {runtimeLabels[runtimeState]}
           </span>
-          <span className="rounded-md border border-input bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
+          <span className="rounded-[6px] border border-input bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
             dry-run
           </span>
         </div>
-        <div className="flex items-center gap-2.5 rounded-xl border border-input bg-card p-2.5">
+        <div className="flex items-center gap-2.5 rounded-[12px] border border-input bg-card p-2.5">
           <span className="grid size-8 place-items-center rounded-full bg-avatar text-[13px] font-medium text-avatar-foreground">
             D
           </span>

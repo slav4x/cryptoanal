@@ -115,21 +115,26 @@ export default function MarketDetailPage() {
           label="Цена"
           value={formatPrice(data.market.price)}
           hint={`${data.market.exchange} · ${data.market.instrumentType}`}
+          compact
         />
         <MetricCard
           label="Изменение за период"
           value={formatPercent(data.analysis.periodChangePercent)}
           hint={`${data.candles.length} свечей · ${data.interval} минут`}
+          compact
+          tone={periodChange > 0 ? "profit" : periodChange < 0 ? "loss" : "neutral"}
         />
         <MetricCard
           label="RSI 14"
           value={formatIndicator(data.analysis.rsi14)}
           hint={describeRsi(data.analysis.rsi14)}
+          compact
         />
         <MetricCard
           label="ATR 14"
           value={formatPrice(data.analysis.atr14)}
           hint="Средний истинный диапазон"
+          compact
         />
       </div>
 

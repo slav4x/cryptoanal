@@ -41,6 +41,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-avatar: var(--avatar);
   --color-avatar-foreground: var(--avatar-foreground);
+  --color-brand-mark: var(--brand-mark);
   --color-row-border: var(--row-border);
   --color-row-hover: var(--row-hover);
   --color-chart-grid: var(--chart-grid);
@@ -53,14 +54,14 @@
 :root {
   color-scheme: dark;
   --font-sans: "Inter", "SF Pro Display", "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --font-mono: "SFMono-Regular", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   --background: #0a0b0c;
   --foreground: #f2f4f8;
   --card: #141517;
   --card-foreground: #f2f4f8;
   --popover: #141517;
   --popover-foreground: #f2f4f8;
-  --primary: #f2f4f8;
+  --primary: #ffffff;
   --primary-foreground: #0a0b0c;
   --secondary: #1a1c20;
   --secondary-foreground: #cdd2dd;
@@ -87,6 +88,7 @@
   --sidebar-border: #232529;
   --avatar: #262931;
   --avatar-foreground: #cdd2dd;
+  --brand-mark: #e9ebf0;
   --row-border: #17181c;
   --row-hover: rgba(255, 255, 255, 0.02);
   --chart-grid: #1b1d22;

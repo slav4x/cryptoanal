@@ -65,21 +65,30 @@ export default function TradeDetailPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Количество" value={formatPrice(trade.quantity)} hint={trade.symbol} />
+        <MetricCard
+          label="Количество"
+          value={formatPrice(trade.quantity)}
+          hint={trade.symbol}
+          compact
+        />
         <MetricCard
           label="Средний вход"
           value={formatPrice(trade.averageEntryPrice)}
           hint="Средневзвешенная цена"
+          compact
         />
         <MetricCard
           label="Средний выход"
           value={formatPrice(trade.averageExitPrice)}
           hint={trade.exitReason}
+          compact
         />
         <MetricCard
           label="Net PnL"
           value={formatMoney(trade.netPnl)}
           hint={pnlIsPositive ? "Положительный результат" : "Отрицательный результат"}
+          compact
+          tone={pnlIsPositive ? "profit" : "loss"}
         />
       </div>
 

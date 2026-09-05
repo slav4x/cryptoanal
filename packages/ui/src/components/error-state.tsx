@@ -19,7 +19,7 @@ export function ErrorState({
       <div className="flex gap-3">
         <TriangleAlert className="mt-0.5 size-5 shrink-0 text-loss" aria-hidden="true" />
         <div>
-          <h3 className="text-sm font-semibold">{title}</h3>
+          <h3 className="text-sm font-medium">{title}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
           {requestId ? (
             <p className="mt-2 font-mono text-xs text-muted-foreground">Request: {requestId}</p>

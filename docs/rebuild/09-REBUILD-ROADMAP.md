@@ -67,9 +67,10 @@ polling и без прямого обращения UI к exchange.
 ## Этап 4. Validation Center
 
 - [ ] Выделить общую runtime/backtest execution semantics.
-- [ ] Ввести dataset/engine/config provenance.
+- [ ] Материализовать immutable dataset snapshot; request/engine/config provenance уже фиксируется при постановке.
 - [ ] Перевести backtest/walk-forward в asynchronous jobs.
-- [ ] Реализовать создание run и очередь статусов.
+- [x] Реализовать создание ValidationRun, durable Job и очередь статусов.
+- [x] Реализовать Validation Center composer и список очереди.
 - [ ] Реализовать run detail, trades, charts и breakdowns.
 - [ ] Реализовать formal gates и понятные pass/fail reasons.
 - [ ] Реализовать compare нескольких runs.

@@ -54,7 +54,8 @@ pnpm dev
 - `/strategies` — каталог стратегий, версий, validation и deployment states;
 - `/strategies/new` — секционный редактор и создание черновика с immutable v1;
 - `/strategies/:strategyId` — workspace стратегии с обзором, конфигурацией и историей версий;
-- `/strategies/:strategyId/versions/new` — создание новой версии на основе последней.
+- `/strategies/:strategyId/versions/new` — создание новой версии на основе последней;
+- `/validation` — постановка backtest/walk-forward runs и состояние durable очереди.
 
 Реализованный private API:
 
@@ -65,13 +66,20 @@ pnpm dev
 - `GET /api/v1/strategies` и `POST /api/v1/strategies`;
 - `GET /api/v1/strategies/:strategyId`;
 - `POST /api/v1/strategies/:strategyId/versions`;
-- `POST /api/v1/strategies/:strategyId/status`.
+- `POST /api/v1/strategies/:strategyId/status`;
+- `GET /api/v1/validations`;
+- `POST /api/v1/strategies/:strategyId/validations`.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit
 event и отклоняется при активной проверке/deployment либо отсутствии успешной проверки
 последней версии. Новая версия разрешена только для draft/approved и возвращает
 approved-стратегию в draft.
+
+Validation-команда принимает только последнюю версию, timeframe и пары из её config.
+Создание `ValidationRun`, durable `Job`, audit event и переход стратегии в validating
+выполняются одной транзакцией. Сейчас jobs остаются в очереди: расчёт метрик и завершение
+run появятся вместе с единым validation engine, без фиктивных результатов.
 
 ## Проверки
 

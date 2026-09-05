@@ -42,7 +42,9 @@
 ## Этап 4 — Validation Center
 
 - [ ] Единая execution semantics runtime/backtest.
-- [ ] Асинхронные backtest/walk-forward jobs.
+- [x] Durable очередь ValidationRun/Job для backtest и walk-forward.
+- [x] Run composer и мониторинг очереди в Validation Center.
+- [ ] Worker execution для backtest/walk-forward jobs.
 - [ ] Validation gates и provenance.
 - [ ] Run details и compare.
 

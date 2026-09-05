@@ -33,6 +33,10 @@
 - Server-side strategy lifecycle policy with validation eligibility and blocked-action reasons.
 - Audited manual status transitions with optimistic status conflict protection.
 - Lifecycle controls and validation readiness state in the strategy workspace.
+- Durable ValidationRun and Job creation with idempotent replay handling.
+- Atomic `draft → validating` transition when a validation run is queued.
+- Validation Center with backtest/walk-forward composer and queue monitoring.
+- Dataset/config/engine provenance captured for every queued validation run.
 
 ### Changed
 

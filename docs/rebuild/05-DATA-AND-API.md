@@ -195,6 +195,14 @@ metadata стратегии, не меняя предыдущий snapshot. Dash
 переход и audit event записываются атомарно. Создание новой версии из approved сбрасывает
 стратегию обратно в draft, поскольку результат проверки старой версии нельзя наследовать.
 
+Validation Center использует `GET /api/v1/validations` и
+`POST /api/v1/strategies/:strategyId/validations`. Команда принимает последнюю
+`StrategyVersion`, тип backtest/walk-forward, период, universe subset и капитал. Сервер
+фиксирует dataset request hash, `datasetAsOf`, engine version и config hash, после чего
+атомарно создаёт `ValidationRun`, durable `Job`, audit event и переводит стратегию из
+draft в validating. `idempotencyKey` делает повтор команды безопасным. До реализации
+единого execution engine run честно остаётся queued и не получает искусственных метрик.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

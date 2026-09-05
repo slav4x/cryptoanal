@@ -9,6 +9,7 @@ import {
   watchlistStateSchema,
   type MarketsDto,
   type MarketDetailDto,
+  type OverviewPeriod,
   type OverviewDto,
   type RequestContextDto,
   type TradeDetailDto,
@@ -76,8 +77,8 @@ export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
 }
 
-export function fetchOverview(): Promise<ApiEnvelope<OverviewDto>> {
-  return request("/api/v1/overview", overviewEnvelopeSchema);
+export function fetchOverview(period: OverviewPeriod = "7d"): Promise<ApiEnvelope<OverviewDto>> {
+  return request(`/api/v1/overview?period=${period}`, overviewEnvelopeSchema);
 }
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {

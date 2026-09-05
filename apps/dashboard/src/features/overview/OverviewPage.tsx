@@ -1,5 +1,7 @@
+import type { OverviewPeriod } from "@cryptoanal/contracts";
 import {
   Badge,
+  Button,
   Card,
   CardContent,
   CardDescription,
@@ -14,14 +16,17 @@ import {
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
 import { ShieldAlert } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiClientError, fetchMarkets, fetchOverview, fetchTradingLedger } from "../../shared/api";
-import { formatMoney, formatPercent, formatPrice } from "../../shared/format";
+import { formatMetricMoney, formatMoney, formatPercent, formatPrice } from "../../shared/format";
+import { AccountEquityChart } from "./AccountEquityChart";
 
 export default function OverviewPage() {
+  const [period, setPeriod] = useState<OverviewPeriod>("7d");
   const overviewQuery = useQuery({
-    queryKey: ["overview"],
-    queryFn: fetchOverview,
+    queryKey: ["overview", period],
+    queryFn: () => fetchOverview(period),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
@@ -71,22 +76,32 @@ export default function OverviewPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           label="Капитал"
-          value={formatMoney(data.equity)}
-          hint={data.equity ? "Последний account snapshot" : "Ожидается exchange adapter"}
+          value={formatMetricMoney(data.account?.equity ?? null)}
+          hint={
+            data.account
+              ? `Snapshot ${new Date(data.account.observedAt).toLocaleTimeString("ru-RU")}`
+              : "Ожидается account snapshot"
+          }
         />
         <MetricCard
           label="PnL сегодня"
-          value={formatMoney(data.dayPnl)}
+          value={formatMetricMoney(data.dayPnl)}
           hint="UTC, закрытые сделки"
           tone={metricTone(data.dayPnl)}
         />
         <MetricCard
-          label="Открытые позиции"
-          value={String(data.openPositions)}
-          hint={data.openExposure ? formatMoney(data.openExposure) : "Экспозиция недоступна"}
+          label="Total PnL"
+          value={formatMetricMoney(data.totalPnl)}
+          tone={metricTone(data.totalPnl)}
+          hint="Все закрытые сделки"
+        />
+        <MetricCard
+          label="Экспозиция"
+          value={formatMetricMoney(data.openExposure)}
+          hint={`${data.openPositions} открытых позиций`}
         />
         <MetricCard
           label="Активные стратегии"
@@ -166,6 +181,47 @@ export default function OverviewPage() {
               </table>
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex-row items-center justify-between border-b">
+          <div>
+            <CardTitle>Капитал</CardTitle>
+            <CardDescription>
+              Account snapshots · {environmentLabels[data.tradingEnvironment]}
+            </CardDescription>
+          </div>
+          <div className="flex rounded-full border border-input bg-background p-0.5">
+            {overviewPeriods.map((item) => (
+              <Button
+                key={item.value}
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-7 rounded-full px-3 text-[11px] text-muted-foreground",
+                  period === item.value && "bg-avatar text-foreground",
+                )}
+                aria-pressed={period === item.value}
+                onClick={() => setPeriod(item.value)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <div className="mb-2 flex items-end justify-between gap-4">
+            <div>
+              <p className="text-[13px] text-muted-foreground">Текущий капитал</p>
+              <p className="mt-1 font-mono text-[26px] font-medium tabular-nums">
+                {formatMetricMoney(data.account?.equity ?? null)}
+              </p>
+            </div>
+            <EquityDelta points={data.equitySeries} />
+          </div>
+          <AccountEquityChart points={data.equitySeries} period={period} />
         </CardContent>
       </Card>
 
@@ -275,9 +331,19 @@ export default function OverviewPage() {
                 {data.alerts.map((alert) => (
                   <div
                     key={alert.id}
-                    className="flex gap-3 rounded-[11px] border border-warning/25 bg-warning/5 p-3.5"
+                    className={cn(
+                      "flex gap-3 rounded-[11px] border p-3.5",
+                      alert.severity === "critical"
+                        ? "border-loss/25 bg-loss/5"
+                        : "border-warning/25 bg-warning/5",
+                    )}
                   >
-                    <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+                    <ShieldAlert
+                      className={cn(
+                        "mt-0.5 size-4 shrink-0",
+                        alert.severity === "critical" ? "text-loss" : "text-warning",
+                      )}
+                    />
                     <div>
                       <p className="text-sm font-medium">{alert.title}</p>
                       <p className="mt-1 text-sm text-muted-foreground">{alert.description}</p>
@@ -300,19 +366,78 @@ export default function OverviewPage() {
             <CardDescription>Источник и актуальность текущего представления.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
-            <ContextRow label="Режим" value="Dry-run" />
-            <ContextRow label="Freshness" value={meta.freshness} />
+            <ContextRow label="Режим" value={environmentLabels[data.tradingEnvironment]} />
+            <ContextRow label="Данные счёта" value={freshnessLabels[meta.freshness]} />
+            <ContextRow
+              label="Account ID"
+              value={data.account?.exchangeAccountId ?? "—"}
+              monospace
+            />
+            <ContextRow
+              label="Доступный баланс"
+              value={formatMoney(data.account?.availableBalance ?? null)}
+              monospace
+            />
             <ContextRow
               label="Сформировано"
               value={new Date(meta.generatedAt).toLocaleTimeString("ru-RU")}
             />
-            <ContextRow label="Total PnL" value={formatMoney(data.totalPnl)} monospace />
+            <ContextRow
+              label="Нереализованный PnL"
+              value={formatMoney(data.unrealizedPnl)}
+              monospace
+            />
           </CardContent>
         </Card>
       </div>
     </div>
   );
 }
+
+function EquityDelta({ points }: { points: Array<{ equity: string }> }) {
+  if (points.length < 2) return <span className="text-xs text-stale">накапливаем историю</span>;
+
+  const first = Number(points[0]!.equity);
+  const last = Number(points.at(-1)!.equity);
+  const delta = last - first;
+  const percent = first === 0 ? null : (delta / first) * 100;
+  const tone = metricTone(delta);
+
+  return (
+    <div className="text-right">
+      <p
+        className={cn(
+          "font-mono text-sm",
+          tone === "profit" && "text-profit",
+          tone === "loss" && "text-loss",
+        )}
+      >
+        {formatMetricMoney(String(delta))}
+      </p>
+      <p className="mt-1 text-xs text-stale">
+        {percent === null ? "—" : formatPercent(String(percent))} за период
+      </p>
+    </div>
+  );
+}
+
+const overviewPeriods: Array<{ value: OverviewPeriod; label: string }> = [
+  { value: "24h", label: "24 часа" },
+  { value: "7d", label: "7 дней" },
+  { value: "30d", label: "30 дней" },
+];
+
+const environmentLabels = {
+  "dry-run": "Dry-run",
+  demo: "Demo",
+  live: "Live",
+} as const;
+
+const freshnessLabels = {
+  fresh: "Свежие",
+  stale: "Устарели",
+  unavailable: "Недоступны",
+} as const;
 
 function metricTone(value: string | number): "neutral" | "profit" | "loss" {
   const numericValue = Number(value);
@@ -367,8 +492,8 @@ function OverviewSkeleton() {
   return (
     <div className="space-y-6">
       <Skeleton className="h-16" />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {Array.from({ length: 5 }, (_, index) => (
           <Skeleton key={index} className="h-32" />
         ))}
       </div>

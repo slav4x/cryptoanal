@@ -9,6 +9,18 @@ export function formatMoney(value: string | null, currency = "USDT"): string {
   return `${formatted} ${currency}`;
 }
 
+export function formatMetricMoney(value: string | null, currency = "USDT"): string {
+  if (value === null) return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  const hasFraction = Math.abs(parsed % 1) > Number.EPSILON;
+  const formatted = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: hasFraction ? 2 : 0,
+  }).format(parsed);
+  return `${formatted} ${currency}`;
+}
+
 export function formatPrice(value: string | null): string {
   if (value === null) return "—";
   const parsed = Number(value);

@@ -11,13 +11,24 @@ export class DashboardRepository {
     });
   }
 
-  public async getOverview(workspaceId: string) {
+  public async getOverview(
+    workspaceId: string,
+    equityWindow: { startsAt: Date; bucketSeconds: number },
+  ) {
     const startOfUtcDay = new Date();
     startOfUtcDay.setUTCHours(0, 0, 0, 0);
 
-    const [openPositions, activeStrategies, totalAggregate, dayAggregate, account, heartbeat] =
+    const [positions, activeStrategies, totalAggregate, dayAggregate, account, heartbeat] =
       await Promise.all([
-        this.prisma.position.count({ where: { workspaceId, status: "OPEN" } }),
+        this.prisma.position.findMany({
+          where: { workspaceId, status: "OPEN" },
+          select: {
+            quantity: true,
+            entryPrice: true,
+            markPrice: true,
+            unrealizedPnl: true,
+          },
+        }),
         this.prisma.strategy.count({
           where: { workspaceId, status: { in: ["DEPLOYED", "PAUSED"] } },
         }),
@@ -32,7 +43,13 @@ export class DashboardRepository {
         this.prisma.accountSnapshot.findFirst({
           where: { workspaceId },
           orderBy: { observedAt: "desc" },
-          select: { equity: true, observedAt: true },
+          select: {
+            exchangeAccountId: true,
+            environment: true,
+            equity: true,
+            availableBalance: true,
+            observedAt: true,
+          },
         }),
         this.prisma.workerHeartbeat.findFirst({
           where: { service: "worker" },
@@ -41,15 +58,87 @@ export class DashboardRepository {
         }),
       ]);
 
+    const openExposure = positions.reduce(
+      (sum, position) =>
+        sum.add(position.quantity.mul(position.markPrice ?? position.entryPrice).abs()),
+      new Prisma.Decimal(0),
+    );
+    const unrealizedPnl = positions.reduce(
+      (sum, position) => sum.add(position.unrealizedPnl),
+      new Prisma.Decimal(0),
+    );
+
+    const equitySeries = account
+      ? await this.getEquitySeries({
+          workspaceId,
+          exchangeAccountId: account.exchangeAccountId,
+          environment: account.environment,
+          ...equityWindow,
+        })
+      : [];
+
     return {
-      openPositions,
+      openPositions: positions.length,
+      openExposure: openExposure.toFixed(),
+      unrealizedPnl: unrealizedPnl.toFixed(),
       activeStrategies,
       totalPnl: totalAggregate._sum.netPnl?.toFixed() ?? "0",
       dayPnl: dayAggregate._sum.netPnl?.toFixed() ?? "0",
-      equity: account?.equity.toFixed() ?? null,
-      accountObservedAt: account?.observedAt ?? null,
+      account: account
+        ? {
+            ...account,
+            equity: account.equity.toFixed(),
+            availableBalance: account.availableBalance?.toFixed() ?? null,
+          }
+        : null,
+      equitySeries,
       workerLastSeenAt: heartbeat?.lastSeenAt ?? null,
     };
+  }
+
+  private async getEquitySeries({
+    workspaceId,
+    exchangeAccountId,
+    environment,
+    startsAt,
+    bucketSeconds,
+  }: {
+    workspaceId: string;
+    exchangeAccountId: string;
+    environment: "DRY_RUN" | "DEMO" | "LIVE";
+    startsAt: Date;
+    bucketSeconds: number;
+  }) {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ equity: Prisma.Decimal; observedAt: Date }>
+    >(Prisma.sql`
+      WITH samples AS (
+        SELECT
+          "equity",
+          "observedAt",
+          FLOOR(EXTRACT(EPOCH FROM ("observedAt" - ${startsAt})) / ${bucketSeconds}) AS bucket
+        FROM "AccountSnapshot"
+        WHERE "workspaceId" = ${workspaceId}
+          AND "exchangeAccountId" = ${exchangeAccountId}
+          AND "environment" = CAST(${environment} AS "TradingEnvironment")
+          AND "observedAt" >= ${startsAt}
+      )
+      SELECT "equity", "observedAt"
+      FROM (
+        SELECT DISTINCT ON (bucket)
+          "equity",
+          "observedAt",
+          bucket
+        FROM samples
+        ORDER BY bucket, "observedAt" DESC
+      ) AS buckets
+      ORDER BY "observedAt" ASC
+    `);
+
+    return rows.map((row) => ({
+      equity: row.equity.toFixed(),
+      observedAt: row.observedAt,
+    }));
   }
 
   public async listMarkets(workspaceId: string) {

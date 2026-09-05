@@ -7,6 +7,7 @@ import {
   marketDetailSchema,
   marketSymbolParamsSchema,
   marketsSchema,
+  overviewQuerySchema,
   overviewSchema,
   requestContextSchema,
   tradeDetailSchema,
@@ -161,6 +162,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     "/api/v1/overview",
     {
       schema: {
+        querystring: overviewQuerySchema,
         response: {
           200: apiEnvelopeSchema(overviewSchema),
           503: errorEnvelopeSchema,
@@ -169,13 +171,18 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
     async (request) => {
       const workspace = await requireWorkspace();
-      const overview = await repository.getOverview(workspace.id);
+      const period = request.query.period;
+      const periodConfig = overviewPeriodConfig[period];
+      const overview = await repository.getOverview(workspace.id, {
+        startsAt: new Date(Date.now() - periodConfig.durationMs),
+        bucketSeconds: periodConfig.bucketSeconds,
+      });
       const now = Date.now();
       const workerHealthy = overview.workerLastSeenAt
         ? now - overview.workerLastSeenAt.getTime() < 45_000
         : false;
-      const accountFresh = overview.accountObservedAt
-        ? now - overview.accountObservedAt.getTime() < 60_000
+      const accountFresh = overview.account
+        ? now - overview.account.observedAt.getTime() < config.ACCOUNT_SNAPSHOT_INTERVAL_MS * 2
         : false;
 
       const alerts = [];
@@ -187,28 +194,54 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           description: "Нет свежего heartbeat. Торговые и фоновые задачи не выполняются.",
         });
       }
-      if (!overview.accountObservedAt) {
+      if (!overview.account) {
         alerts.push({
           id: "account-data-unavailable",
           severity: "warning" as const,
           title: "Нет данных торгового счёта",
-          description: "Exchange adapter ещё не записал account snapshot.",
+          description: "Worker ещё не записал account snapshot.",
+        });
+      } else if (!accountFresh) {
+        alerts.push({
+          id: "account-data-stale",
+          severity: "warning" as const,
+          title: "Данные торгового счёта устарели",
+          description: "Последний account snapshot старше ожидаемого интервала обновления.",
         });
       }
 
       return {
         data: {
+          period,
           runtimeState: workerHealthy ? ("idle" as const) : ("offline" as const),
-          tradingEnvironment: "dry-run" as const,
-          equity: overview.equity,
+          tradingEnvironment: overview.account
+            ? tradingEnvironment[overview.account.environment]
+            : ("dry-run" as const),
+          account: overview.account
+            ? {
+                exchangeAccountId: overview.account.exchangeAccountId,
+                environment: tradingEnvironment[overview.account.environment],
+                equity: overview.account.equity,
+                availableBalance: overview.account.availableBalance,
+                observedAt: overview.account.observedAt.toISOString(),
+              }
+            : null,
+          equitySeries: overview.equitySeries.map((point) => ({
+            equity: point.equity,
+            observedAt: point.observedAt.toISOString(),
+          })),
           dayPnl: overview.dayPnl,
           totalPnl: overview.totalPnl,
-          openExposure: null,
+          unrealizedPnl: overview.unrealizedPnl,
+          openExposure: overview.openExposure,
           openPositions: overview.openPositions,
           activeStrategies: overview.activeStrategies,
           alerts,
         },
-        meta: createMeta(request.id, accountFresh ? "fresh" : "unavailable"),
+        meta: createMeta(
+          request.id,
+          !overview.account ? "unavailable" : accountFresh && workerHealthy ? "fresh" : "stale",
+        ),
       };
     },
   );
@@ -550,6 +583,12 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   return app;
 }
+
+const overviewPeriodConfig = {
+  "24h": { durationMs: 24 * 60 * 60 * 1_000, bucketSeconds: 15 * 60 },
+  "7d": { durationMs: 7 * 24 * 60 * 60 * 1_000, bucketSeconds: 2 * 60 * 60 },
+  "30d": { durationMs: 30 * 24 * 60 * 60 * 1_000, bucketSeconds: 8 * 60 * 60 },
+} as const;
 
 function createMeta(requestId: string, freshness: "fresh" | "stale" | "unavailable") {
   return {

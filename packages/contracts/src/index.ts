@@ -24,13 +24,34 @@ export const requestContextSchema = z.object({
   environment: z.enum(["development", "test", "production"]),
 });
 
+export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
+export const overviewQuerySchema = z.object({
+  period: overviewPeriodSchema.default("7d"),
+});
+
+export const accountSnapshotPointSchema = z.object({
+  equity: z.string(),
+  observedAt: z.iso.datetime(),
+});
+
 export const overviewSchema = z.object({
+  period: overviewPeriodSchema,
   runtimeState: runtimeStateSchema,
   tradingEnvironment: z.enum(["dry-run", "demo", "live"]),
-  equity: z.string().nullable(),
+  account: z
+    .object({
+      exchangeAccountId: z.string(),
+      environment: z.enum(["dry-run", "demo", "live"]),
+      equity: z.string(),
+      availableBalance: z.string().nullable(),
+      observedAt: z.iso.datetime(),
+    })
+    .nullable(),
+  equitySeries: z.array(accountSnapshotPointSchema),
   dayPnl: z.string(),
   totalPnl: z.string(),
-  openExposure: z.string().nullable(),
+  unrealizedPnl: z.string(),
+  openExposure: z.string(),
   openPositions: z.number().int().nonnegative(),
   activeStrategies: z.number().int().nonnegative(),
   alerts: z.array(
@@ -206,6 +227,9 @@ export const errorEnvelopeSchema = z.object({
 });
 
 export type RequestContextDto = z.infer<typeof requestContextSchema>;
+export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
+export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
+export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;
 export type OverviewDto = z.infer<typeof overviewSchema>;
 export type MarketDto = z.infer<typeof marketSchema>;
 export type MarketsDto = z.infer<typeof marketsSchema>;

@@ -28,7 +28,7 @@ export function AppShell() {
   });
   const overviewQuery = useQuery({
     queryKey: ["overview"],
-    queryFn: fetchOverview,
+    queryFn: () => fetchOverview(),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });

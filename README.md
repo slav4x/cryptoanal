@@ -50,16 +50,17 @@ pnpm dev
 - `/markets` — список инструментов и watchlist;
 - `/markets/:symbol` — реальные свечи, техническая сводка и торговый контекст пары;
 - `/trades` — открытые позиции и история завершённых сделок;
-- `/trades/:tradeId` — результат сделки, runtime-контекст, ордера и fills.
+- `/trades/:tradeId` — результат сделки, runtime-контекст, ордера и fills;
 - `/strategies` — каталог стратегий, версий, validation и deployment states.
+- `/strategies/new` — секционный редактор и создание черновика с immutable v1.
 
 Реализованный private API:
 
 - `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
-- `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`.
-- `GET /api/v1/strategies`.
+- `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`;
+- `GET /api/v1/strategies` и `POST /api/v1/strategies`.
 
 ## Проверки
 

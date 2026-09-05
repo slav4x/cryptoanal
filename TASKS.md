@@ -30,8 +30,9 @@
 ## Этап 3 — Strategies и runtime
 
 - [x] Strategy catalog и status model.
-- [ ] Секционный strategy editor.
-- [ ] Immutable versions и diff.
+- [x] Секционный strategy editor.
+- [x] Создание стратегии с immutable версией v1.
+- [ ] Последующие immutable versions и diff.
 - [ ] Deployments и execution runs.
 - [ ] Immutable execution context.
 - [ ] Runtime commands и audit trail.

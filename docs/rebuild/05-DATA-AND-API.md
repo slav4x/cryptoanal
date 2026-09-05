@@ -173,6 +173,14 @@ strategy status, active/latest version, последний validation run и п�
 Разрешённые переходы lifecycle закреплены в application layer; команды переходов будут
 использовать эту модель после реализации strategy workspace.
 
+Следующий срез добавляет `POST /api/v1/strategies`. Команда принимает metadata и
+versioned config со схемой `universe/signal/filters/risk/entry/exit/costs/schedule`,
+проверяет границы и связанные параметры, затем одной транзакцией создаёт `Strategy` в
+статусе draft и immutable `StrategyVersion` v1. SHA-256 hash считается по уже
+нормализованному контрактом config. Повтор имени внутри workspace возвращает `409`, а
+редактирование существующей версии запрещено моделью: дальнейшие изменения будут
+создавать v2+.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

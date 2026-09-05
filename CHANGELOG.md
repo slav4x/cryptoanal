@@ -24,6 +24,9 @@
 - Account equity chart, exposure and realized/unrealized PnL widgets.
 - Strategy lifecycle model with explicit allowed status transitions.
 - Strategy catalog API and dashboard page with version, validation and deployment states.
+- Validated strategy configuration contract split into universe, signal, filters, risk, entry, exit, costs and schedule.
+- Atomic strategy creation with an immutable initial version and deterministic config hash.
+- Sectional strategy editor for creating draft strategies from the dashboard.
 
 ### Changed
 

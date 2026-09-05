@@ -50,10 +50,11 @@ polling и без прямого обращения UI к exchange.
 
 ## Этап 3. Strategy workspace и runtime controls
 
-- [ ] Ввести `Strategy`, immutable `StrategyVersion`, `Deployment`, `ExecutionRun`.
-- [ ] Разделить config на universe/signal/filters/risk/entry/exit/costs/schedule.
-- [ ] Реализовать каталог стратегий.
-- [ ] Реализовать editor, version creation и diff.
+- [x] Ввести `Strategy` и создание immutable `StrategyVersion` v1; `Deployment` и `ExecutionRun` пока только в модели данных.
+- [x] Разделить config на universe/signal/filters/risk/entry/exit/costs/schedule.
+- [x] Реализовать каталог стратегий.
+- [x] Реализовать секционный editor и создание первой версии.
+- [ ] Реализовать создание последующих версий и diff.
 - [ ] Реализовать status transitions и validation eligibility.
 - [ ] Переписать runtime на immutable `ExecutionContext`.
 - [ ] Реализовать start/pause/stop и manual close как commands.

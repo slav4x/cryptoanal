@@ -32,7 +32,8 @@
 - [x] Strategy catalog и status model.
 - [x] Секционный strategy editor.
 - [x] Создание стратегии с immutable версией v1.
-- [ ] Последующие immutable versions и diff.
+- [x] Strategy workspace с обзором и snapshot конфигурации.
+- [x] Последующие immutable versions и diff.
 - [ ] Deployments и execution runs.
 - [ ] Immutable execution context.
 - [ ] Runtime commands и audit trail.

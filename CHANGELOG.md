@@ -27,6 +27,9 @@
 - Validated strategy configuration contract split into universe, signal, filters, risk, entry, exit, costs and schedule.
 - Atomic strategy creation with an immutable initial version and deterministic config hash.
 - Sectional strategy editor for creating draft strategies from the dashboard.
+- Strategy workspace with overview, read-only configuration snapshot and version history.
+- Immutable v2+ creation with row locking, change summaries and unchanged-config protection.
+- Human-readable configuration diff between every version and its predecessor.
 
 ### Changed
 

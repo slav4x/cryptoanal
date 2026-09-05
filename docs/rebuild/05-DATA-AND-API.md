@@ -181,6 +181,13 @@ versioned config со схемой `universe/signal/filters/risk/entry/exit/cost
 редактирование существующей версии запрещено моделью: дальнейшие изменения будут
 создавать v2+.
 
+`GET /api/v1/strategies/:strategyId` возвращает workspace read-model вместе с
+упорядоченной историей версий и полными config snapshots. Новая версия создаётся через
+`POST /api/v1/strategies/:strategyId/versions`: сервер блокирует строку стратегии на
+время выбора следующего номера, запрещает повтор неизменившегося config hash и обновляет
+metadata стратегии, не меняя предыдущий snapshot. Dashboard строит diff выбранной
+версии с её непосредственным предшественником из этих immutable данных.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

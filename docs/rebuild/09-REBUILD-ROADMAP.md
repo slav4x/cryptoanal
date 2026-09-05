@@ -54,7 +54,7 @@ polling и без прямого обращения UI к exchange.
 - [x] Разделить config на universe/signal/filters/risk/entry/exit/costs/schedule.
 - [x] Реализовать каталог стратегий.
 - [x] Реализовать секционный editor и создание первой версии.
-- [ ] Реализовать создание последующих версий и diff.
+- [x] Реализовать strategy workspace, создание последующих версий и diff.
 - [ ] Реализовать status transitions и validation eligibility.
 - [ ] Переписать runtime на immutable `ExecutionContext`.
 - [ ] Реализовать start/pause/stop и manual close как commands.

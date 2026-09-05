@@ -51,8 +51,10 @@ pnpm dev
 - `/markets/:symbol` — реальные свечи, техническая сводка и торговый контекст пары;
 - `/trades` — открытые позиции и история завершённых сделок;
 - `/trades/:tradeId` — результат сделки, runtime-контекст, ордера и fills;
-- `/strategies` — каталог стратегий, версий, validation и deployment states.
-- `/strategies/new` — секционный редактор и создание черновика с immutable v1.
+- `/strategies` — каталог стратегий, версий, validation и deployment states;
+- `/strategies/new` — секционный редактор и создание черновика с immutable v1;
+- `/strategies/:strategyId` — workspace стратегии с обзором, конфигурацией и историей версий;
+- `/strategies/:strategyId/versions/new` — создание новой версии на основе последней.
 
 Реализованный private API:
 
@@ -60,7 +62,9 @@ pnpm dev
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
 - `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`;
-- `GET /api/v1/strategies` и `POST /api/v1/strategies`.
+- `GET /api/v1/strategies` и `POST /api/v1/strategies`;
+- `GET /api/v1/strategies/:strategyId`;
+- `POST /api/v1/strategies/:strategyId/versions`.
 
 ## Проверки
 

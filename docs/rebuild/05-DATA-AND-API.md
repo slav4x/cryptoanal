@@ -162,6 +162,12 @@ read-model для summary, открытых позиций и последних
 context, связанные orders и fills. Пагинация торговой истории остаётся следующим
 срезом.
 
+`GET /api/v1/overview?period=24h|7d|30d` возвращает текущий account snapshot,
+реализованный и нереализованный PnL, открытую экспозицию и разреженную equity-series.
+В development-среде snapshot строится worker из настроенного dry-run капитала и
+канонического trading ledger; будущий private exchange adapter сохраняет данные в ту же
+модель без изменения dashboard-контракта.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

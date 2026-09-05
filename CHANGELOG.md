@@ -19,10 +19,14 @@
 - Trades workspace with positions and history views.
 - Position and recent trade context on Overview and market pair pages.
 - Trade detail API and page with strategy runtime, orders and fill provenance.
+- Dry-run account snapshot capture derived from the configured balance and canonical trading ledger.
+- Period-aware Overview equity series for 24 hours, 7 days and 30 days.
+- Account equity chart, exposure and realized/unrealized PnL widgets.
 
 ### Changed
 
 - Dashboard visual system aligned with the approved `crypto-trade/design` direction.
 - Dashboard typography, control geometry, semantic metrics and desktop shell refined against the source HTML mockups.
+- Overview now reports account freshness and uses bucketed account snapshots instead of placeholder capital data.
 - Sidebar runtime indicator now reflects the real worker state.
 - Request validation errors now return a structured `400` response.

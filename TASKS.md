@@ -25,7 +25,7 @@
 - [x] Страница открытых позиций и истории сделок.
 - [x] Торговый контекст на Overview и странице пары.
 - [x] Orders, fills и детальная страница сделки.
-- [ ] Полный overview projection с account snapshots.
+- [x] Полный overview projection с account snapshots.
 
 ## Этап 3 — Strategies и runtime
 

@@ -54,7 +54,7 @@ pnpm dev
 
 Реализованный private API:
 
-- `GET /api/v1/overview`;
+- `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
 - `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`.
@@ -73,3 +73,15 @@ pnpm build
 Dashboard содержит private account/runtime данные и управляющие действия. Пока нет
 настоящей auth, его можно использовать локально или в private network. Перед удалённым
 deployment требуется reverse-proxy Basic Auth либо development access gate.
+
+## Dry-run account
+
+Worker сохраняет account snapshots для development workspace. Капитал рассчитывается как
+`DRY_RUN_INITIAL_BALANCE + realized PnL + unrealized PnL`; доступный баланс остаётся
+неопределённым до появления risk/margin model или private exchange adapter.
+
+Настройки:
+
+- `DRY_RUN_ACCOUNT_ID` — стабильный идентификатор development-счёта;
+- `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
+- `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут.

@@ -4,6 +4,7 @@ import {
   marketsSchema,
   overviewSchema,
   requestContextSchema,
+  strategyCatalogSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
   watchlistStateSchema,
@@ -12,6 +13,7 @@ import {
   type OverviewPeriod,
   type OverviewDto,
   type RequestContextDto,
+  type StrategyCatalogDto,
   type TradeDetailDto,
   type TradingLedgerDto,
   type WatchlistStateDto,
@@ -72,6 +74,7 @@ const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
 const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
 const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
 const tradeDetailEnvelopeSchema = apiEnvelopeSchema(tradeDetailSchema);
+const strategyCatalogEnvelopeSchema = apiEnvelopeSchema(strategyCatalogSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -104,4 +107,8 @@ export function fetchTradingLedger(): Promise<ApiEnvelope<TradingLedgerDto>> {
 
 export function fetchTradeDetail(tradeId: string): Promise<ApiEnvelope<TradeDetailDto>> {
   return request(`/api/v1/trades/${encodeURIComponent(tradeId)}`, tradeDetailEnvelopeSchema);
+}
+
+export function fetchStrategies(): Promise<ApiEnvelope<StrategyCatalogDto>> {
+  return request("/api/v1/strategies", strategyCatalogEnvelopeSchema);
 }

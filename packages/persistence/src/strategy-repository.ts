@@ -139,7 +139,7 @@ export class StrategyRepository {
         },
         deployments: {
           orderBy: { updatedAt: "desc" },
-          take: 1,
+          take: 20,
           select: {
             id: true,
             environment: true,

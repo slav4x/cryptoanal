@@ -3,6 +3,7 @@ import {
   canTransitionStrategyStatus,
   createDevelopmentContext,
   evaluateStrategyLifecycle,
+  validationEngineVersion,
 } from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
 import {
@@ -30,6 +31,10 @@ import {
   tradingLedgerSchema,
   validationExecutionInputSchema,
   validationMetricsSchema,
+  validationMetricsSummarySchema,
+  validationRunDetailSchema,
+  validationRunDetailQuerySchema,
+  validationRunIdParamsSchema,
   validationRunInputSchema,
   validationRunQueuedSchema,
   validationsSchema,
@@ -699,6 +704,56 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
   );
 
+  app.get(
+    "/api/v1/validations/:validationRunId",
+    {
+      schema: {
+        params: validationRunIdParamsSchema,
+        querystring: validationRunDetailQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(validationRunDetailSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const run = await validationRepository.get(
+        workspace.id,
+        request.params.validationRunId,
+        request.query.tradePage,
+        request.query.tradeLimit,
+      );
+      if (!run) {
+        throw new ApiError(404, "VALIDATION_RUN_NOT_FOUND", "Запуск проверки не найден");
+      }
+
+      return {
+        data: {
+          run: serializeValidationRunDetail(run),
+          trades: run.trades.map((trade) => ({
+            symbol: trade.symbol,
+            side: trade.side === "BUY" ? ("long" as const) : ("short" as const),
+            openedAt: trade.openedAt.toISOString(),
+            closedAt: trade.closedAt.toISOString(),
+            entryPrice: Number(trade.entryPrice),
+            exitPrice: Number(trade.exitPrice),
+            quantity: Number(trade.quantity),
+            netPnl: Number(trade.netPnl),
+            fees: Number(trade.fees),
+            exitReason: serializeValidationExitReason(trade.exitReason),
+          })),
+          tradesTotal: run._count.trades,
+          tradePage: request.query.tradePage,
+          tradeLimit: request.query.tradeLimit,
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
   app.post(
     "/api/v1/strategies/:strategyId/validations",
     {
@@ -1146,7 +1201,7 @@ function createStrategyLifecycleProjection(strategy: {
   });
 }
 
-function serializeValidationRun(run: {
+type ValidationRunSource = {
   id: string;
   kind: keyof typeof validationKind;
   status: keyof typeof runStatus;
@@ -1164,7 +1219,9 @@ function serializeValidationRun(run: {
   completedAt: Date | null;
   strategy: { id: string; name: string };
   strategyVersion: { id: string; version: number };
-}) {
+};
+
+function serializeValidationRunBase(run: ValidationRunSource) {
   return {
     id: run.id,
     strategy: run.strategy,
@@ -1177,12 +1234,26 @@ function serializeValidationRun(run: {
     engineVersion: run.engineVersion,
     configHash: run.configHash,
     input: validationExecutionInputSchema.parse(run.input),
-    metrics: run.metrics === null ? null : validationMetricsSchema.parse(run.metrics),
     failureCode: run.failureCode,
     failureMessage: run.failureMessage,
     queuedAt: run.queuedAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,
     completedAt: run.completedAt?.toISOString() ?? null,
+  };
+}
+
+function serializeValidationRun(run: ValidationRunSource) {
+  const metrics = run.metrics === null ? null : validationMetricsSchema.parse(run.metrics);
+  return {
+    ...serializeValidationRunBase(run),
+    metrics: metrics === null ? null : validationMetricsSummarySchema.parse(metrics),
+  };
+}
+
+function serializeValidationRunDetail(run: ValidationRunSource) {
+  return {
+    ...serializeValidationRunBase(run),
+    metrics: run.metrics === null ? null : validationMetricsSchema.parse(run.metrics),
   };
 }
 
@@ -1282,7 +1353,23 @@ const persistedValidationKind = {
   "walk-forward": "WALK_FORWARD",
 } as const;
 
-const validationEngineVersion = "cryptoanal-validation@0.1.0";
+const validationExitReasons: Record<
+  string,
+  "stop-loss" | "take-profit" | "trailing-stop" | "end-of-data"
+> = {
+  "stop-loss": "stop-loss",
+  "take-profit": "take-profit",
+  "trailing-stop": "trailing-stop",
+  "end-of-data": "end-of-data",
+};
+
+function serializeValidationExitReason(
+  value: string,
+): "stop-loss" | "take-profit" | "trailing-stop" | "end-of-data" {
+  const reason = validationExitReasons[value];
+  if (!reason) throw new Error(`Unknown validation exit reason: ${value}`);
+  return reason;
+}
 
 const validationVerdict = {
   PENDING: "pending",

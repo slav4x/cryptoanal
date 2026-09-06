@@ -18,7 +18,7 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FlaskConical, LoaderCircle, Plus } from "lucide-react";
+import { ArrowUpRight, FlaskConical, GitCompareArrows, LoaderCircle, Plus } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -74,10 +74,20 @@ export default function ValidationPage() {
         title="Validation Center"
         description="Durable очередь backtest и walk-forward запусков с привязкой к immutable версии."
         actions={
-          <Badge variant="outline">
-            {validationsQuery.data.data.counts.queued + validationsQuery.data.data.counts.running} в
-            работе
-          </Badge>
+          <div className="flex items-center gap-2">
+            {validationsQuery.data.data.counts.completed >= 2 ? (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/validation/compare">
+                  <GitCompareArrows aria-hidden="true" />
+                  Сравнить
+                </Link>
+              </Button>
+            ) : null}
+            <Badge variant="outline">
+              {validationsQuery.data.data.counts.queued + validationsQuery.data.data.counts.running}{" "}
+              в работе
+            </Badge>
+          </div>
         }
       />
 
@@ -401,13 +411,21 @@ function RunStatusBadge({ run }: { run: ValidationRunDto }) {
 function RunResult({ run }: { run: ValidationRunDto }) {
   if (run.status === "failed") {
     return (
-      <p className="line-clamp-2 text-loss" title={run.failureMessage ?? undefined}>
-        {run.failureMessage ?? "Проверка завершилась с ошибкой"}
-      </p>
+      <div>
+        <p className="line-clamp-2 text-loss" title={run.failureMessage ?? undefined}>
+          {run.failureMessage ?? "Проверка завершилась с ошибкой"}
+        </p>
+        <RunReportLink runId={run.id} />
+      </div>
     );
   }
   if (!run.metrics) {
-    return <span className="text-stale">Метрики появятся после расчёта</span>;
+    return (
+      <div>
+        <span className="text-stale">Метрики появятся после расчёта</span>
+        <RunReportLink runId={run.id} />
+      </div>
+    );
   }
 
   return (
@@ -419,7 +437,20 @@ function RunResult({ run }: { run: ValidationRunDto }) {
         {run.metrics.trades} сделок · PF {formatProfitFactor(run.metrics.profitFactor)} · DD{" "}
         {run.metrics.maxDrawdownPercent.toFixed(2)}%
       </p>
+      <RunReportLink runId={run.id} />
     </div>
+  );
+}
+
+function RunReportLink({ runId }: { runId: string }) {
+  return (
+    <Link
+      to={`/validation/${runId}`}
+      className="mt-1.5 flex w-fit items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+    >
+      Открыть отчёт
+      <ArrowUpRight className="size-3" aria-hidden="true" />
+    </Link>
   );
 }
 

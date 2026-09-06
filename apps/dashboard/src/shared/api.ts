@@ -12,6 +12,7 @@ import {
   tradeDetailSchema,
   tradingLedgerSchema,
   validationRunQueuedSchema,
+  validationRunDetailSchema,
   validationsSchema,
   watchlistStateSchema,
   type MarketsDto,
@@ -30,6 +31,7 @@ import {
   type TradeDetailDto,
   type TradingLedgerDto,
   type ValidationRunInputDto,
+  type ValidationRunDetailDto,
   type ValidationRunQueuedDto,
   type ValidationsDto,
   type WatchlistStateDto,
@@ -102,6 +104,7 @@ const strategyStatusChangedEnvelopeSchema = apiEnvelopeSchema(strategyStatusChan
 const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCreatedSchema);
 const validationsEnvelopeSchema = apiEnvelopeSchema(validationsSchema);
 const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedSchema);
+const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -180,6 +183,17 @@ export function changeStrategyStatus(
 
 export function fetchValidations(): Promise<ApiEnvelope<ValidationsDto>> {
   return request("/api/v1/validations", validationsEnvelopeSchema);
+}
+
+export function fetchValidationRun(
+  validationRunId: string,
+  tradePage = 1,
+  tradeLimit = 50,
+): Promise<ApiEnvelope<ValidationRunDetailDto>> {
+  return request(
+    `/api/v1/validations/${encodeURIComponent(validationRunId)}?tradePage=${tradePage}&tradeLimit=${tradeLimit}`,
+    validationRunDetailEnvelopeSchema,
+  );
 }
 
 export function queueValidationRun(

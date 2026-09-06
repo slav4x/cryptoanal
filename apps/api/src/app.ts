@@ -15,6 +15,8 @@ import {
   apiEnvelopeSchema,
   analyticsQuerySchema,
   analyticsSchema,
+  activityQuerySchema,
+  activitySchema,
   deploymentCommandInputSchema,
   deploymentCreateSchema,
   deploymentIdParamsSchema,
@@ -58,6 +60,8 @@ import {
 } from "@cryptoanal/contracts";
 import {
   ActiveDeploymentExistsError,
+  ActivityCursorNotFoundError,
+  ActivityRepository,
   AnalyticsRepository,
   type CryptoAnalPrismaClient,
   DashboardRepository,
@@ -124,6 +128,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   const repository = new DashboardRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
+  const activityRepository = new ActivityRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
@@ -342,6 +347,92 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           !overview.account ? "unavailable" : accountFresh && workerHealthy ? "fresh" : "stale",
         ),
       };
+    },
+  );
+
+  app.get(
+    "/api/v1/activity",
+    {
+      schema: {
+        querystring: activityQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(activitySchema),
+          400: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const query = request.query;
+        const activity = await activityRepository.list(workspace.id, {
+          startsAt: getActivityStartsAt(query.period),
+          action: query.action ? persistedDecisionAction[query.action] : null,
+          strategyId: query.strategyId ?? null,
+          symbol: query.symbol ?? null,
+          reasonCode: query.reasonCode ?? null,
+          cursor: query.cursor ?? null,
+          limit: query.limit,
+        });
+
+        return {
+          data: {
+            filters: {
+              period: query.period,
+              action: query.action ?? null,
+              strategyId: query.strategyId ?? null,
+              symbol: query.symbol ?? null,
+              reasonCode: query.reasonCode ?? null,
+            },
+            filterOptions: {
+              strategies: activity.options.strategies,
+              symbols: activity.options.symbols,
+              reasonCodes: activity.options.reasonCodes,
+              actions: activity.options.actions.map((action) => decisionAction[action]),
+            },
+            summary: {
+              total: activity.total,
+              open: activity.counts.get("OPEN") ?? 0,
+              close: activity.counts.get("CLOSE") ?? 0,
+              hold: activity.counts.get("HOLD") ?? 0,
+              skip: activity.counts.get("SKIP") ?? 0,
+              error: activity.counts.get("ERROR") ?? 0,
+            },
+            items: activity.items.map((item) => ({
+              id: item.id,
+              symbol: item.symbol,
+              action: decisionAction[item.action],
+              reasonCode: item.reasonCode,
+              summary: item.summary,
+              factors: readJsonObject(item.factors),
+              marketSnapshotRef: item.marketSnapshotRef,
+              correlationId: item.correlationId,
+              decidedAt: item.decidedAt.toISOString(),
+              strategy: {
+                id: item.strategyVersion.strategy.id,
+                name: item.strategyVersion.strategy.name,
+                versionId: item.strategyVersion.id,
+                version: item.strategyVersion.version,
+              },
+              execution: {
+                runId: item.executionRun.id,
+                deploymentId: item.executionRun.deploymentId,
+                environment: tradingEnvironment[item.executionRun.environment],
+                status: runStatus[item.executionRun.status],
+              },
+              links: { positionId: item.positionId, tradeId: item.tradeId },
+            })),
+            nextCursor: activity.nextCursor,
+          },
+          meta: createMeta(request.id, activity.total > 0 ? "fresh" : "unavailable"),
+        };
+      } catch (error) {
+        if (error instanceof ActivityCursorNotFoundError) {
+          throw new ApiError(400, "ACTIVITY_CURSOR_INVALID", "Cursor ленты недействителен");
+        }
+        throw error;
+      }
     },
   );
 
@@ -1582,6 +1673,18 @@ const analyticsPeriodDurationMs = {
   all: null,
 } as const;
 
+const activityPeriodDurationMs = {
+  "24h": 24 * 60 * 60 * 1_000,
+  "7d": 7 * 24 * 60 * 60 * 1_000,
+  "30d": 30 * 24 * 60 * 60 * 1_000,
+  all: null,
+} as const;
+
+function getActivityStartsAt(period: keyof typeof activityPeriodDurationMs): Date | null {
+  const durationMs = activityPeriodDurationMs[period];
+  return durationMs === null ? null : new Date(Date.now() - durationMs);
+}
+
 function getAnalyticsStartsAt(period: keyof typeof analyticsPeriodDurationMs): Date | null {
   const durationMs = analyticsPeriodDurationMs[period];
   return durationMs === null ? null : new Date(Date.now() - durationMs);
@@ -2004,6 +2107,13 @@ function readStringArray(value: unknown): string[] {
     : [];
 }
 
+function readJsonObject(value: unknown): Record<string, unknown> {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    throw new Error("Decision factors must be a JSON object");
+  }
+  return value as Record<string, unknown>;
+}
+
 const tradingEnvironment = {
   DRY_RUN: "dry-run",
   DEMO: "demo",
@@ -2042,6 +2152,14 @@ const decisionAction = {
   HOLD: "hold",
   SKIP: "skip",
   ERROR: "error",
+} as const;
+
+const persistedDecisionAction = {
+  open: "OPEN",
+  close: "CLOSE",
+  hold: "HOLD",
+  skip: "SKIP",
+  error: "ERROR",
 } as const;
 
 const runStatus = {

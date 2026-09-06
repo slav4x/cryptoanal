@@ -1,5 +1,10 @@
 export { createPrismaClient, type CryptoAnalPrismaClient } from "./client";
 export { AccountSnapshotRepository } from "./account-snapshot-repository";
+export {
+  ActivityCursorNotFoundError,
+  ActivityRepository,
+  type ActivityFilters,
+} from "./activity-repository";
 export { AnalyticsRepository, type AnalyticsTradeFilters } from "./analytics-repository";
 export { DashboardRepository } from "./dashboard-repository";
 export { HealthRepository } from "./health-repository";

@@ -823,6 +823,75 @@ export const healthDashboardSchema = z.object({
   }),
 });
 
+export const activityActionSchema = z.enum(["open", "close", "hold", "skip", "error"]);
+export const activityPeriodSchema = z.enum(["24h", "7d", "30d", "all"]);
+export const activityQuerySchema = z.object({
+  period: activityPeriodSchema.default("24h"),
+  action: activityActionSchema.optional(),
+  strategyId: z.uuid().optional(),
+  symbol: z
+    .string()
+    .regex(/^[A-Z0-9]{4,24}$/)
+    .optional(),
+  reasonCode: z.string().trim().min(1).max(100).optional(),
+  cursor: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+
+export const activitySchema = z.object({
+  filters: z.object({
+    period: activityPeriodSchema,
+    action: activityActionSchema.nullable(),
+    strategyId: z.string().nullable(),
+    symbol: z.string().nullable(),
+    reasonCode: z.string().nullable(),
+  }),
+  filterOptions: z.object({
+    strategies: z.array(z.object({ id: z.string(), name: z.string() })),
+    symbols: z.array(z.string()),
+    reasonCodes: z.array(z.string()),
+    actions: z.array(activityActionSchema),
+  }),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    open: z.number().int().nonnegative(),
+    close: z.number().int().nonnegative(),
+    hold: z.number().int().nonnegative(),
+    skip: z.number().int().nonnegative(),
+    error: z.number().int().nonnegative(),
+  }),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      symbol: z.string(),
+      action: activityActionSchema,
+      reasonCode: z.string(),
+      summary: z.string(),
+      factors: z.record(z.string(), z.unknown()),
+      marketSnapshotRef: z.string().nullable(),
+      correlationId: z.string(),
+      decidedAt: z.iso.datetime(),
+      strategy: z.object({
+        id: z.string(),
+        name: z.string(),
+        versionId: z.string(),
+        version: z.number().int().positive(),
+      }),
+      execution: z.object({
+        runId: z.string(),
+        deploymentId: z.string(),
+        environment: analyticsEnvironmentSchema,
+        status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+      }),
+      links: z.object({
+        positionId: z.string().nullable(),
+        tradeId: z.string().nullable(),
+      }),
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -899,5 +968,9 @@ export type HealthLevel = z.infer<typeof healthLevelSchema>;
 export type IncidentSeverity = z.infer<typeof incidentSeveritySchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
 export type HealthDashboardDto = z.infer<typeof healthDashboardSchema>;
+export type ActivityAction = z.infer<typeof activityActionSchema>;
+export type ActivityPeriod = z.infer<typeof activityPeriodSchema>;
+export type ActivityQueryDto = z.infer<typeof activityQuerySchema>;
+export type ActivityDto = z.infer<typeof activitySchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

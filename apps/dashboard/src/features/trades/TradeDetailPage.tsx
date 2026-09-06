@@ -121,6 +121,8 @@ export default function TradeDetailPage() {
               label="Стратегия"
               value={`${trade.strategy.name} · v${trade.strategy.version}`}
             />
+            <DetailRow label="Режим на входе" value={marketRegimeLabel[trade.entryRegime]} />
+            <DetailRow label="UTC-сессия входа" value={tradingSessionLabel[trade.entrySession]} />
             <DetailRow label="Статус run" value={runStatusLabel[execution.status]} />
             <DetailRow label="Engine" value={execution.engineVersion} monospace />
             <DetailRow label="Run ID" value={execution.runId} monospace />
@@ -287,6 +289,21 @@ const runStatusLabel = {
   completed: "Завершён",
   failed: "Ошибка",
   cancelled: "Отменён",
+} as const;
+
+const marketRegimeLabel = {
+  bull: "Бычий",
+  bear: "Медвежий",
+  neutral: "Нейтральный",
+  unknown: "Нет данных",
+} as const;
+
+const tradingSessionLabel = {
+  asia: "Азия · 00:00–08:00 UTC",
+  europe: "Европа · 08:00–13:00 UTC",
+  us: "США · 13:00–21:00 UTC",
+  "off-hours": "Вне основных сессий · 21:00–00:00 UTC",
+  unknown: "Нет данных",
 } as const;
 
 const orderStatusLabel = {

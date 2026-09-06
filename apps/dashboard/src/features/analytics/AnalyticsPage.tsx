@@ -22,6 +22,7 @@ import { useState } from "react";
 import { ApiClientError, fetchAnalytics } from "../../shared/api";
 import { formatMetricMoney, formatPercent } from "../../shared/format";
 import { DrawdownChart } from "./DrawdownChart";
+import { HoldingTimeDistribution, PnlDistribution } from "./DistributionCharts";
 import { PerformanceChart } from "./PerformanceChart";
 import { PnlCalendar } from "./PnlCalendar";
 
@@ -222,6 +223,44 @@ export default function AnalyticsPage() {
           }))}
         />
       </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Распределение результата</CardTitle>
+            <CardDescription>Частота и суммарный Net PnL по диапазонам сделки.</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <PnlDistribution buckets={data.distributions.pnl} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Время в позиции</CardTitle>
+            <CardDescription>Количество сделок и win rate по длительности.</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <HoldingTimeDistribution buckets={data.distributions.holdingTime} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <BreakdownCard
+          title="По режиму рынка на входе"
+          items={data.breakdowns.regimes.map((item) => ({
+            ...item,
+            label: regimeLabels[item.key] ?? item.label,
+          }))}
+        />
+        <BreakdownCard
+          title="По UTC-сессии входа"
+          items={data.breakdowns.sessions.map((item) => ({
+            ...item,
+            label: sessionLabels[item.key] ?? item.label,
+          }))}
+        />
+      </div>
     </div>
   );
 }
@@ -361,4 +400,19 @@ const exitReasonLabels: Record<string, string> = {
   MANUAL: "Ручное закрытие",
   STRATEGY_EXIT: "Сигнал стратегии",
   DEPLOYMENT_STOP: "Остановка deployment",
+};
+
+const regimeLabels: Record<string, string> = {
+  bull: "Бычий",
+  bear: "Медвежий",
+  neutral: "Нейтральный",
+  unknown: "Нет данных",
+};
+
+const sessionLabels: Record<string, string> = {
+  asia: "Азия · 00:00–08:00 UTC",
+  europe: "Европа · 08:00–13:00 UTC",
+  us: "США · 13:00–21:00 UTC",
+  "off-hours": "Вне основных сессий · 21:00–00:00 UTC",
+  unknown: "Нет данных",
 };

@@ -19,7 +19,7 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { ArrowDown, ExternalLink } from "lucide-react";
+import { ArrowDown, BookOpenText, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiClientError, fetchActivity } from "../../shared/api";
@@ -277,6 +277,11 @@ function DecisionDetails({ decision }: { decision: ActivityDto["items"][number] 
         </section>
 
         <div className="flex flex-wrap gap-2">
+          <Button asChild variant="secondary" size="sm">
+            <Link to={`/journal?new=1&type=decision&targetId=${decision.id}`}>
+              <BookOpenText className="size-3.5" />В журнал
+            </Link>
+          </Button>
           <Button asChild variant="secondary" size="sm">
             <Link to={`/markets/${decision.symbol}`}>
               Пара

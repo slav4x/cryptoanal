@@ -5,6 +5,7 @@ import {
   ListTree,
   ArrowLeftRight,
   Box,
+  BookOpenText,
   ChevronsUpDown,
   ChartNoAxesCombined,
   FlaskConical,
@@ -29,6 +30,7 @@ const navigation = [
   { label: "Аналитика", href: "/analytics", icon: ChartNoAxesCombined, end: true },
   { label: "Здоровье", href: "/analytics/health", icon: HeartPulse, end: false },
   { label: "Активность", href: "/activity", icon: ListTree, end: false },
+  { label: "Разбор", href: "/journal", icon: BookOpenText, end: false },
 ] as const;
 
 export function AppShell() {

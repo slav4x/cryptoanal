@@ -19,7 +19,7 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, GitCompareArrows } from "lucide-react";
+import { ArrowLeft, BookOpenText, GitCompareArrows } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiClientError, fetchValidationRun } from "../../shared/api";
@@ -68,6 +68,11 @@ export default function ValidationRunPage() {
         actions={
           <div className="flex items-center gap-2">
             <RunBadge run={run} />
+            <Button asChild variant="secondary" size="sm">
+              <Link to={`/journal?new=1&type=validation-run&targetId=${run.id}`}>
+                <BookOpenText aria-hidden="true" />В журнал
+              </Link>
+            </Button>
             {run.status === "completed" ? (
               <Button asChild variant="outline" size="sm">
                 <Link to={`/validation/compare?runs=${run.id}`}>

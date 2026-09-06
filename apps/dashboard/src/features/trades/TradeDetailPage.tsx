@@ -1,5 +1,6 @@
 import {
   Badge,
+  Button,
   Card,
   CardContent,
   CardDescription,
@@ -13,7 +14,7 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Clock3 } from "lucide-react";
+import { ArrowLeft, BookOpenText, Clock3 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { ApiClientError, fetchTradeDetail } from "../../shared/api";
 import { formatMoney, formatPrice } from "../../shared/format";
@@ -60,6 +61,11 @@ export default function TradeDetailPage() {
               {trade.side === "buy" ? "Лонг" : "Шорт"}
             </Badge>
             <Badge variant="outline">{environmentLabel[trade.environment]}</Badge>
+            <Button asChild variant="secondary" size="sm">
+              <Link to={`/journal?new=1&type=trade&targetId=${trade.id}`}>
+                <BookOpenText className="size-3.5" />В журнал
+              </Link>
+            </Button>
           </div>
         }
       />

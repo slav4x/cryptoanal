@@ -5,11 +5,14 @@ import {
   deploymentMutationResultSchema,
   deploymentsSchema,
   healthDashboardSchema,
+  journalEntryCreatedSchema,
+  journalSchema,
   marketDetailSchema,
   marketsSchema,
   overviewSchema,
   positionCloseResultSchema,
   requestContextSchema,
+  reviewSessionCreatedSchema,
   strategyCatalogSchema,
   strategyCreatedSchema,
   strategyDetailSchema,
@@ -32,11 +35,17 @@ import {
   type DeploymentMutationResultDto,
   type DeploymentsDto,
   type HealthDashboardDto,
+  type JournalDto,
+  type JournalEntryCreateDto,
+  type JournalEntryCreatedDto,
+  type JournalQueryDto,
   type OverviewPeriod,
   type OverviewDto,
   type PositionCloseInputDto,
   type PositionCloseResultDto,
   type RequestContextDto,
+  type ReviewSessionCreateDto,
+  type ReviewSessionCreatedDto,
   type StrategyCatalogDto,
   type StrategyCreateDto,
   type StrategyCreatedDto,
@@ -111,6 +120,9 @@ const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
 const activityEnvelopeSchema = apiEnvelopeSchema(activitySchema);
 const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
+const journalEnvelopeSchema = apiEnvelopeSchema(journalSchema);
+const journalEntryCreatedEnvelopeSchema = apiEnvelopeSchema(journalEntryCreatedSchema);
+const reviewSessionCreatedEnvelopeSchema = apiEnvelopeSchema(reviewSessionCreatedSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
@@ -147,6 +159,37 @@ export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<
 
 export function fetchHealthDashboard(): Promise<ApiEnvelope<HealthDashboardDto>> {
   return request("/api/v1/health", healthDashboardEnvelopeSchema);
+}
+
+export function fetchJournal(
+  filters: JournalQueryDto,
+  cursor?: string,
+): Promise<ApiEnvelope<JournalDto>> {
+  const query = new URLSearchParams({ period: filters.period, limit: String(filters.limit) });
+  if (filters.kind) query.set("kind", filters.kind);
+  if (filters.strategyId) query.set("strategyId", filters.strategyId);
+  if (filters.symbol) query.set("symbol", filters.symbol);
+  if (filters.tag) query.set("tag", filters.tag);
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/v1/journal?${query.toString()}`, journalEnvelopeSchema);
+}
+
+export function createJournalEntry(
+  input: JournalEntryCreateDto,
+): Promise<ApiEnvelope<JournalEntryCreatedDto>> {
+  return request("/api/v1/journal/entries", journalEntryCreatedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function createReviewSession(
+  input: ReviewSessionCreateDto,
+): Promise<ApiEnvelope<ReviewSessionCreatedDto>> {
+  return request("/api/v1/journal/reviews", reviewSessionCreatedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function fetchActivity(

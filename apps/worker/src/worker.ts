@@ -1,5 +1,6 @@
 import {
   enrichExecutionCandles,
+  evaluateHealth,
   evaluateExecutionExit,
   executionUnrealizedPnl,
   getExecutionSignal,
@@ -23,6 +24,7 @@ import { BybitPublicMarketClient } from "@cryptoanal/exchange-bybit";
 import {
   AccountSnapshotRepository,
   createPrismaClient,
+  HealthRepository,
   MarketDataRepository,
   RuntimeRepository,
   RuntimeStateConflictError,
@@ -35,12 +37,14 @@ import pino from "pino";
 
 const heartbeatIntervalMs = 15_000;
 const workerId = `worker-${process.pid}`;
+const watchdogId = `${workerId}:watchdog`;
 const config = loadServerConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
 const marketDataRepository = new MarketDataRepository(prisma);
 const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
 const validationRepository = new ValidationRepository(prisma);
 const runtimeRepository = new RuntimeRepository(prisma);
+const healthRepository = new HealthRepository(prisma);
 const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 
@@ -195,6 +199,46 @@ async function runtimeLoop() {
     }
 
     await delay(config.RUNTIME_POLL_INTERVAL_MS);
+  }
+}
+
+async function watchdogLoop() {
+  await delay(1_000);
+  while (!stopping) {
+    try {
+      const now = new Date();
+      const signals = await healthRepository.getSignals(config.DEVELOPMENT_WORKSPACE_ID, now);
+      const health = evaluateHealth({
+        ...signals,
+        now,
+        initialCapital: config.DRY_RUN_INITIAL_BALANCE,
+        thresholds: healthThresholds(),
+        driftCandidates: signals.driftCandidates.map((candidate) => ({
+          ...candidate,
+          environment: tradingEnvironment[candidate.environment],
+        })),
+      });
+      await healthRepository.syncIncidents(config.DEVELOPMENT_WORKSPACE_ID, health.conditions, now);
+      await prisma.workerHeartbeat.upsert({
+        where: { workerId: watchdogId },
+        update: { lastSeenAt: now, metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID } },
+        create: {
+          workerId: watchdogId,
+          service: "watchdog",
+          version: "0.1.0",
+          lastSeenAt: now,
+          metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID },
+        },
+      });
+      logger.debug(
+        { status: health.overallStatus, incidents: health.conditions.length },
+        "Watchdog cycle completed",
+      );
+    } catch (error) {
+      logger.error({ err: error }, "Watchdog cycle failed");
+    }
+
+    await delay(config.WATCHDOG_INTERVAL_MS);
   }
 }
 
@@ -699,7 +743,7 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   logger.info({ signal }, "Shutting down worker");
-  await prisma.workerHeartbeat.deleteMany({ where: { workerId } });
+  await prisma.workerHeartbeat.deleteMany({ where: { workerId: { in: [workerId, watchdogId] } } });
   await prisma.$disconnect();
   process.exit(0);
 }
@@ -866,6 +910,16 @@ function delay(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function healthThresholds() {
+  return {
+    workerStaleMs: heartbeatIntervalMs * 3,
+    marketStaleMs: config.MARKET_POLL_INTERVAL_MS * 3,
+    accountStaleMs: config.ACCOUNT_SNAPSHOT_INTERVAL_MS * 2,
+    queueLagMs: 5 * 60_000,
+    outboxLagMs: 5 * 60_000,
+  };
+}
+
 const validationPollIntervalMs = 2_000;
 const validationLeaseMs = 5 * 60_000;
 const maximumDatasetCandles = 250_000;
@@ -884,6 +938,11 @@ const persistedVerdicts = {
   failed: "FAILED",
   warning: "WARNING",
 } as const;
+const tradingEnvironment = {
+  DRY_RUN: "dry-run",
+  DEMO: "demo",
+  LIVE: "live",
+} as const;
 
 logger.info({ workerId }, "Worker started");
 await Promise.all([
@@ -893,4 +952,5 @@ await Promise.all([
   accountSnapshotLoop(),
   validationJobLoop(),
   runtimeLoop(),
+  watchdogLoop(),
 ]);

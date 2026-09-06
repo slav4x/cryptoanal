@@ -20,6 +20,7 @@ const serverConfigSchema = z.object({
   CANDLE_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).default(60_000),
   ACCOUNT_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
   RUNTIME_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
+  WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(10_000).default(30_000),
   DRY_RUN_ACCOUNT_ID: z.string().min(1).default("development-dry-run"),
   DRY_RUN_INITIAL_BALANCE: z.coerce.number().nonnegative().default(10_000),
   DEV_ACCESS_ENABLED: booleanFromString,

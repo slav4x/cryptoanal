@@ -102,32 +102,44 @@ enum AuditOutcome {
   FAILED
 }
 
+enum HealthSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  RESOLVED
+}
+
 model Workspace {
-  id               String             @id @default(uuid())
-  slug             String             @unique
-  name             String
-  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
-  settings         WorkspaceSettings?
-  watchlistItems   WatchlistItem[]
-  strategies       Strategy[]
-  strategyVersions StrategyVersion[]
-  validationRuns   ValidationRun[]
-  validationTrades ValidationTrade[]
-  datasetSnapshots DatasetSnapshot[]
-  deployments      Deployment[]
-  executionRuns    ExecutionRun[]
-  runtimeCursors   RuntimeCursor[]
-  positions        Position[]
-  orders           Order[]
-  fills            Fill[]
-  trades           Trade[]
-  decisions        Decision[]
-  jobs             Job[]
-  auditEvents      AuditEvent[]
-  commandReceipts  CommandReceipt[]
-  outboxEvents     OutboxEvent[]
-  accountSnapshots AccountSnapshot[]
+  id                String             @id @default(uuid())
+  slug              String             @unique
+  name              String
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+  settings          WorkspaceSettings?
+  watchlistItems    WatchlistItem[]
+  strategies        Strategy[]
+  strategyVersions  StrategyVersion[]
+  validationRuns    ValidationRun[]
+  validationTrades  ValidationTrade[]
+  datasetSnapshots  DatasetSnapshot[]
+  deployments       Deployment[]
+  executionRuns     ExecutionRun[]
+  runtimeCursors    RuntimeCursor[]
+  positions         Position[]
+  orders            Order[]
+  fills             Fill[]
+  trades            Trade[]
+  decisions         Decision[]
+  jobs              Job[]
+  auditEvents       AuditEvent[]
+  commandReceipts   CommandReceipt[]
+  outboxEvents      OutboxEvent[]
+  accountSnapshots  AccountSnapshot[]
+  watchdogIncidents WatchdogIncident[]
 }
 
 model WorkspaceSettings {
@@ -640,4 +652,29 @@ model WorkerHeartbeat {
   version    String
   lastSeenAt DateTime @db.Timestamptz(3)
   metadata   Json?
+}
+
+model WatchdogIncident {
+  id              String         @id @default(uuid())
+  workspaceId     String
+  fingerprint     String
+  domain          String
+  code            String
+  severity        HealthSeverity
+  status          IncidentStatus @default(OPEN)
+  title           String
+  description     String
+  resourceType    String?
+  resourceId      String?
+  occurrenceCount Int            @default(1)
+  metadata        Json?
+  firstObservedAt DateTime       @db.Timestamptz(3)
+  lastObservedAt  DateTime       @db.Timestamptz(3)
+  resolvedAt      DateTime?      @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, fingerprint])
+  @@index([workspaceId, status, severity, lastObservedAt(sort: Desc)])
 }

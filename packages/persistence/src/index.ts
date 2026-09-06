@@ -2,6 +2,7 @@ export { createPrismaClient, type CryptoAnalPrismaClient } from "./client";
 export { AccountSnapshotRepository } from "./account-snapshot-repository";
 export { AnalyticsRepository, type AnalyticsTradeFilters } from "./analytics-repository";
 export { DashboardRepository } from "./dashboard-repository";
+export { HealthRepository } from "./health-repository";
 export {
   StrategyNameConflictError,
   StrategyConfigUnchangedError,

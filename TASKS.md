@@ -96,3 +96,4 @@
 - AI assistant.
 - Marketplace.
 - Multi-exchange.
+- Управляемое самообучение стратегий по плану `docs/rebuild/11-SELF-LEARNING-MODELS.md`.

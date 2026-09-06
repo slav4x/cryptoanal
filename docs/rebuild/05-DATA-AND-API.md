@@ -82,6 +82,10 @@ PlaybookVersion   # можно отложить до P1
 `JournalLink` связывает запись с trade, validation run, strategy version или decision,
 не копируя их данные в JSON.
 
+`Playbook` принадлежит workspace и хранит структурированные массивы entry/exit/risk,
+invalidation и checklist. Связи `PlaybookStrategy` и `PlaybookTrade` дают контекст и
+примеры, но не являются командой изменения strategy config или runtime.
+
 ### Reliability
 
 ```text
@@ -296,6 +300,16 @@ equity, drawdown и daily PnL ответ содержит breakdowns по стр
 действия и snapshot-состав JournalEntry через `ReviewSessionEntry`. Позднее добавленные
 или изменившие дату записи не переписывают уже проведённый разбор. Обе команды создают
 `AuditEvent`.
+
+`GET /api/v1/playbooks` возвращает библиотеку с фильтрами по статусу, стратегии, тегу и
+текстовому запросу, а также допустимые цели связей. `POST /api/v1/playbooks` и
+`PUT /api/v1/playbooks/:playbookId` проверяют все strategy/trade ids в текущем workspace
+до атомарной записи. Обновление использует `expectedUpdatedAt`, поэтому параллельная
+правка не перезаписывается молча. `POST /api/v1/playbooks/:playbookId/status` выполняет
+обратимый переход active/archive с ожидаемым статусом, причиной и `AuditEvent`.
+
+Версионирование содержимого `PlaybookVersion`, marketplace, social-функции и
+автоматическое применение правил к стратегии не входят в P0.
 
 ## 6. Команды и queries
 

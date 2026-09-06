@@ -71,6 +71,10 @@
 - Workspace-scoped research journal with typed entries, tags and referential domain links.
 - Review sessions with period snapshots, learnings, next actions and audit events.
 - Journal workspace with filters, composers and links from trades, validations and decisions.
+- Workspace-scoped playbook library with market conditions, structured rules, invalidation criteria and checklists.
+- Referential playbook links to strategies and example trades without automatic strategy config changes.
+- Playbook create/edit/archive API with optimistic conflict checks and audit events.
+- Playbook workspace with search, filters, detailed rule view, editor and reversible archive flow.
 
 ### Changed
 

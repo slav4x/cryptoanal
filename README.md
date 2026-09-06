@@ -64,6 +64,7 @@ pnpm dev
 - `/analytics/health` — operational health, watchdog incidents и validation drift.
 - `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.
 - `/journal` — исследовательские записи, предметные связи и review sessions.
+- `/playbooks` — библиотека сетапов, правил, условий инвалидации и связанных примеров.
 
 Реализованный private API:
 
@@ -87,6 +88,9 @@ pnpm dev
 - `GET /api/v1/activity?period=24h|7d|30d|all&action=&strategyId=&symbol=&reasonCode=&cursor=`.
 - `GET /api/v1/journal?period=7d|30d|90d|all&kind=&strategyId=&symbol=&tag=&cursor=`;
 - `POST /api/v1/journal/entries` и `POST /api/v1/journal/reviews`.
+- `GET /api/v1/playbooks?status=&strategyId=&tag=&query=`;
+- `POST /api/v1/playbooks`, `PUT /api/v1/playbooks/:playbookId`;
+- `POST /api/v1/playbooks/:playbookId/status`.
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
@@ -114,6 +118,13 @@ Journal хранит типизированные гипотезы, наблюд
 symbol; цель ссылки проверяется в текущем workspace. Review session фиксирует выбранный
 период, итог, выводы и следующие действия, а также неизменяемый состав попавших в период
 записей. Создание записей и разборов отражается в audit trail.
+
+Playbook хранит условия рынка, правила входа/выхода/риска, явные условия инвалидации и
+чек-лист. Он может ссылаться на стратегии и закрытые сделки текущего workspace, но эти
+связи справочные: создание и редактирование плейбука не меняет immutable strategy config
+и не запускает runtime. Редактирование защищено `expectedUpdatedAt`, смена статуса —
+ожидаемым текущим статусом и audit reason. Удаление заменено обратимой архивацией;
+история версий плейбука остаётся задачей после P1.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit

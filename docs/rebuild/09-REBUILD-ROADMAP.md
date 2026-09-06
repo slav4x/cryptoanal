@@ -101,7 +101,7 @@ polling и без прямого обращения UI к exchange.
 
 - [x] Реализовать journal entries и связи с предметными сущностями.
 - [x] Реализовать review sessions.
-- [ ] Реализовать playbooks без marketplace/social функций.
+- [x] Реализовать playbooks без marketplace/social функций.
 - [ ] Реализовать рабочие settings sections.
 - [ ] Реализовать system logs с cursor pagination/redaction.
 - [ ] Унифицировать терминологию и microcopy.

@@ -27,4 +27,5 @@ export {
   type ClaimedValidationJob,
   type CompleteValidationJobInput,
   type FailValidationJobInput,
+  type ValidationTradePersistenceInput,
 } from "./validation-repository";

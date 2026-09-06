@@ -113,6 +113,7 @@ model Workspace {
   strategies       Strategy[]
   strategyVersions StrategyVersion[]
   validationRuns   ValidationRun[]
+  validationTrades ValidationTrade[]
   deployments      Deployment[]
   executionRuns    ExecutionRun[]
   positions        Position[]
@@ -137,21 +138,22 @@ model WorkspaceSettings {
 }
 
 model MarketInstrument {
-  symbol         String           @id
-  baseAsset      String
-  quoteAsset     String
-  exchange       String
-  instrumentType String
-  enabled        Boolean          @default(true)
-  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
-  watchlistItems WatchlistItem[]
-  positions      Position[]
-  orders         Order[]
-  trades         Trade[]
-  decisions      Decision[]
-  snapshots      MarketSnapshot[]
-  candles        MarketCandle[]
+  symbol           String            @id
+  baseAsset        String
+  quoteAsset       String
+  exchange         String
+  instrumentType   String
+  enabled          Boolean           @default(true)
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  watchlistItems   WatchlistItem[]
+  positions        Position[]
+  orders           Order[]
+  trades           Trade[]
+  decisions        Decision[]
+  validationTrades ValidationTrade[]
+  snapshots        MarketSnapshot[]
+  candles          MarketCandle[]
 
   @@index([exchange, enabled])
 }
@@ -282,9 +284,33 @@ model ValidationRun {
   workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   strategy          Strategy          @relation(fields: [strategyId], references: [id], onDelete: Cascade)
   strategyVersion   StrategyVersion   @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  trades            ValidationTrade[]
 
   @@index([workspaceId, status, queuedAt])
   @@index([strategyVersionId, queuedAt])
+}
+
+model ValidationTrade {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  validationRunId String
+  symbol          String
+  side            OrderSide
+  openedAt        DateTime         @db.Timestamptz(3)
+  closedAt        DateTime         @db.Timestamptz(3)
+  entryPrice      Decimal          @db.Decimal(38, 18)
+  exitPrice       Decimal          @db.Decimal(38, 18)
+  quantity        Decimal          @db.Decimal(38, 18)
+  netPnl          Decimal          @db.Decimal(38, 18)
+  fees            Decimal          @db.Decimal(38, 18)
+  exitReason      String
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  validationRun   ValidationRun    @relation(fields: [validationRunId], references: [id], onDelete: Cascade)
+  instrument      MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@index([validationRunId, closedAt(sort: Desc)])
+  @@index([workspaceId, symbol, closedAt(sort: Desc)])
 }
 
 model Deployment {

@@ -489,7 +489,6 @@ export const validationMetricsSchema = z.object({
     z.object({ trades: z.number().int().nonnegative(), netPnl: z.number() }),
   ),
   equitySeries: z.array(z.object({ observedAt: z.iso.datetime(), equity: z.number() })),
-  sampleTrades: z.array(validationTradeResultSchema),
   gateReasons: z.array(z.string()),
   provenance: z.object({
     datasetHash: z.string(),
@@ -501,7 +500,23 @@ export const validationMetricsSchema = z.object({
   }),
 });
 
-export const validationRunSchema = z.object({
+export const validationMetricsSummarySchema = validationMetricsSchema.pick({
+  trades: true,
+  wins: true,
+  losses: true,
+  winRatePercent: true,
+  netPnl: true,
+  returnPercent: true,
+  maxDrawdownPercent: true,
+  profitFactor: true,
+  expectancy: true,
+  totalFees: true,
+  candleCount: true,
+  windows: true,
+  gateReasons: true,
+});
+
+const validationRunBaseSchema = z.object({
   id: z.string(),
   strategy: z.object({ id: z.string(), name: z.string() }),
   strategyVersion: z.object({ id: z.string(), version: z.number().int().positive() }),
@@ -513,12 +528,29 @@ export const validationRunSchema = z.object({
   engineVersion: z.string(),
   configHash: z.string(),
   input: validationExecutionInputSchema,
-  metrics: validationMetricsSchema.nullable(),
   failureCode: z.string().nullable(),
   failureMessage: z.string().nullable(),
   queuedAt: z.iso.datetime(),
   startedAt: z.iso.datetime().nullable(),
   completedAt: z.iso.datetime().nullable(),
+});
+
+export const validationRunSchema = validationRunBaseSchema.extend({
+  metrics: validationMetricsSummarySchema.nullable(),
+});
+
+export const validationRunDetailSchema = z.object({
+  run: validationRunBaseSchema.extend({ metrics: validationMetricsSchema.nullable() }),
+  trades: z.array(validationTradeResultSchema),
+  tradesTotal: z.number().int().nonnegative(),
+  tradePage: z.number().int().positive(),
+  tradeLimit: z.number().int().positive(),
+});
+
+export const validationRunIdParamsSchema = z.object({ validationRunId: z.uuid() });
+export const validationRunDetailQuerySchema = z.object({
+  tradePage: z.coerce.number().int().min(1).default(1),
+  tradeLimit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
 export const validationsSchema = z.object({
@@ -594,8 +626,10 @@ export type ValidationKindDto = z.infer<typeof validationKindSchema>;
 export type ValidationRunInputDto = z.infer<typeof validationRunInputSchema>;
 export type ValidationExecutionInputDto = z.infer<typeof validationExecutionInputSchema>;
 export type ValidationMetricsDto = z.infer<typeof validationMetricsSchema>;
+export type ValidationMetricsSummaryDto = z.infer<typeof validationMetricsSummarySchema>;
 export type ValidationTradeResultDto = z.infer<typeof validationTradeResultSchema>;
 export type ValidationRunDto = z.infer<typeof validationRunSchema>;
+export type ValidationRunDetailDto = z.infer<typeof validationRunDetailSchema>;
 export type ValidationsDto = z.infer<typeof validationsSchema>;
 export type ValidationRunQueuedDto = z.infer<typeof validationRunQueuedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;

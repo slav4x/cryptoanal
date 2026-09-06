@@ -270,7 +270,10 @@ async function processValidationJob(job: ClaimedValidationJob) {
     if (candles.length === 0) {
       throw new ValidationWorkerError("DATASET_EMPTY", "Bybit не вернул свечи за выбранный период");
     }
-    await validationRepository.updateProgress(job.jobId, workerId, 75);
+    const leaseKept = await validationRepository.updateProgress(job.jobId, workerId, 75);
+    if (!leaseKept) {
+      throw new ValidationWorkerError("JOB_LEASE_LOST", "Worker потерял lease задачи");
+    }
     const result = runValidationEngine({
       config: strategyConfig,
       candles,
@@ -300,6 +303,18 @@ async function processValidationJob(job: ClaimedValidationJob) {
       datasetAsOf,
       metrics,
       verdict: persistedVerdicts[result.verdict],
+      trades: result.trades.map((trade) => ({
+        symbol: trade.symbol,
+        side: trade.side === "long" ? "BUY" : "SELL",
+        openedAt: new Date(trade.openedAt),
+        closedAt: new Date(trade.closedAt),
+        entryPrice: String(trade.entryPrice),
+        exitPrice: String(trade.exitPrice),
+        quantity: String(trade.quantity),
+        netPnl: String(trade.netPnl),
+        fees: String(trade.fees),
+        exitReason: trade.exitReason,
+      })),
     });
     logger.info(
       {

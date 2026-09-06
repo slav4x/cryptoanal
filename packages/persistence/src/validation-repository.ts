@@ -37,6 +37,20 @@ export type CompleteValidationJobInput = {
   datasetAsOf: Date;
   metrics: Prisma.InputJsonValue;
   verdict: "PASSED" | "FAILED" | "WARNING";
+  trades: ValidationTradePersistenceInput[];
+};
+
+export type ValidationTradePersistenceInput = {
+  symbol: string;
+  side: "BUY" | "SELL";
+  openedAt: Date;
+  closedAt: Date;
+  entryPrice: string;
+  exitPrice: string;
+  quantity: string;
+  netPnl: string;
+  fees: string;
+  exitReason: string;
 };
 
 export type FailValidationJobInput = {
@@ -62,6 +76,33 @@ export class ValidationRepository {
       orderBy: { queuedAt: "desc" },
       take: 200,
       select: validationRunSelect,
+    });
+  }
+
+  public get(workspaceId: string, validationRunId: string, tradePage: number, tradeLimit: number) {
+    return this.prisma.validationRun.findFirst({
+      where: { id: validationRunId, workspaceId },
+      select: {
+        ...validationRunSelect,
+        trades: {
+          orderBy: { closedAt: "desc" },
+          skip: (tradePage - 1) * tradeLimit,
+          take: tradeLimit,
+          select: {
+            symbol: true,
+            side: true,
+            openedAt: true,
+            closedAt: true,
+            entryPrice: true,
+            exitPrice: true,
+            quantity: true,
+            netPnl: true,
+            fees: true,
+            exitReason: true,
+          },
+        },
+        _count: { select: { trades: true } },
+      },
     });
   }
 
@@ -192,11 +233,11 @@ export class ValidationRepository {
 
   public async complete(input: CompleteValidationJobInput): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      const job = await transaction.job.findFirst({
+      const job = await transaction.job.updateMany({
         where: { id: input.jobId, status: "RUNNING", lockedBy: input.workerId },
-        select: { id: true },
+        data: { lockedAt: new Date() },
       });
-      if (!job) throw new Error("Validation job lease was lost before completion");
+      if (job.count !== 1) throw new Error("Validation job lease was lost before completion");
 
       const completedAt = new Date();
       await transaction.validationRun.update({
@@ -212,6 +253,15 @@ export class ValidationRepository {
           completedAt,
         },
       });
+      for (let offset = 0; offset < input.trades.length; offset += validationTradeBatchSize) {
+        await transaction.validationTrade.createMany({
+          data: input.trades.slice(offset, offset + validationTradeBatchSize).map((trade) => ({
+            ...trade,
+            workspaceId: input.workspaceId,
+            validationRunId: input.runId,
+          })),
+        });
+      }
       await transaction.job.update({
         where: { id: input.jobId },
         data: {
@@ -243,11 +293,13 @@ export class ValidationRepository {
 
   public async fail(input: FailValidationJobInput): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      const job = await transaction.job.findFirst({
+      const job = await transaction.job.updateMany({
         where: { id: input.jobId, status: "RUNNING", lockedBy: input.workerId },
-        select: { id: true },
+        data: { lockedAt: new Date() },
       });
-      if (!job) throw new Error("Validation job lease was lost before failure persistence");
+      if (job.count !== 1) {
+        throw new Error("Validation job lease was lost before failure persistence");
+      }
 
       const completedAt = new Date();
       await transaction.validationRun.update({
@@ -419,3 +471,5 @@ const validationRunSelect = {
   strategy: { select: { id: true, name: true } },
   strategyVersion: { select: { id: true, version: true } },
 } as const;
+
+const validationTradeBatchSize = 1_000;

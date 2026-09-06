@@ -8,6 +8,8 @@ export type ValidationCandle = {
   turnover: number;
 };
 
+export const validationEngineVersion = "cryptoanal-validation@0.2.0";
+
 export type ValidationStrategyConfig = {
   universe: { timeframe: "5m" | "15m" | "30m" | "1h" | "4h" };
   signal: {
@@ -73,12 +75,12 @@ export type ValidationMetrics = {
   windows: number;
   perSymbol: Record<string, { trades: number; netPnl: number }>;
   equitySeries: Array<{ observedAt: string; equity: number }>;
-  sampleTrades: ValidationTrade[];
 };
 
 export type ValidationEngineResult = {
   verdict: "passed" | "failed" | "warning";
   metrics: ValidationMetrics;
+  trades: ValidationTrade[];
   gateReasons: string[];
 };
 
@@ -115,6 +117,7 @@ export function runValidationEngine(input: ValidationEngineInput): ValidationEng
     return {
       verdict: "failed",
       metrics: emptyMetrics(0),
+      trades: [],
       gateReasons: ["В наборе данных нет свечей"],
     };
   }
@@ -160,6 +163,7 @@ function runWalkForward(
     return {
       verdict: "failed",
       metrics: emptyMetrics(input.candles.length),
+      trades: [],
       gateReasons: ["Период данных короче одного walk-forward окна"],
     };
   }
@@ -546,7 +550,6 @@ function buildResult(
     windows,
     perSymbol,
     equitySeries: simulation.equitySeries,
-    sampleTrades: simulation.trades.slice(-200),
   };
   const gateReasons: string[] = [];
   if (metrics.trades < 30) gateReasons.push("Недостаточно сделок: требуется минимум 30");
@@ -558,6 +561,7 @@ function buildResult(
   return {
     verdict: gateReasons.length === 0 ? "passed" : hardFailure ? "failed" : "warning",
     metrics,
+    trades: simulation.trades,
     gateReasons,
   };
 }
@@ -578,7 +582,6 @@ function emptyMetrics(candleCount: number): ValidationMetrics {
     windows: 0,
     perSymbol: {},
     equitySeries: [],
-    sampleTrades: [],
   };
 }
 

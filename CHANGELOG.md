@@ -68,6 +68,9 @@
 - Explicit nullable links from decisions to the related position and canonical trade.
 - Entry market regime and UTC trading session provenance on positions and completed trades.
 - Analytics result and holding-time distributions with regime and session breakdowns.
+- Workspace-scoped research journal with typed entries, tags and referential domain links.
+- Review sessions with period snapshots, learnings, next actions and audit events.
+- Journal workspace with filters, composers and links from trades, validations and decisions.
 
 ### Changed
 

@@ -63,7 +63,7 @@
 
 ## Этап 6 — Разбор и polish
 
-- [ ] Journal и review sessions.
+- [x] Journal и review sessions.
 - [ ] Playbooks.
 - [ ] System logs и settings.
 - [ ] Responsive, accessibility и performance review.

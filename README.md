@@ -63,6 +63,7 @@ pnpm dev
 - `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов.
 - `/analytics/health` — operational health, watchdog incidents и validation drift.
 - `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.
+- `/journal` — исследовательские записи, предметные связи и review sessions.
 
 Реализованный private API:
 
@@ -84,6 +85,8 @@ pnpm dev
 - `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`;
 - `GET /api/v1/health`.
 - `GET /api/v1/activity?period=24h|7d|30d|all&action=&strategyId=&symbol=&reasonCode=&cursor=`.
+- `GET /api/v1/journal?period=7d|30d|90d|all&kind=&strategyId=&symbol=&tag=&cursor=`;
+- `POST /api/v1/journal/entries` и `POST /api/v1/journal/reviews`.
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
@@ -105,6 +108,12 @@ Activity — отдельный продуктовый audit trail на осно
 raw logs. Лента поддерживает серверные фильтры и keyset pagination, показывает factors,
 correlation/market reference, execution provenance и точные ссылки на position/trade,
 если решение создало или закрыло торговый результат.
+
+Journal хранит типизированные гипотезы, наблюдения, выводы и решения. Запись может
+ссылаться на strategy/version, execution или validation run, trade, runtime decision и
+symbol; цель ссылки проверяется в текущем workspace. Review session фиксирует выбранный
+период, итог, выводы и следующие действия, а также неизменяемый состав попавших в период
+записей. Создание записей и разборов отражается в audit trail.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit

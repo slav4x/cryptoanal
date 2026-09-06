@@ -99,8 +99,8 @@ polling и без прямого обращения UI к exchange.
 
 ## Этап 6. Journal, playbooks, settings и dashboard polish
 
-- [ ] Реализовать journal entries и связи с предметными сущностями.
-- [ ] Реализовать review sessions.
+- [x] Реализовать journal entries и связи с предметными сущностями.
+- [x] Реализовать review sessions.
 - [ ] Реализовать playbooks без marketplace/social функций.
 - [ ] Реализовать рабочие settings sections.
 - [ ] Реализовать system logs с cursor pagination/redaction.

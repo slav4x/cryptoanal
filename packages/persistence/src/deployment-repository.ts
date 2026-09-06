@@ -36,6 +36,7 @@ export class DeploymentValidationRequiredError extends Error {}
 export class ActiveDeploymentExistsError extends Error {}
 export class DeploymentStatusConflictError extends Error {}
 export class DeploymentCommandNotAllowedError extends Error {}
+export class DeploymentHasOpenPositionsError extends Error {}
 export class DeploymentIdempotencyConflictError extends Error {}
 
 export class DeploymentRepository {
@@ -311,6 +312,10 @@ export class DeploymentRepository {
         if (!executionRun) throw new DeploymentCommandNotAllowedError();
         executionRunId = executionRun.id;
 
+        await transaction.$executeRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtext(${`runtime:${executionRun.id}`}))
+        `);
+
         if (input.command === "PAUSE") {
           nextStatus = "PAUSED";
           await transaction.strategy.update({
@@ -331,6 +336,14 @@ export class DeploymentRepository {
             data: { status: "DEPLOYED", updatedByActorId: input.actorId },
           });
         } else {
+          const openPositions = await transaction.position.count({
+            where: {
+              workspaceId: input.workspaceId,
+              executionRunId: executionRun.id,
+              status: "OPEN",
+            },
+          });
+          if (openPositions > 0) throw new DeploymentHasOpenPositionsError();
           nextStatus = "STOPPED";
           await transaction.executionRun.update({
             where: { id: executionRun.id },
@@ -487,6 +500,25 @@ export const deploymentSelect = {
       startedAt: true,
       stoppedAt: true,
       createdAt: true,
+      runtimeCursors: {
+        orderBy: { updatedAt: "desc" as const },
+        select: {
+          lastEvaluatedAt: true,
+          consecutiveFailures: true,
+        },
+      },
+      decisions: {
+        orderBy: { decidedAt: "desc" as const },
+        take: 1,
+        select: {
+          symbol: true,
+          action: true,
+          reasonCode: true,
+          summary: true,
+          decidedAt: true,
+        },
+      },
+      _count: { select: { positions: { where: { status: "OPEN" as const } } } },
     },
   },
 } as const;

@@ -18,45 +18,71 @@ export class DashboardRepository {
     const startOfUtcDay = new Date();
     startOfUtcDay.setUTCHours(0, 0, 0, 0);
 
-    const [positions, activeStrategies, totalAggregate, dayAggregate, account, heartbeat] =
-      await Promise.all([
-        this.prisma.position.findMany({
-          where: { workspaceId, status: "OPEN" },
-          select: {
-            quantity: true,
-            entryPrice: true,
-            markPrice: true,
-            unrealizedPnl: true,
+    const [
+      positions,
+      activeStrategies,
+      totalAggregate,
+      dayAggregate,
+      account,
+      heartbeat,
+      activeDeployment,
+    ] = await Promise.all([
+      this.prisma.position.findMany({
+        where: { workspaceId, status: "OPEN" },
+        select: {
+          quantity: true,
+          entryPrice: true,
+          markPrice: true,
+          unrealizedPnl: true,
+        },
+      }),
+      this.prisma.strategy.count({
+        where: { workspaceId, status: { in: ["DEPLOYED", "PAUSED"] } },
+      }),
+      this.prisma.trade.aggregate({
+        where: { workspaceId },
+        _sum: { netPnl: true },
+      }),
+      this.prisma.trade.aggregate({
+        where: { workspaceId, closedAt: { gte: startOfUtcDay } },
+        _sum: { netPnl: true },
+      }),
+      this.prisma.accountSnapshot.findFirst({
+        where: { workspaceId },
+        orderBy: { observedAt: "desc" },
+        select: {
+          exchangeAccountId: true,
+          environment: true,
+          equity: true,
+          availableBalance: true,
+          observedAt: true,
+        },
+      }),
+      this.prisma.workerHeartbeat.findFirst({
+        where: { service: "worker" },
+        orderBy: { lastSeenAt: "desc" },
+        select: { lastSeenAt: true },
+      }),
+      this.prisma.deployment.findFirst({
+        where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          status: true,
+          executionRuns: {
+            where: { status: "RUNNING" },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              runtimeCursors: {
+                where: { consecutiveFailures: { gt: 0 } },
+                take: 1,
+                select: { symbol: true },
+              },
+            },
           },
-        }),
-        this.prisma.strategy.count({
-          where: { workspaceId, status: { in: ["DEPLOYED", "PAUSED"] } },
-        }),
-        this.prisma.trade.aggregate({
-          where: { workspaceId },
-          _sum: { netPnl: true },
-        }),
-        this.prisma.trade.aggregate({
-          where: { workspaceId, closedAt: { gte: startOfUtcDay } },
-          _sum: { netPnl: true },
-        }),
-        this.prisma.accountSnapshot.findFirst({
-          where: { workspaceId },
-          orderBy: { observedAt: "desc" },
-          select: {
-            exchangeAccountId: true,
-            environment: true,
-            equity: true,
-            availableBalance: true,
-            observedAt: true,
-          },
-        }),
-        this.prisma.workerHeartbeat.findFirst({
-          where: { service: "worker" },
-          orderBy: { lastSeenAt: "desc" },
-          select: { lastSeenAt: true },
-        }),
-      ]);
+        },
+      }),
+    ]);
 
     const openExposure = positions.reduce(
       (sum, position) =>
@@ -93,6 +119,8 @@ export class DashboardRepository {
         : null,
       equitySeries,
       workerLastSeenAt: heartbeat?.lastSeenAt ?? null,
+      runtimeDeploymentStatus: activeDeployment?.status ?? null,
+      runtimeHasFailures: (activeDeployment?.executionRuns[0]?.runtimeCursors.length ?? 0) > 0,
     };
   }
 

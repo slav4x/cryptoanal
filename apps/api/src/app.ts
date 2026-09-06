@@ -5,6 +5,7 @@ import {
   executionEngineVersion,
   evaluateStrategyLifecycle,
   getDeploymentCommands,
+  settleExecutionPosition,
   validationEngineVersion,
 } from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
@@ -22,6 +23,9 @@ import {
   marketsSchema,
   overviewQuerySchema,
   overviewSchema,
+  positionCloseInputSchema,
+  positionCloseResultSchema,
+  positionIdParamsSchema,
   requestContextSchema,
   strategyCatalogSchema,
   strategyConfigSchema,
@@ -52,6 +56,7 @@ import {
   type CryptoAnalPrismaClient,
   DashboardRepository,
   DeploymentCommandNotAllowedError,
+  DeploymentHasOpenPositionsError,
   DeploymentIdempotencyConflictError,
   DeploymentNotEligibleError,
   DeploymentNotFoundError,
@@ -60,6 +65,12 @@ import {
   DeploymentStrategyNotFoundError,
   DeploymentValidationRequiredError,
   DeploymentVersionMismatchError,
+  RuntimeIdempotencyConflictError,
+  RuntimeManualCloseNotAllowedError,
+  RuntimeMarketPriceUnavailableError,
+  RuntimePositionNotFoundError,
+  RuntimePositionStatusConflictError,
+  RuntimeRepository,
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
   StrategyNotFoundError,
@@ -106,6 +117,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   const repository = new DashboardRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
+  const runtimeRepository = new RuntimeRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
   const validationRepository = new ValidationRepository(prisma);
 
@@ -269,11 +281,29 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           description: "Последний account snapshot старше ожидаемого интервала обновления.",
         });
       }
+      if (overview.runtimeHasFailures) {
+        alerts.push({
+          id: "runtime-cycle-failed",
+          severity: "critical" as const,
+          title: "Ошибка runtime-цикла",
+          description: "Одна или несколько пар не обработаны. Проверьте Runtime control-plane.",
+        });
+      }
+
+      const runtimeState = !workerHealthy
+        ? ("offline" as const)
+        : overview.runtimeHasFailures
+          ? ("error" as const)
+          : overview.runtimeDeploymentStatus === "RUNNING"
+            ? ("running" as const)
+            : overview.runtimeDeploymentStatus === "PAUSED"
+              ? ("paused" as const)
+              : ("idle" as const);
 
       return {
         data: {
           period,
-          runtimeState: workerHealthy ? ("idle" as const) : ("offline" as const),
+          runtimeState,
           tradingEnvironment: overview.account
             ? tradingEnvironment[overview.account.environment]
             : ("dry-run" as const),
@@ -1126,6 +1156,103 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
   );
 
+  app.post(
+    "/api/v1/positions/:positionId/close",
+    {
+      schema: {
+        params: positionIdParamsSchema,
+        body: positionCloseInputSchema,
+        response: {
+          200: apiEnvelopeSchema(positionCloseResultSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const replayed = await runtimeRepository.replayManualClose(
+          workspace.id,
+          request.params.positionId,
+          request.body.idempotencyKey,
+        );
+        if (replayed) return { data: replayed, meta: createMeta(request.id, "fresh") };
+
+        const position = await runtimeRepository.getManualCloseContext(
+          workspace.id,
+          request.params.positionId,
+        );
+        if (!position) throw new ApiError(404, "POSITION_NOT_FOUND", "Позиция не найдена");
+        if (position.status !== "OPEN") {
+          const concurrentReplay = await runtimeRepository.replayManualClose(
+            workspace.id,
+            request.params.positionId,
+            request.body.idempotencyKey,
+          );
+          if (concurrentReplay) {
+            return { data: concurrentReplay, meta: createMeta(request.id, "fresh") };
+          }
+          throw new ApiError(409, "POSITION_STATUS_CONFLICT", "Позиция уже закрыта");
+        }
+        const quote = position.instrument.snapshots[0];
+        if (!quote) {
+          throw new ApiError(
+            503,
+            "MARKET_PRICE_UNAVAILABLE",
+            "Нет актуальной цены для закрытия позиции",
+          );
+        }
+        const strategyConfig = strategyConfigSchema.parse(position.strategyVersion.config);
+        const settlement = settleExecutionPosition(
+          {
+            symbol: position.symbol,
+            side: position.side === "BUY" ? "long" : "short",
+            openedAt: position.openedAt,
+            entryPrice: position.entryPrice.toNumber(),
+            quantity: position.quantity.toNumber(),
+            stopPrice: position.stopPrice.toNumber(),
+            takePrice: position.takePrice.toNumber(),
+            trailingPrice: position.trailingPrice?.toNumber() ?? null,
+            bestPrice: position.bestPrice.toNumber(),
+            entryFee: position.entryFee.toNumber(),
+            entrySlippage: position.entrySlippage.toNumber(),
+          },
+          quote.price.toNumber(),
+          new Date(),
+          "manual",
+          strategyConfig,
+        );
+
+        const result = await runtimeRepository.closeManually({
+          workspaceId: workspace.id,
+          positionId: position.id,
+          executionRunId: position.executionRunId,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          idempotencyKey: request.body.idempotencyKey,
+          reason: request.body.reason,
+          quoteObservedAt: quote.observedAt,
+          maximumQuoteAgeMs: config.MARKET_POLL_INTERVAL_MS * 2,
+          settlement: {
+            exitPrice: String(settlement.exitPrice),
+            grossPnl: String(settlement.grossPnl),
+            netPnl: String(settlement.netPnl),
+            fees: String(settlement.fees),
+            slippage: String(settlement.slippage),
+            exitReason: settlement.exitReason,
+            closedAt: new Date(settlement.closedAt),
+          },
+        });
+        return { data: result, meta: createMeta(request.id, "fresh") };
+      } catch (error) {
+        throwManualCloseApiError(error);
+      }
+    },
+  );
+
   app.get(
     "/api/v1/trades",
     {
@@ -1406,6 +1533,18 @@ type DeploymentSource = {
     startedAt: Date | null;
     stoppedAt: Date | null;
     createdAt: Date;
+    runtimeCursors: Array<{
+      lastEvaluatedAt: Date | null;
+      consecutiveFailures: number;
+    }>;
+    decisions: Array<{
+      symbol: string;
+      action: keyof typeof decisionAction;
+      reasonCode: string;
+      summary: string;
+      decidedAt: Date;
+    }>;
+    _count: { positions: number };
   }>;
 };
 
@@ -1420,7 +1559,9 @@ function serializeDeployment(deployment: DeploymentSource) {
     environment: tradingEnvironment[deployment.environment],
     exchangeAccountId: deployment.exchangeAccountId,
     status,
-    allowedCommands: getDeploymentCommands(status),
+    allowedCommands: getDeploymentCommands(status).filter(
+      (command) => command !== "stop" || (latestExecutionRun?._count.positions ?? 0) === 0,
+    ),
     latestExecutionRun: latestExecutionRun
       ? {
           id: latestExecutionRun.id,
@@ -1430,6 +1571,24 @@ function serializeDeployment(deployment: DeploymentSource) {
           startedAt: latestExecutionRun.startedAt?.toISOString() ?? null,
           stoppedAt: latestExecutionRun.stoppedAt?.toISOString() ?? null,
           createdAt: latestExecutionRun.createdAt.toISOString(),
+          openPositions: latestExecutionRun._count.positions,
+          evaluatedSymbols: latestExecutionRun.runtimeCursors.filter(
+            (cursor) => cursor.lastEvaluatedAt !== null,
+          ).length,
+          failingSymbols: latestExecutionRun.runtimeCursors.filter(
+            (cursor) => cursor.consecutiveFailures > 0,
+          ).length,
+          lastEvaluatedAt:
+            latestExecutionRun.runtimeCursors
+              .find((cursor) => cursor.lastEvaluatedAt)
+              ?.lastEvaluatedAt?.toISOString() ?? null,
+          lastDecision: latestExecutionRun.decisions[0]
+            ? {
+                ...latestExecutionRun.decisions[0],
+                action: decisionAction[latestExecutionRun.decisions[0].action],
+                decidedAt: latestExecutionRun.decisions[0].decidedAt.toISOString(),
+              }
+            : null,
         }
       : null,
     createdAt: deployment.createdAt.toISOString(),
@@ -1486,10 +1645,48 @@ function throwDeploymentApiError(error: unknown): never {
       "Команда недоступна для текущего состояния deployment",
     );
   }
+  if (error instanceof DeploymentHasOpenPositionsError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_HAS_OPEN_POSITIONS",
+      "Сначала закройте открытые позиции deployment",
+    );
+  }
   if (error instanceof DeploymentIdempotencyConflictError) {
     throw new ApiError(
       409,
       "DEPLOYMENT_IDEMPOTENCY_CONFLICT",
+      "Idempotency key уже использован другой командой",
+    );
+  }
+  throw error;
+}
+
+function throwManualCloseApiError(error: unknown): never {
+  if (error instanceof RuntimePositionNotFoundError) {
+    throw new ApiError(404, "POSITION_NOT_FOUND", "Позиция не найдена");
+  }
+  if (error instanceof RuntimePositionStatusConflictError) {
+    throw new ApiError(409, "POSITION_STATUS_CONFLICT", "Позиция уже закрыта");
+  }
+  if (error instanceof RuntimeManualCloseNotAllowedError) {
+    throw new ApiError(
+      409,
+      "POSITION_CLOSE_NOT_ALLOWED",
+      "Ручное закрытие доступно только активной dry-run позиции",
+    );
+  }
+  if (error instanceof RuntimeMarketPriceUnavailableError) {
+    throw new ApiError(
+      503,
+      "MARKET_PRICE_UNAVAILABLE",
+      "Цена для закрытия устарела. Дождитесь обновления рынка",
+    );
+  }
+  if (error instanceof RuntimeIdempotencyConflictError) {
+    throw new ApiError(
+      409,
+      "POSITION_IDEMPOTENCY_CONFLICT",
       "Idempotency key уже использован другой командой",
     );
   }
@@ -1538,6 +1735,14 @@ const orderStatus = {
   FILLED: "filled",
   CANCELLED: "cancelled",
   REJECTED: "rejected",
+} as const;
+
+const decisionAction = {
+  OPEN: "open",
+  CLOSE: "close",
+  HOLD: "hold",
+  SKIP: "skip",
+  ERROR: "error",
 } as const;
 
 const runStatus = {

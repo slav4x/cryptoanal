@@ -32,6 +32,7 @@ export {
 export {
   ActiveDeploymentExistsError,
   DeploymentCommandNotAllowedError,
+  DeploymentHasOpenPositionsError,
   DeploymentIdempotencyConflictError,
   DeploymentNotEligibleError,
   DeploymentNotFoundError,
@@ -43,3 +44,15 @@ export {
   type ApplyDeploymentCommandInput,
   type CreateDeploymentInput,
 } from "./deployment-repository";
+export {
+  RuntimeRepository,
+  RuntimeIdempotencyConflictError,
+  RuntimeManualCloseNotAllowedError,
+  RuntimeMarketPriceUnavailableError,
+  RuntimePositionNotFoundError,
+  RuntimePositionStatusConflictError,
+  RuntimeStateConflictError,
+  type PersistRuntimeCycleInput,
+  type RuntimeCyclePosition,
+  type RuntimeCycleSettlement,
+} from "./runtime-repository";

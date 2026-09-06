@@ -170,6 +170,18 @@ export const tradingLedgerSchema = z.object({
   trades: z.array(tradeSchema),
 });
 
+export const positionIdParamsSchema = z.object({ positionId: z.uuid() });
+export const positionCloseInputSchema = z.object({
+  expectedStatus: z.literal("open"),
+  reason: z.string().trim().min(3).max(300),
+  idempotencyKey: z.uuid(),
+});
+export const positionCloseResultSchema = z.object({
+  positionId: z.string(),
+  tradeId: z.string(),
+  replayed: z.boolean(),
+});
+
 export const tradeIdParamsSchema = z.object({
   tradeId: z.uuid(),
 });
@@ -593,6 +605,19 @@ export const executionRunSummarySchema = z.object({
   startedAt: z.iso.datetime().nullable(),
   stoppedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
+  openPositions: z.number().int().nonnegative(),
+  evaluatedSymbols: z.number().int().nonnegative(),
+  failingSymbols: z.number().int().nonnegative(),
+  lastEvaluatedAt: z.iso.datetime().nullable(),
+  lastDecision: z
+    .object({
+      symbol: z.string(),
+      action: z.enum(["open", "close", "hold", "skip", "error"]),
+      reasonCode: z.string(),
+      summary: z.string(),
+      decidedAt: z.iso.datetime(),
+    })
+    .nullable(),
 });
 
 export const deploymentSchema = z.object({
@@ -664,6 +689,8 @@ export type WatchlistStateDto = z.infer<typeof watchlistStateSchema>;
 export type PositionDto = z.infer<typeof positionSchema>;
 export type TradeDto = z.infer<typeof tradeSchema>;
 export type TradingLedgerDto = z.infer<typeof tradingLedgerSchema>;
+export type PositionCloseInputDto = z.infer<typeof positionCloseInputSchema>;
+export type PositionCloseResultDto = z.infer<typeof positionCloseResultSchema>;
 export type FillDto = z.infer<typeof fillSchema>;
 export type OrderDto = z.infer<typeof orderSchema>;
 export type TradeDetailDto = z.infer<typeof tradeDetailSchema>;

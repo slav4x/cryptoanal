@@ -116,6 +116,7 @@ model Workspace {
   validationTrades ValidationTrade[]
   deployments      Deployment[]
   executionRuns    ExecutionRun[]
+  runtimeCursors   RuntimeCursor[]
   positions        Position[]
   orders           Order[]
   fills            Fill[]
@@ -153,6 +154,7 @@ model MarketInstrument {
   trades           Trade[]
   decisions        Decision[]
   validationTrades ValidationTrade[]
+  runtimeCursors   RuntimeCursor[]
   snapshots        MarketSnapshot[]
   candles          MarketCandle[]
 
@@ -356,6 +358,7 @@ model ExecutionRun {
   orders            Order[]
   trades            Trade[]
   decisions         Decision[]
+  runtimeCursors    RuntimeCursor[]
 
   @@index([workspaceId, status, createdAt])
   @@index([deploymentId, createdAt])
@@ -372,6 +375,12 @@ model Position {
   status            PositionStatus     @default(OPEN)
   quantity          Decimal            @db.Decimal(38, 18)
   entryPrice        Decimal            @db.Decimal(38, 18)
+  stopPrice         Decimal            @db.Decimal(38, 18)
+  takePrice         Decimal            @db.Decimal(38, 18)
+  trailingPrice     Decimal?           @db.Decimal(38, 18)
+  bestPrice         Decimal            @db.Decimal(38, 18)
+  entryFee          Decimal            @default(0) @db.Decimal(38, 18)
+  entrySlippage     Decimal            @default(0) @db.Decimal(38, 18)
   markPrice         Decimal?           @db.Decimal(38, 18)
   realizedPnl       Decimal            @default(0) @db.Decimal(38, 18)
   unrealizedPnl     Decimal            @default(0) @db.Decimal(38, 18)
@@ -483,9 +492,28 @@ model Decision {
   strategyVersion   StrategyVersion  @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
   instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
 
+  @@unique([workspaceId, correlationId])
   @@index([workspaceId, decidedAt])
   @@index([workspaceId, symbol, decidedAt])
-  @@index([correlationId])
+}
+
+model RuntimeCursor {
+  workspaceId         String
+  executionRunId      String
+  symbol              String
+  lastEvaluatedAt     DateTime?        @db.Timestamptz(3)
+  pendingSignal       Json?
+  lastDecisionId      String?
+  lastFailureCode     String?
+  lastFailureMessage  String?
+  consecutiveFailures Int              @default(0)
+  updatedAt           DateTime         @updatedAt @db.Timestamptz(3)
+  workspace           Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun        ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Cascade)
+  instrument          MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@id([executionRunId, symbol])
+  @@index([workspaceId, updatedAt])
 }
 
 model Job {

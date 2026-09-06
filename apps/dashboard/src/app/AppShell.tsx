@@ -2,6 +2,7 @@ import { Badge, Button, cn } from "@cryptoanal/ui";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  ListTree,
   ArrowLeftRight,
   Box,
   ChevronsUpDown,
@@ -27,6 +28,7 @@ const navigation = [
   { label: "Запуск", href: "/runtime", icon: RadioTower, end: false },
   { label: "Аналитика", href: "/analytics", icon: ChartNoAxesCombined, end: true },
   { label: "Здоровье", href: "/analytics/health", icon: HeartPulse, end: false },
+  { label: "Активность", href: "/activity", icon: ListTree, end: false },
 ] as const;
 
 export function AppShell() {

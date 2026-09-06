@@ -1,6 +1,7 @@
 import {
   apiEnvelopeSchema,
   analyticsSchema,
+  activitySchema,
   deploymentMutationResultSchema,
   deploymentsSchema,
   healthDashboardSchema,
@@ -23,6 +24,8 @@ import {
   type MarketsDto,
   type AnalyticsDto,
   type AnalyticsQueryDto,
+  type ActivityDto,
+  type ActivityQueryDto,
   type MarketDetailDto,
   type DeploymentCommandInputDto,
   type DeploymentCreateDto,
@@ -106,6 +109,7 @@ async function request<T>(
 
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
+const activityEnvelopeSchema = apiEnvelopeSchema(activitySchema);
 const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
@@ -143,6 +147,19 @@ export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<
 
 export function fetchHealthDashboard(): Promise<ApiEnvelope<HealthDashboardDto>> {
   return request("/api/v1/health", healthDashboardEnvelopeSchema);
+}
+
+export function fetchActivity(
+  filters: ActivityQueryDto,
+  cursor?: string,
+): Promise<ApiEnvelope<ActivityDto>> {
+  const query = new URLSearchParams({ period: filters.period, limit: String(filters.limit) });
+  if (filters.action) query.set("action", filters.action);
+  if (filters.strategyId) query.set("strategyId", filters.strategyId);
+  if (filters.symbol) query.set("symbol", filters.symbol);
+  if (filters.reasonCode) query.set("reasonCode", filters.reasonCode);
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/v1/activity?${query.toString()}`, activityEnvelopeSchema);
 }
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {

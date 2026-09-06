@@ -58,8 +58,7 @@ export default function PlaybooksPage() {
     );
 
   const library = query.data.data;
-  const selected =
-    library.items.find((item) => item.id === selectedId) ?? library.items[0] ?? null;
+  const selected = library.items.find((item) => item.id === selectedId) ?? library.items[0] ?? null;
 
   return (
     <div className="space-y-[18px]">
@@ -169,7 +168,11 @@ export default function PlaybooksPage() {
         />
       ) : (
         <div className="grid items-start gap-3 xl:grid-cols-[360px_minmax(0,1fr)]">
-          <PlaybookList items={library.items} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
+          <PlaybookList
+            items={library.items}
+            selectedId={selected?.id ?? null}
+            onSelect={setSelectedId}
+          />
           {selected ? (
             <PlaybookDetail
               playbook={selected}

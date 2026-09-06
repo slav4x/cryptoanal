@@ -25,6 +25,10 @@ import {
   errorEnvelopeSchema,
   healthSchema,
   healthDashboardSchema,
+  journalEntryCreateSchema,
+  journalEntryCreatedSchema,
+  journalQuerySchema,
+  journalSchema,
   marketDetailSchema,
   marketSymbolParamsSchema,
   marketsSchema,
@@ -34,6 +38,8 @@ import {
   positionCloseResultSchema,
   positionIdParamsSchema,
   requestContextSchema,
+  reviewSessionCreateSchema,
+  reviewSessionCreatedSchema,
   strategyCatalogSchema,
   strategyConfigSchema,
   strategyCreateSchema,
@@ -76,6 +82,9 @@ import {
   DeploymentValidationRequiredError,
   DeploymentVersionMismatchError,
   HealthRepository,
+  JournalCursorNotFoundError,
+  JournalRepository,
+  JournalTargetNotFoundError,
   RuntimeIdempotencyConflictError,
   RuntimeManualCloseNotAllowedError,
   RuntimeMarketPriceUnavailableError,
@@ -130,6 +139,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const analyticsRepository = new AnalyticsRepository(prisma);
   const activityRepository = new ActivityRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
+  const journalRepository = new JournalRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
@@ -433,6 +443,183 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         }
         throw error;
       }
+    },
+  );
+
+  app.get(
+    "/api/v1/journal",
+    {
+      schema: {
+        querystring: journalQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(journalSchema),
+          400: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const query = request.query;
+        const journal = await journalRepository.list(workspace.id, {
+          startsAt: getAnalyticsStartsAt(query.period),
+          kind: query.kind ? persistedJournalKind[query.kind] : null,
+          strategyId: query.strategyId ?? null,
+          symbol: query.symbol ?? null,
+          tag: query.tag?.toLocaleLowerCase() ?? null,
+          cursor: query.cursor ?? null,
+          limit: query.limit,
+        });
+        return {
+          data: {
+            filters: {
+              period: query.period,
+              kind: query.kind ?? null,
+              strategyId: query.strategyId ?? null,
+              symbol: query.symbol ?? null,
+              tag: query.tag ?? null,
+            },
+            filterOptions: {
+              ...journal.filterMetadata,
+              kinds: [
+                "hypothesis" as const,
+                "observation" as const,
+                "conclusion" as const,
+                "decision" as const,
+              ],
+            },
+            linkOptions: {
+              strategies: journal.linkOptions.strategies.map((item) => ({
+                id: item.id,
+                label: item.name,
+              })),
+              strategyVersions: journal.linkOptions.versions.map((item) => ({
+                id: item.id,
+                label: `${item.strategy.name} · v${item.version}`,
+              })),
+              executionRuns: journal.linkOptions.executionRuns.map((item) => ({
+                id: item.id,
+                label: `${item.strategyVersion.strategy.name} · v${item.strategyVersion.version} · ${item.id.slice(0, 8)}`,
+              })),
+              validationRuns: journal.linkOptions.validationRuns.map((item) => ({
+                id: item.id,
+                label: `${item.strategy.name} · v${item.strategyVersion.version} · ${validationKind[item.kind]}`,
+              })),
+              trades: journal.linkOptions.trades.map((item) => ({
+                id: item.id,
+                label: `${item.symbol} · ${item.closedAt.toISOString().slice(0, 10)}`,
+              })),
+              decisions: journal.linkOptions.decisions.map((item) => ({
+                id: item.id,
+                label: `${item.symbol} · ${decisionAction[item.action]} · ${item.decidedAt.toISOString().slice(0, 16).replace("T", " ")} UTC`,
+              })),
+              symbols: journal.linkOptions.symbols.map((item) => ({
+                id: item.symbol,
+                label: item.symbol,
+              })),
+            },
+            summary: {
+              total: journal.total,
+              hypothesis: journal.counts.get("HYPOTHESIS") ?? 0,
+              observation: journal.counts.get("OBSERVATION") ?? 0,
+              conclusion: journal.counts.get("CONCLUSION") ?? 0,
+              decision: journal.counts.get("DECISION") ?? 0,
+              reviews: journal.reviewCount,
+            },
+            entries: journal.entries.map(serializeJournalEntry),
+            reviews: journal.reviews.map(serializeReviewSession),
+            nextCursor: journal.nextCursor,
+          },
+          meta: createMeta(
+            request.id,
+            journal.total > 0 || journal.reviewCount > 0 ? "fresh" : "unavailable",
+          ),
+        };
+      } catch (error) {
+        if (error instanceof JournalCursorNotFoundError) {
+          throw new ApiError(400, "JOURNAL_CURSOR_INVALID", "Cursor журнала недействителен");
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/journal/entries",
+    {
+      schema: {
+        body: journalEntryCreateSchema,
+        response: {
+          200: apiEnvelopeSchema(journalEntryCreatedSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const entry = await journalRepository.createEntry({
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          kind: persistedJournalKind[request.body.kind],
+          title: request.body.title,
+          body: request.body.body,
+          tags: request.body.tags,
+          occurredAt: request.body.occurredAt ? new Date(request.body.occurredAt) : new Date(),
+          links: request.body.links.map((link) => ({
+            type: persistedJournalLinkType[link.type],
+            targetId: link.targetId,
+          })),
+        });
+        return {
+          data: { entry: serializeJournalEntry(entry) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        if (error instanceof JournalTargetNotFoundError) {
+          throw new ApiError(
+            404,
+            "JOURNAL_TARGET_NOT_FOUND",
+            "Связанный объект не найден в текущем workspace",
+          );
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/journal/reviews",
+    {
+      schema: {
+        body: reviewSessionCreateSchema,
+        response: {
+          200: apiEnvelopeSchema(reviewSessionCreatedSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const review = await journalRepository.createReview({
+        workspaceId: workspace.id,
+        actorId: config.DEVELOPMENT_ACTOR_ID,
+        requestId: request.id,
+        title: request.body.title,
+        startsAt: new Date(request.body.startsAt),
+        endsAt: new Date(request.body.endsAt),
+        summary: request.body.summary,
+        learnings: request.body.learnings,
+        nextActions: request.body.nextActions,
+        tags: request.body.tags,
+      });
+      return {
+        data: { review: serializeReviewSession(review) },
+        meta: createMeta(request.id, "fresh"),
+      };
     },
   );
 
@@ -1777,6 +1964,92 @@ function serializeAnalyticsBreakdown(
   }));
 }
 
+type JournalEntryResult = Awaited<ReturnType<JournalRepository["createEntry"]>>;
+type ReviewSessionResult = Awaited<ReturnType<JournalRepository["createReview"]>>;
+
+function serializeJournalEntry(entry: JournalEntryResult) {
+  return {
+    id: entry.id,
+    kind: journalKind[entry.kind],
+    title: entry.title,
+    body: entry.body,
+    tags: entry.tags,
+    occurredAt: entry.occurredAt.toISOString(),
+    createdAt: entry.createdAt.toISOString(),
+    links: entry.links.map((link) => {
+      if (link.type === "STRATEGY") {
+        return {
+          type: "strategy" as const,
+          targetId: link.strategyId!,
+          label: link.strategy!.name,
+          href: `/strategies/${link.strategyId!}`,
+        };
+      }
+      if (link.type === "STRATEGY_VERSION") {
+        return {
+          type: "strategy-version" as const,
+          targetId: link.strategyVersionId!,
+          label: `${link.strategyVersion!.strategy.name} · v${link.strategyVersion!.version}`,
+          href: `/strategies/${link.strategyVersion!.strategy.id}?tab=versions`,
+        };
+      }
+      if (link.type === "EXECUTION_RUN") {
+        return {
+          type: "execution-run" as const,
+          targetId: link.executionRunId!,
+          label: `${link.executionRun!.strategyVersion.strategy.name} · run ${link.executionRunId!.slice(0, 8)}`,
+          href: "/runtime",
+        };
+      }
+      if (link.type === "VALIDATION_RUN") {
+        return {
+          type: "validation-run" as const,
+          targetId: link.validationRunId!,
+          label: `${link.validationRun!.strategy.name} · v${link.validationRun!.strategyVersion.version}`,
+          href: `/validation/${link.validationRunId!}`,
+        };
+      }
+      if (link.type === "TRADE") {
+        return {
+          type: "trade" as const,
+          targetId: link.tradeId!,
+          label: `${link.trade!.symbol} · ${link.trade!.closedAt.toISOString().slice(0, 10)}`,
+          href: `/trades/${link.tradeId!}`,
+        };
+      }
+      if (link.type === "DECISION") {
+        return {
+          type: "decision" as const,
+          targetId: link.decisionId!,
+          label: `${link.decision!.symbol} · ${decisionAction[link.decision!.action]}`,
+          href: "/activity",
+        };
+      }
+      return {
+        type: "symbol" as const,
+        targetId: link.symbol!,
+        label: link.instrument!.symbol,
+        href: `/markets/${link.symbol!}`,
+      };
+    }),
+  };
+}
+
+function serializeReviewSession(review: ReviewSessionResult) {
+  return {
+    id: review.id,
+    title: review.title,
+    startsAt: review.startsAt.toISOString(),
+    endsAt: review.endsAt.toISOString(),
+    summary: review.summary,
+    learnings: review.learnings,
+    nextActions: review.nextActions,
+    tags: review.tags,
+    entryCount: review._count.entries,
+    createdAt: review.createdAt.toISOString(),
+  };
+}
+
 function createMeta(requestId: string, freshness: "fresh" | "stale" | "unavailable") {
   return {
     requestId,
@@ -2187,6 +2460,30 @@ const decisionAction = {
   HOLD: "hold",
   SKIP: "skip",
   ERROR: "error",
+} as const;
+
+const journalKind = {
+  HYPOTHESIS: "hypothesis",
+  OBSERVATION: "observation",
+  CONCLUSION: "conclusion",
+  DECISION: "decision",
+} as const;
+
+const persistedJournalKind = {
+  hypothesis: "HYPOTHESIS",
+  observation: "OBSERVATION",
+  conclusion: "CONCLUSION",
+  decision: "DECISION",
+} as const;
+
+const persistedJournalLinkType = {
+  strategy: "STRATEGY",
+  "strategy-version": "STRATEGY_VERSION",
+  "execution-run": "EXECUTION_RUN",
+  "validation-run": "VALIDATION_RUN",
+  trade: "TRADE",
+  decision: "DECISION",
+  symbol: "SYMBOL",
 } as const;
 
 const persistedDecisionAction = {

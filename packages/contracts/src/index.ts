@@ -919,6 +919,144 @@ export const activitySchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
+export const journalEntryKindSchema = z.enum([
+  "hypothesis",
+  "observation",
+  "conclusion",
+  "decision",
+]);
+export const journalLinkTypeSchema = z.enum([
+  "strategy",
+  "strategy-version",
+  "execution-run",
+  "validation-run",
+  "trade",
+  "decision",
+  "symbol",
+]);
+export const journalQuerySchema = z.object({
+  period: analyticsPeriodSchema.default("30d"),
+  kind: journalEntryKindSchema.optional(),
+  strategyId: z.uuid().optional(),
+  symbol: z
+    .string()
+    .regex(/^[A-Z0-9]{4,24}$/)
+    .optional(),
+  tag: z.string().trim().min(1).max(40).optional(),
+  cursor: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+
+const journalTagSchema = z.string().trim().min(1).max(40);
+const journalLinkInputSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("strategy"), targetId: z.uuid() }),
+  z.object({ type: z.literal("strategy-version"), targetId: z.uuid() }),
+  z.object({ type: z.literal("execution-run"), targetId: z.uuid() }),
+  z.object({ type: z.literal("validation-run"), targetId: z.uuid() }),
+  z.object({ type: z.literal("trade"), targetId: z.uuid() }),
+  z.object({ type: z.literal("decision"), targetId: z.uuid() }),
+  z.object({
+    type: z.literal("symbol"),
+    targetId: z.string().regex(/^[A-Z0-9]{4,24}$/),
+  }),
+]);
+
+export const journalEntryCreateSchema = z.object({
+  kind: journalEntryKindSchema,
+  title: z.string().trim().min(3).max(140),
+  body: z.string().trim().min(3).max(10_000),
+  tags: z.array(journalTagSchema).max(12).default([]),
+  occurredAt: z.iso.datetime().optional(),
+  links: z.array(journalLinkInputSchema).max(8).default([]),
+});
+
+export const reviewSessionCreateSchema = z
+  .object({
+    title: z.string().trim().min(3).max(140),
+    startsAt: z.iso.datetime(),
+    endsAt: z.iso.datetime(),
+    summary: z.string().trim().min(10).max(10_000),
+    learnings: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+    nextActions: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+    tags: z.array(journalTagSchema).max(12).default([]),
+  })
+  .refine((value) => new Date(value.startsAt) <= new Date(value.endsAt), {
+    message: "Начало периода должно быть раньше окончания",
+    path: ["endsAt"],
+  });
+
+export const journalLinkSchema = z.object({
+  type: journalLinkTypeSchema,
+  targetId: z.string(),
+  label: z.string(),
+  href: z.string().nullable(),
+});
+
+export const journalEntrySchema = z.object({
+  id: z.string(),
+  kind: journalEntryKindSchema,
+  title: z.string(),
+  body: z.string(),
+  tags: z.array(z.string()),
+  occurredAt: z.iso.datetime(),
+  createdAt: z.iso.datetime(),
+  links: z.array(journalLinkSchema),
+});
+
+export const reviewSessionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime(),
+  summary: z.string(),
+  learnings: z.array(z.string()),
+  nextActions: z.array(z.string()),
+  tags: z.array(z.string()),
+  entryCount: z.number().int().nonnegative(),
+  createdAt: z.iso.datetime(),
+});
+
+const journalTargetOptionSchema = z.object({ id: z.string(), label: z.string() });
+
+export const journalSchema = z.object({
+  filters: z.object({
+    period: analyticsPeriodSchema,
+    kind: journalEntryKindSchema.nullable(),
+    strategyId: z.string().nullable(),
+    symbol: z.string().nullable(),
+    tag: z.string().nullable(),
+  }),
+  filterOptions: z.object({
+    strategies: z.array(z.object({ id: z.string(), name: z.string() })),
+    symbols: z.array(z.string()),
+    tags: z.array(z.string()),
+    kinds: z.array(journalEntryKindSchema),
+  }),
+  linkOptions: z.object({
+    strategies: z.array(journalTargetOptionSchema),
+    strategyVersions: z.array(journalTargetOptionSchema),
+    executionRuns: z.array(journalTargetOptionSchema),
+    validationRuns: z.array(journalTargetOptionSchema),
+    trades: z.array(journalTargetOptionSchema),
+    decisions: z.array(journalTargetOptionSchema),
+    symbols: z.array(journalTargetOptionSchema),
+  }),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    hypothesis: z.number().int().nonnegative(),
+    observation: z.number().int().nonnegative(),
+    conclusion: z.number().int().nonnegative(),
+    decision: z.number().int().nonnegative(),
+    reviews: z.number().int().nonnegative(),
+  }),
+  entries: z.array(journalEntrySchema),
+  reviews: z.array(reviewSessionSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const journalEntryCreatedSchema = z.object({ entry: journalEntrySchema });
+export const reviewSessionCreatedSchema = z.object({ review: reviewSessionSchema });
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -999,5 +1137,15 @@ export type ActivityAction = z.infer<typeof activityActionSchema>;
 export type ActivityPeriod = z.infer<typeof activityPeriodSchema>;
 export type ActivityQueryDto = z.infer<typeof activityQuerySchema>;
 export type ActivityDto = z.infer<typeof activitySchema>;
+export type JournalEntryKind = z.infer<typeof journalEntryKindSchema>;
+export type JournalLinkType = z.infer<typeof journalLinkTypeSchema>;
+export type JournalQueryDto = z.infer<typeof journalQuerySchema>;
+export type JournalEntryCreateDto = z.infer<typeof journalEntryCreateSchema>;
+export type ReviewSessionCreateDto = z.infer<typeof reviewSessionCreateSchema>;
+export type JournalEntryDto = z.infer<typeof journalEntrySchema>;
+export type ReviewSessionDto = z.infer<typeof reviewSessionSchema>;
+export type JournalDto = z.infer<typeof journalSchema>;
+export type JournalEntryCreatedDto = z.infer<typeof journalEntryCreatedSchema>;
+export type ReviewSessionCreatedDto = z.infer<typeof reviewSessionCreatedSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

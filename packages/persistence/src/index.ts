@@ -7,6 +7,13 @@ export {
 } from "./activity-repository";
 export { AnalyticsRepository, type AnalyticsTradeFilters } from "./analytics-repository";
 export { DashboardRepository } from "./dashboard-repository";
+export {
+  JournalCursorNotFoundError,
+  JournalRepository,
+  JournalTargetNotFoundError,
+  type JournalFilters,
+  type JournalTargetInput,
+} from "./journal-repository";
 export { HealthRepository } from "./health-repository";
 export {
   StrategyNameConflictError,

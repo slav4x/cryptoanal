@@ -128,6 +128,23 @@ enum TradingSession {
   UNKNOWN
 }
 
+enum JournalEntryKind {
+  HYPOTHESIS
+  OBSERVATION
+  CONCLUSION
+  DECISION
+}
+
+enum JournalLinkType {
+  STRATEGY
+  STRATEGY_VERSION
+  EXECUTION_RUN
+  VALIDATION_RUN
+  TRADE
+  DECISION
+  SYMBOL
+}
+
 model Workspace {
   id                String             @id @default(uuid())
   slug              String             @unique
@@ -155,6 +172,9 @@ model Workspace {
   outboxEvents      OutboxEvent[]
   accountSnapshots  AccountSnapshot[]
   watchdogIncidents WatchdogIncident[]
+  journalEntries    JournalEntry[]
+  journalLinks      JournalLink[]
+  reviewSessions    ReviewSession[]
 }
 
 model WorkspaceSettings {
@@ -186,6 +206,7 @@ model MarketInstrument {
   runtimeCursors   RuntimeCursor[]
   snapshots        MarketSnapshot[]
   candles          MarketCandle[]
+  journalLinks     JournalLink[]
 
   @@index([exchange, enabled])
 }
@@ -262,6 +283,7 @@ model Strategy {
   activeVersion    StrategyVersion?  @relation("ActiveStrategyVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
   validationRuns   ValidationRun[]
   deployments      Deployment[]
+  journalLinks     JournalLink[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, status])
@@ -287,6 +309,7 @@ model StrategyVersion {
   positions           Position[]
   trades              Trade[]
   decisions           Decision[]
+  journalLinks        JournalLink[]
 
   @@unique([strategyId, version])
   @@unique([strategyId, configHash])
@@ -319,6 +342,7 @@ model ValidationRun {
   strategyVersion   StrategyVersion   @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
   datasetSnapshot   DatasetSnapshot?  @relation(fields: [datasetSnapshotId], references: [id], onDelete: Restrict)
   trades            ValidationTrade[]
+  journalLinks      JournalLink[]
 
   @@index([workspaceId, status, queuedAt])
   @@index([strategyVersionId, queuedAt])
@@ -429,6 +453,7 @@ model ExecutionRun {
   orders            Order[]
   trades            Trade[]
   decisions         Decision[]
+  journalLinks      JournalLink[]
   runtimeCursors    RuntimeCursor[]
 
   @@index([workspaceId, status, createdAt])
@@ -545,6 +570,7 @@ model Trade {
   strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
   instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   decisions         Decision[]
+  journalLinks      JournalLink[]
 
   @@index([workspaceId, closedAt])
   @@index([workspaceId, strategyVersionId, closedAt])
@@ -572,12 +598,97 @@ model Decision {
   position          Position?        @relation(fields: [positionId], references: [id], onDelete: SetNull)
   trade             Trade?           @relation(fields: [tradeId], references: [id], onDelete: SetNull)
   instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  journalLinks      JournalLink[]
 
   @@unique([workspaceId, correlationId])
   @@index([workspaceId, decidedAt])
   @@index([workspaceId, symbol, decidedAt])
   @@index([positionId])
   @@index([tradeId])
+}
+
+model JournalEntry {
+  id               String               @id @default(uuid())
+  workspaceId      String
+  kind             JournalEntryKind
+  title            String
+  body             String               @db.Text
+  tags             String[]             @default([])
+  occurredAt       DateTime             @db.Timestamptz(3)
+  createdByActorId String
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(3)
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  links            JournalLink[]
+  reviewSessions   ReviewSessionEntry[]
+
+  @@index([workspaceId, occurredAt(sort: Desc)])
+  @@index([workspaceId, kind, occurredAt(sort: Desc)])
+  @@index([tags], type: Gin)
+}
+
+model JournalLink {
+  id                String            @id @default(uuid())
+  workspaceId       String
+  journalEntryId    String
+  type              JournalLinkType
+  strategyId        String?
+  strategyVersionId String?
+  executionRunId    String?
+  validationRunId   String?
+  tradeId           String?
+  decisionId        String?
+  symbol            String?
+  createdAt         DateTime          @default(now()) @db.Timestamptz(3)
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  journalEntry      JournalEntry      @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  strategy          Strategy?         @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  strategyVersion   StrategyVersion?  @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+  executionRun      ExecutionRun?     @relation(fields: [executionRunId], references: [id], onDelete: Cascade)
+  validationRun     ValidationRun?    @relation(fields: [validationRunId], references: [id], onDelete: Cascade)
+  trade             Trade?            @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  decision          Decision?         @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  instrument        MarketInstrument? @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@index([workspaceId, type])
+  @@index([journalEntryId])
+  @@index([strategyId])
+  @@index([strategyVersionId])
+  @@index([executionRunId])
+  @@index([validationRunId])
+  @@index([tradeId])
+  @@index([decisionId])
+  @@index([symbol])
+}
+
+model ReviewSession {
+  id               String               @id @default(uuid())
+  workspaceId      String
+  title            String
+  startsAt         DateTime             @db.Timestamptz(3)
+  endsAt           DateTime             @db.Timestamptz(3)
+  summary          String               @db.Text
+  learnings        String[]             @default([])
+  nextActions      String[]             @default([])
+  tags             String[]             @default([])
+  createdByActorId String
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  entries          ReviewSessionEntry[]
+
+  @@index([workspaceId, endsAt(sort: Desc)])
+  @@index([tags], type: Gin)
+}
+
+model ReviewSessionEntry {
+  reviewSessionId String
+  journalEntryId  String
+  addedAt         DateTime      @default(now()) @db.Timestamptz(3)
+  reviewSession   ReviewSession @relation(fields: [reviewSessionId], references: [id], onDelete: Cascade)
+  journalEntry    JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+
+  @@id([reviewSessionId, journalEntryId])
+  @@index([journalEntryId])
 }
 
 model RuntimeCursor {

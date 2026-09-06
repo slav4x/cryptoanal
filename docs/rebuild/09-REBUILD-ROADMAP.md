@@ -85,9 +85,9 @@ polling и без прямого обращения UI к exchange.
 
 - [x] Реализовать performance projections и фильтры.
 - [x] Реализовать equity/drawdown/PnL calendar.
-- [ ] Реализовать distributions результатов сделок.
+- [x] Реализовать distributions результатов сделок.
 - [x] Реализовать breakdowns по strategy/version/symbol/exit.
-- [ ] Добавить breakdowns по market regime и trading session после фиксации этих полей в trade provenance.
+- [x] Добавить breakdowns по market regime и trading session после фиксации этих полей в trade provenance.
 - [x] Реализовать costs analysis: fees/funding/slippage.
 - [x] Реализовать decision/activity timeline.
 - [x] Реализовать drift against validated baseline.

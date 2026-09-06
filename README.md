@@ -87,8 +87,10 @@ pnpm dev
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
-profit factor, expectancy, costs, equity, drawdown, дневной PnL и breakdowns по
-strategy version, symbol и exit reason. Стартовая точка equity берётся из
+profit factor, expectancy, costs, equity, drawdown, дневной PnL, распределения по
+результату/времени в позиции и breakdowns по strategy version, symbol, exit reason,
+market regime и UTC-сессии входа. Regime и session фиксируются в Position при входе и
+копируются в каноническую Trade при закрытии; старые записи получают `unknown`. Стартовая точка equity берётся из
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
 

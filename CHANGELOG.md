@@ -66,6 +66,8 @@
 - Cursor-paginated activity API with action, strategy, symbol, reason and period filters.
 - Explainable decision workspace with factor inspection and execution provenance.
 - Explicit nullable links from decisions to the related position and canonical trade.
+- Entry market regime and UTC trading session provenance on positions and completed trades.
+- Analytics result and holding-time distributions with regime and session breakdowns.
 
 ### Changed
 
@@ -78,5 +80,6 @@
 - Validation datasets are capped at 10 symbols and 250,000 candles per run.
 - Validation catalog responses now contain summary metrics; heavy series are loaded by run detail.
 - Runtime and validation now share signal, sizing, cost and exit semantics.
+- Trade detail now exposes the immutable market context captured at entry.
 - Paused deployments continue managing open positions but cannot open new ones.
 - Deployment stop is blocked while positions remain open.

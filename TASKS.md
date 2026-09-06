@@ -56,6 +56,8 @@
 
 - [x] Performance projections и breakdowns.
 - [x] Equity, drawdown и PnL calendar.
+- [x] Распределения результата и времени в позиции.
+- [x] Trade provenance и breakdowns по market regime и UTC-session.
 - [x] Health, drift и watchdog.
 - [x] Activity/explainability.
 

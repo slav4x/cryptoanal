@@ -45,6 +45,7 @@
 ## Этап 4 — Validation Center
 
 - [x] Единая execution semantics runtime/backtest.
+- [x] Immutable dataset snapshots с content hash и повторным использованием.
 - [x] Durable очередь ValidationRun/Job для backtest и walk-forward.
 - [x] Run composer и мониторинг очереди в Validation Center.
 - [x] Worker execution для backtest/walk-forward jobs.

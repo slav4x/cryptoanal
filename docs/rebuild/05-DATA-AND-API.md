@@ -206,13 +206,18 @@ Worker атомарно получает job через ограниченный
 загружает завершённые свечи Bybit с pagination, сохраняет их в canonical market storage и
 запускает один детерминированный engine для backtest/walk-forward. Completion/failure,
 метрики и audit event записываются одной транзакцией. Фактический набор свечей получает
-SHA-256 content hash; отдельная immutable dataset snapshot entity остаётся следующим
-шагом для полной воспроизводимости независимо от market storage.
+SHA-256 content hash и до расчёта сохраняется как immutable `DatasetSnapshot` с
+каноническими `DatasetSnapshotCandle`. Validation run связывается со snapshot до запуска
+engine; повтор после потери worker lease читает уже зафиксированные данные. Snapshot с
+тем же content hash повторно используется внутри workspace и не зависит от обновляемого
+canonical market storage.
 
 `GET /api/v1/validations` возвращает лёгкие summary-метрики для очереди и compare.
 `GET /api/v1/validations/:validationRunId` отдаёт полный metrics payload, equity series,
 per-symbol breakdown и paginated `ValidationTrade`. Сделки хранятся отдельно от JSON
-метрик, поэтому run detail не теряет историю и не раздувает каталог запусков.
+метрик, поэтому run detail не теряет историю и не раздувает каталог запусков. Run DTO
+содержит metadata связанного dataset snapshot: источник, timeframe, пары, фактические
+границы, количество свечей и content hash; сами свечи через dashboard API не выдаются.
 
 Runtime control-plane использует `GET /api/v1/deployments`,
 `POST /api/v1/strategies/:strategyId/deployments` и

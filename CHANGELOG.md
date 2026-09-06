@@ -52,6 +52,9 @@
 - Canonical dry-run decisions, positions, filled orders, fills and completed trades.
 - Manual dry-run position close command with current-price validation, audit event and replay-safe receipt.
 - Runtime status details for evaluated symbols, failures, open positions and the latest decision.
+- Content-addressed immutable validation dataset snapshots with canonical persisted candles.
+- Validation retry recovery from the already linked dataset snapshot.
+- Dataset source, actual coverage and integrity hash in validation report provenance.
 
 ### Changed
 

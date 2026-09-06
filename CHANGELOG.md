@@ -37,6 +37,10 @@
 - Atomic `draft → validating` transition when a validation run is queued.
 - Validation Center with backtest/walk-forward composer and queue monitoring.
 - Dataset/config/engine provenance captured for every queued validation run.
+- Lease-based validation job claiming with stale-job recovery and atomic completion/failure persistence.
+- Paginated Bybit historical candle materialization for validation datasets.
+- Deterministic backtest and walk-forward execution with fees, slippage, risk sizing and conservative stop handling.
+- Validation metrics, quality gates, dataset content hash and compact results in Validation Center.
 
 ### Changed
 
@@ -46,3 +50,4 @@
 - Sidebar runtime indicator now reflects the real worker state.
 - Request validation errors now return a structured `400` response.
 - Creating a new version from an approved strategy now clears its approval and active version.
+- Validation datasets are capped at 10 symbols and 250,000 candles per run.

@@ -200,8 +200,14 @@ Validation Center использует `GET /api/v1/validations` и
 `StrategyVersion`, тип backtest/walk-forward, период, universe subset и капитал. Сервер
 фиксирует dataset request hash, `datasetAsOf`, engine version и config hash, после чего
 атомарно создаёт `ValidationRun`, durable `Job`, audit event и переводит стратегию из
-draft в validating. `idempotencyKey` делает повтор команды безопасным. До реализации
-единого execution engine run честно остаётся queued и не получает искусственных метрик.
+draft в validating. `idempotencyKey` делает повтор команды безопасным.
+
+Worker атомарно получает job через ограниченный lease с `FOR UPDATE SKIP LOCKED`,
+загружает завершённые свечи Bybit с pagination, сохраняет их в canonical market storage и
+запускает один детерминированный engine для backtest/walk-forward. Completion/failure,
+метрики и audit event записываются одной транзакцией. Фактический набор свечей получает
+SHA-256 content hash; отдельная immutable dataset snapshot entity остаётся следующим
+шагом для полной воспроизводимости независимо от market storage.
 
 ## 6. Команды и queries
 

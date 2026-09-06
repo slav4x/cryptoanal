@@ -44,8 +44,8 @@
 - [ ] Единая execution semantics runtime/backtest.
 - [x] Durable очередь ValidationRun/Job для backtest и walk-forward.
 - [x] Run composer и мониторинг очереди в Validation Center.
-- [ ] Worker execution для backtest/walk-forward jobs.
-- [ ] Validation gates и provenance.
+- [x] Worker execution для backtest/walk-forward jobs.
+- [x] Validation gates и provenance.
 - [ ] Run details и compare.
 
 ## Этап 5 — Analytics

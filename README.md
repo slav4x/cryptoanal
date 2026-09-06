@@ -62,6 +62,7 @@ pnpm dev
 - `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
 - `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов.
 - `/analytics/health` — operational health, watchdog incidents и validation drift.
+- `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.
 
 Реализованный private API:
 
@@ -82,6 +83,7 @@ pnpm dev
 - `POST /api/v1/positions/:positionId/close`;
 - `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`;
 - `GET /api/v1/health`.
+- `GET /api/v1/activity?period=24h|7d|30d|all&action=&strategyId=&symbol=&reasonCode=&cursor=`.
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
@@ -96,6 +98,11 @@ Health projection проверяет API/database, worker heartbeat, Bybit publi
 закрывает их после восстановления. Drift сравнивает runtime только с тем validation run,
 который зафиксирован в immutable execution context; до 20 закрытых сделок вывод не
 делается.
+
+Activity — отдельный продуктовый audit trail на основе `Decision`, а не представление
+raw logs. Лента поддерживает серверные фильтры и keyset pagination, показывает factors,
+correlation/market reference, execution provenance и точные ссылки на position/trade,
+если решение создало или закрыло торговый результат.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit

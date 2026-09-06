@@ -63,6 +63,9 @@
 - Edge-triggered watchdog incidents with automatic resolution and episode counting.
 - Runtime drift comparison against the exact validation baseline captured by execution context.
 - System health workspace with domain statuses, incident history and drift metrics.
+- Cursor-paginated activity API with action, strategy, symbol, reason and period filters.
+- Explainable decision workspace with factor inspection and execution provenance.
+- Explicit nullable links from decisions to the related position and canonical trade.
 
 ### Changed
 

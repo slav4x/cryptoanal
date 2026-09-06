@@ -57,7 +57,7 @@
 - [x] Performance projections и breakdowns.
 - [x] Equity, drawdown и PnL calendar.
 - [x] Health, drift и watchdog.
-- [ ] Activity/explainability.
+- [x] Activity/explainability.
 
 ## Этап 6 — Разбор и polish
 

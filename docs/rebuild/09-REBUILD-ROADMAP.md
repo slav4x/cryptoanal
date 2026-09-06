@@ -89,10 +89,10 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать breakdowns по strategy/version/symbol/exit.
 - [ ] Добавить breakdowns по market regime и trading session после фиксации этих полей в trade provenance.
 - [x] Реализовать costs analysis: fees/funding/slippage.
-- [ ] Реализовать decision/activity timeline.
+- [x] Реализовать decision/activity timeline.
 - [x] Реализовать drift against validated baseline.
 - [x] Реализовать health/watchdog/incidents.
-- [ ] Отделить product activity от raw system logs.
+- [x] Отделить product activity от raw system logs.
 
 **Готово, когда:** пользователь отвечает из UI не только «сколько», но и «почему»,
 «по какой версии» и «где результат начал отклоняться».

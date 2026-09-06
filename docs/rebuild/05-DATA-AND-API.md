@@ -251,6 +251,17 @@ immutable context, и сравнивает runtime win rate, expectancy, profit 
 `insufficient-data`. После достижения порога warning/critical определяется явной
 threshold policy, а не визуальной оценкой графика.
 
+`GET /api/v1/activity` возвращает product audit trail из предметной таблицы `Decision`,
+не парся текстовые логи. Фильтры period/action/strategy/symbol/reason применяются до
+выборки; лента использует стабильную keyset pagination по `(decidedAt, id)`, а summary
+считается по всему отфильтрованному набору. DTO включает сохранённые factors,
+correlation id, market snapshot reference и execution/strategy provenance.
+
+Новые решения явно ссылаются на `Position` и `Trade`, когда действие связано с
+торговым результатом. Ссылки nullable, поэтому ранее накопленные решения и действия
+без позиции остаются валидными. Это позволяет перейти из объяснения к сделке без
+ненадёжного сопоставления по symbol и timestamp.
+
 Worker выполняет running/paused deployments по последней завершённой свече. Таблица
 `RuntimeCursor` хранит прогресс, pending signal и последнюю ошибку пары. Решение имеет
 уникальный workspace-scoped correlation id, поэтому повтор цикла не создаёт второй

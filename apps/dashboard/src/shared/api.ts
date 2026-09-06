@@ -10,6 +10,8 @@ import {
   marketDetailSchema,
   marketsSchema,
   overviewSchema,
+  playbookMutationSchema,
+  playbooksSchema,
   positionCloseResultSchema,
   requestContextSchema,
   reviewSessionCreatedSchema,
@@ -41,6 +43,12 @@ import {
   type JournalQueryDto,
   type OverviewPeriod,
   type OverviewDto,
+  type PlaybookCreateDto,
+  type PlaybookMutationDto,
+  type PlaybookQueryDto,
+  type PlaybooksDto,
+  type PlaybookStatusChangeDto,
+  type PlaybookUpdateDto,
   type PositionCloseInputDto,
   type PositionCloseResultDto,
   type RequestContextDto,
@@ -124,6 +132,8 @@ const journalEnvelopeSchema = apiEnvelopeSchema(journalSchema);
 const journalEntryCreatedEnvelopeSchema = apiEnvelopeSchema(journalEntryCreatedSchema);
 const reviewSessionCreatedEnvelopeSchema = apiEnvelopeSchema(reviewSessionCreatedSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
+const playbooksEnvelopeSchema = apiEnvelopeSchema(playbooksSchema);
+const playbookMutationEnvelopeSchema = apiEnvelopeSchema(playbookMutationSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
 const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
@@ -172,6 +182,50 @@ export function fetchJournal(
   if (filters.tag) query.set("tag", filters.tag);
   if (cursor) query.set("cursor", cursor);
   return request(`/api/v1/journal?${query.toString()}`, journalEnvelopeSchema);
+}
+
+export function fetchPlaybooks(filters: PlaybookQueryDto): Promise<ApiEnvelope<PlaybooksDto>> {
+  const query = new URLSearchParams();
+  if (filters.status) query.set("status", filters.status);
+  if (filters.strategyId) query.set("strategyId", filters.strategyId);
+  if (filters.tag) query.set("tag", filters.tag);
+  if (filters.query) query.set("query", filters.query);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request(`/api/v1/playbooks${suffix}`, playbooksEnvelopeSchema);
+}
+
+export function createPlaybook(
+  input: PlaybookCreateDto,
+): Promise<ApiEnvelope<PlaybookMutationDto>> {
+  return request("/api/v1/playbooks", playbookMutationEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updatePlaybook(
+  playbookId: string,
+  input: PlaybookUpdateDto,
+): Promise<ApiEnvelope<PlaybookMutationDto>> {
+  return request(
+    `/api/v1/playbooks/${encodeURIComponent(playbookId)}`,
+    playbookMutationEnvelopeSchema,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function changePlaybookStatus(
+  playbookId: string,
+  input: PlaybookStatusChangeDto,
+): Promise<ApiEnvelope<PlaybookMutationDto>> {
+  return request(
+    `/api/v1/playbooks/${encodeURIComponent(playbookId)}/status`,
+    playbookMutationEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
 }
 
 export function createJournalEntry(

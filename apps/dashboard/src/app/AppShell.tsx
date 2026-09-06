@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Box,
   BookOpenText,
+  BookMarked,
   ChevronsUpDown,
   ChartNoAxesCombined,
   FlaskConical,
@@ -31,6 +32,7 @@ const navigation = [
   { label: "Здоровье", href: "/analytics/health", icon: HeartPulse, end: false },
   { label: "Активность", href: "/activity", icon: ListTree, end: false },
   { label: "Разбор", href: "/journal", icon: BookOpenText, end: false },
+  { label: "Плейбуки", href: "/playbooks", icon: BookMarked, end: false },
 ] as const;
 
 export function AppShell() {

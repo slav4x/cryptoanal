@@ -21,6 +21,7 @@ const AnalyticsPage = lazy(() => import("../features/analytics/AnalyticsPage"));
 const HealthPage = lazy(() => import("../features/health/HealthPage"));
 const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
 const JournalPage = lazy(() => import("../features/journal/JournalPage"));
+const PlaybooksPage = lazy(() => import("../features/playbooks/PlaybooksPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 
 export function App() {
@@ -161,6 +162,14 @@ export function App() {
             element={
               <Suspense fallback={<RouteFallback />}>
                 <JournalPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="playbooks"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <PlaybooksPage />
               </Suspense>
             }
           />

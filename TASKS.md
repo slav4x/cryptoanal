@@ -35,9 +35,12 @@
 - [x] Strategy workspace с обзором и snapshot конфигурации.
 - [x] Последующие immutable versions и diff.
 - [x] Lifecycle transitions и validation eligibility.
-- [ ] Deployments и execution runs.
-- [ ] Immutable execution context.
-- [ ] Runtime commands и audit trail.
+- [x] Dry-run deployments и execution runs.
+- [x] Immutable execution context с hash и provenance validation run.
+- [x] Start/pause/resume/stop commands, confirmations, idempotency и audit trail.
+- [x] Один активный deployment на dry-run account.
+- [ ] Worker execution loop для активного dry-run deployment.
+- [ ] Manual close позиции как отдельная команда.
 
 ## Этап 4 — Validation Center
 

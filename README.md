@@ -55,10 +55,11 @@ pnpm dev
 - `/strategies/new` — секционный редактор и создание черновика с immutable v1;
 - `/strategies/:strategyId` — workspace стратегии с обзором, конфигурацией и историей версий;
 - `/strategies/:strategyId/versions/new` — создание новой версии на основе последней;
-- `/validation` — постановка backtest/walk-forward runs и состояние durable очереди.
+- `/validation` — постановка backtest/walk-forward runs и состояние durable очереди;
 - `/validation/:validationRunId` — полный отчёт запуска: метрики, equity/drawdown, gates,
   пары, сделки и provenance;
-- `/validation/compare` — сравнение 2–4 завершённых запусков.
+- `/validation/compare` — сравнение 2–4 завершённых запусков;
+- `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
 
 Реализованный private API:
 
@@ -72,7 +73,10 @@ pnpm dev
 - `POST /api/v1/strategies/:strategyId/status`;
 - `GET /api/v1/validations`;
 - `GET /api/v1/validations/:validationRunId?tradePage=1&tradeLimit=50`;
-- `POST /api/v1/strategies/:strategyId/validations`.
+- `POST /api/v1/strategies/:strategyId/validations`;
+- `GET /api/v1/deployments`;
+- `POST /api/v1/strategies/:strategyId/deployments`;
+- `POST /api/v1/deployments/:deploymentId/commands`.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit
@@ -93,6 +97,15 @@ walk-forward. Результат содержит PnL, доходность, dra
 per-symbol breakdown и provenance загружаются отдельным detail-запросом. Все сделки run
 хранятся в `ValidationTrade` и выдаются страницами до 100 строк, поэтому размер списка
 запусков не растёт вместе с историей сделок.
+
+Dry-run deployment создаётся только для активной approved-версии, имеющей завершённую
+passed-валидацию с тем же config hash. На один `DRY_RUN_ACCOUNT_ID` допускается один
+deployment в состоянии ready/running/paused. Start создаёт новый immutable
+`ExecutionRun.context` с version/config/validation provenance и SHA-256 context hash;
+pause/resume продолжают тот же run, stop завершает его. Каждая команда требует
+`expectedStatus`, reason и idempotency key, а результат и audit event записываются в той
+же транзакции. Текущий срез является control-plane: worker execution loop и генерация
+dry-run ордеров будут подключены отдельно.
 
 Текущая execution policy использует 1× совокупную экспозицию: номинал одной позиции
 ограничен `equity / maxOpenPositions`. Явные leverage и max exposure появятся вместе с

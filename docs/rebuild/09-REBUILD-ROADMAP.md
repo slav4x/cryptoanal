@@ -50,16 +50,18 @@ polling и без прямого обращения UI к exchange.
 
 ## Этап 3. Strategy workspace и runtime controls
 
-- [x] Ввести `Strategy` и создание immutable `StrategyVersion` v1; `Deployment` и `ExecutionRun` пока только в модели данных.
+- [x] Ввести `Strategy`, immutable `StrategyVersion`, `Deployment` и `ExecutionRun`.
 - [x] Разделить config на universe/signal/filters/risk/entry/exit/costs/schedule.
 - [x] Реализовать каталог стратегий.
 - [x] Реализовать секционный editor и создание первой версии.
 - [x] Реализовать strategy workspace, создание последующих версий и diff.
 - [x] Реализовать status transitions и validation eligibility.
-- [ ] Переписать runtime на immutable `ExecutionContext`.
-- [ ] Реализовать start/pause/stop и manual close как commands.
-- [ ] Добавить confirmations, idempotency, progress и audit events.
-- [ ] Поддерживать один активный deployment на account до multi-strategy readiness.
+- [x] Создавать immutable `ExecutionContext` при каждом start.
+- [x] Реализовать start/pause/resume/stop как атомарные commands.
+- [ ] Реализовать manual close позиции как отдельную command.
+- [x] Добавить confirmations, optimistic state, durable idempotency и audit events.
+- [x] Поддерживать один активный deployment на account до multi-strategy readiness.
+- [ ] Подключить worker execution loop к running dry-run deployment.
 
 **Готово, когда:** стратегию можно создать, версионировать и безопасно запустить из UI;
 каждая позиция знает точную version/run.
@@ -74,7 +76,7 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать run detail, trades, charts и breakdowns.
 - [x] Реализовать formal gates и понятные pass/fail reasons.
 - [x] Реализовать compare нескольких runs.
-- [ ] Связать validation verdict с разрешением deployment.
+- [x] Связать validation verdict и config hash с разрешением deployment.
 
 **Готово, когда:** результат можно воспроизвести и объяснить, а UI не блокирует HTTP на
 долгой проверке.

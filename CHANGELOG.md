@@ -44,6 +44,10 @@
 - Validation run detail API with paginated persisted trades and full metric provenance.
 - Validation report page with equity/drawdown chart, gates, symbol breakdown and trades.
 - Side-by-side comparison for two to four completed validation runs.
+- Dry-run deployment control-plane gated by approved, successfully validated strategy versions.
+- Immutable execution contexts with validation provenance and deterministic context hashes.
+- Start, pause, resume and stop commands with optimistic status checks, durable idempotency receipts and audit events.
+- Runtime dashboard with command confirmations and execution-run visibility.
 
 ### Changed
 

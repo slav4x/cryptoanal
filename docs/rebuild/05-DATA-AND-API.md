@@ -214,6 +214,21 @@ SHA-256 content hash; отдельная immutable dataset snapshot entity ос�
 per-symbol breakdown и paginated `ValidationTrade`. Сделки хранятся отдельно от JSON
 метрик, поэтому run detail не теряет историю и не раздувает каталог запусков.
 
+Runtime control-plane использует `GET /api/v1/deployments`,
+`POST /api/v1/strategies/:strategyId/deployments` и
+`POST /api/v1/deployments/:deploymentId/commands`. Deployment создаётся только для
+active approved-версии с completed/passed validation и совпадающим config hash. Start
+фиксирует полный `ExecutionRun.context`: workspace, deployment, run, version, account,
+config snapshot/hash, validation provenance, engine, clock и время старта. Отдельный
+context hash позволяет обнаружить любое изменение snapshot.
+
+`CommandReceipt` делает create/start/pause/resume/stop идемпотентными во времени, а
+`expectedStatus` защищает от команд по устаревшему UI. Account-level advisory lock
+обеспечивает не более одного deployment в ready/running/paused на dry-run account.
+Pause/resume сохраняют исходный execution run, stop атомарно завершает его и возвращает
+стратегию в approved. Каждая успешная команда создаёт `AuditEvent` с причиной и
+переходом состояния. Worker execution loop пока не является частью control-plane.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

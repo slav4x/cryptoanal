@@ -59,7 +59,7 @@
 - Equity, drawdown and daily PnL projections from the canonical closed-trade ledger.
 - Analytics workspace with performance metrics, PnL calendar and strategy/version, symbol and exit-reason breakdowns.
 - Trading cost attribution for fees, funding and slippage in analytics.
-- Operational health projection for API, database, worker, market/account data, queues, execution and outbox.
+- Operational health projection for API, database, worker, Bybit connectivity, market/account data, queues, execution and outbox.
 - Edge-triggered watchdog incidents with automatic resolution and episode counting.
 - Runtime drift comparison against the exact validation baseline captured by execution context.
 - System health workspace with domain statuses, incident history and drift metrics.

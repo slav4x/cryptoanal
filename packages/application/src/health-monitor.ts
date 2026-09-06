@@ -66,6 +66,20 @@ export function evaluateHealth(input: HealthMonitorInput) {
       !market.observedAt || age(input.now, market.observedAt) > input.thresholds.marketStaleMs,
   );
 
+  if (input.markets.length === 0) {
+    conditions.push({
+      fingerprint: "market-data:catalog-empty",
+      domain: "market-data",
+      code: "MARKET_CATALOG_EMPTY",
+      severity: "critical",
+      title: "Каталог рынков пуст",
+      description: "Нет включённых инструментов для проверки рыночных данных.",
+      resourceType: "market-instrument",
+      resourceId: null,
+      metadata: {},
+    });
+  }
+
   if (
     !input.workerLastSeenAt ||
     age(input.now, input.workerLastSeenAt) > input.thresholds.workerStaleMs
@@ -220,6 +234,7 @@ export function evaluateHealth(input: HealthMonitorInput) {
       conditions,
       latest(input.markets.map((market) => market.observedAt)),
     ),
+    exchangeDomain(input.markets, staleMarkets),
     domainFromConditions("account", "Торговый счёт", conditions, input.accountObservedAt),
     domainFromConditions("queue", "Очередь задач", conditions, input.oldestQueuedJobAt),
     domainFromConditions(
@@ -380,6 +395,47 @@ function driftDomain(
           ? "Runtime находится в допустимом диапазоне"
           : "Обнаружено отклонение от validated baseline";
   return domain("drift", "Validation drift", status, summary, now);
+}
+
+function exchangeDomain(
+  markets: HealthMonitorInput["markets"],
+  staleMarkets: HealthMonitorInput["markets"],
+) {
+  const observedAt = latest(markets.map((market) => market.observedAt));
+  if (markets.length === 0) {
+    return domain(
+      "exchange",
+      "Bybit public connection",
+      "unknown",
+      "Нет инструментов для проверки соединения",
+      observedAt,
+    );
+  }
+  if (staleMarkets.length === markets.length) {
+    return domain(
+      "exchange",
+      "Bybit public connection",
+      "critical",
+      "Новые market snapshots не поступают",
+      observedAt,
+    );
+  }
+  if (staleMarkets.length > 0) {
+    return domain(
+      "exchange",
+      "Bybit public connection",
+      "degraded",
+      "Соединение отвечает не для всех инструментов",
+      observedAt,
+    );
+  }
+  return domain(
+    "exchange",
+    "Bybit public connection",
+    "healthy",
+    "Свежие market snapshots подтверждают соединение",
+    observedAt,
+  );
 }
 
 function domain(

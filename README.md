@@ -90,8 +90,8 @@ strategy version, symbol и exit reason. Стартовая точка equity б
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
 
-Health projection проверяет API/database, worker heartbeat, свежесть market/account
-данных, validation queue, runtime failures, rejected orders и outbox lag. Worker с
+Health projection проверяет API/database, worker heartbeat, Bybit public connection,
+свежесть market/account данных, validation queue, runtime failures, rejected orders и outbox lag. Worker с
 интервалом `WATCHDOG_INTERVAL_MS` сохраняет edge-triggered инциденты и автоматически
 закрывает их после восстановления. Drift сравнивает runtime только с тем validation run,
 который зафиксирован в immutable execution context; до 20 закрытых сделок вывод не

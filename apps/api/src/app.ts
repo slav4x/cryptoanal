@@ -1,6 +1,7 @@
 import {
   calculateMarketAnalysis,
   buildPerformanceAnalytics,
+  evaluateHealth,
   canTransitionStrategyStatus,
   createDevelopmentContext,
   executionEngineVersion,
@@ -21,6 +22,7 @@ import {
   deploymentsSchema,
   errorEnvelopeSchema,
   healthSchema,
+  healthDashboardSchema,
   marketDetailSchema,
   marketSymbolParamsSchema,
   marketsSchema,
@@ -69,6 +71,7 @@ import {
   DeploymentStrategyNotFoundError,
   DeploymentValidationRequiredError,
   DeploymentVersionMismatchError,
+  HealthRepository,
   RuntimeIdempotencyConflictError,
   RuntimeManualCloseNotAllowedError,
   RuntimeMarketPriceUnavailableError,
@@ -121,6 +124,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   const repository = new DashboardRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
+  const healthRepository = new HealthRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
@@ -336,6 +340,86 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         meta: createMeta(
           request.id,
           !overview.account ? "unavailable" : accountFresh && workerHealthy ? "fresh" : "stale",
+        ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/health",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(healthDashboardSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const now = new Date();
+      const [signals, persistedIncidents] = await Promise.all([
+        healthRepository.getSignals(workspace.id, now),
+        healthRepository.listIncidents(workspace.id),
+      ]);
+      const health = evaluateHealth({
+        ...signals,
+        now,
+        initialCapital: config.DRY_RUN_INITIAL_BALANCE,
+        thresholds: createHealthThresholds(config),
+        driftCandidates: signals.driftCandidates.map((candidate) => ({
+          ...candidate,
+          environment: tradingEnvironment[candidate.environment],
+        })),
+      });
+      const persistedByFingerprint = new Map(
+        persistedIncidents.map((incident) => [incident.fingerprint, incident]),
+      );
+      const activeIncidents = health.conditions.map((condition) => {
+        const persisted = persistedByFingerprint.get(condition.fingerprint);
+        return persisted
+          ? serializeWatchdogIncident({ ...persisted, status: "OPEN", resolvedAt: null })
+          : {
+              id: `current:${condition.fingerprint}`,
+              fingerprint: condition.fingerprint,
+              domain: condition.domain,
+              code: condition.code,
+              severity: condition.severity,
+              status: "open" as const,
+              title: condition.title,
+              description: condition.description,
+              resourceType: condition.resourceType,
+              resourceId: condition.resourceId,
+              occurrenceCount: 1,
+              firstObservedAt: now.toISOString(),
+              lastObservedAt: now.toISOString(),
+              resolvedAt: null,
+            };
+      });
+      const resolvedIncidents = persistedIncidents
+        .filter((incident) => incident.status === "RESOLVED")
+        .map(serializeWatchdogIncident);
+
+      return {
+        data: {
+          overallStatus: health.overallStatus,
+          checkedAt: now.toISOString(),
+          watchdogLastSeenAt: signals.watchdogLastSeenAt?.toISOString() ?? null,
+          domains: health.domains.map((domain) => ({
+            ...domain,
+            observedAt: domain.observedAt?.toISOString() ?? null,
+          })),
+          incidents: [...activeIncidents, ...resolvedIncidents].slice(0, 100),
+          drift: health.drift,
+          notices: health.notices,
+        },
+        meta: createMeta(
+          request.id,
+          health.overallStatus === "healthy"
+            ? "fresh"
+            : health.overallStatus === "degraded"
+              ? "stale"
+              : "unavailable",
         ),
       };
     },
@@ -1501,6 +1585,53 @@ const analyticsPeriodDurationMs = {
 function getAnalyticsStartsAt(period: keyof typeof analyticsPeriodDurationMs): Date | null {
   const durationMs = analyticsPeriodDurationMs[period];
   return durationMs === null ? null : new Date(Date.now() - durationMs);
+}
+
+function createHealthThresholds(config: ServerConfig) {
+  return {
+    workerStaleMs: 45_000,
+    marketStaleMs: config.MARKET_POLL_INTERVAL_MS * 3,
+    accountStaleMs: config.ACCOUNT_SNAPSHOT_INTERVAL_MS * 2,
+    queueLagMs: 5 * 60_000,
+    outboxLagMs: 5 * 60_000,
+  };
+}
+
+function serializeWatchdogIncident(incident: {
+  id: string;
+  fingerprint: string;
+  domain: string;
+  code: string;
+  severity: "INFO" | "WARNING" | "CRITICAL";
+  status: "OPEN" | "RESOLVED";
+  title: string;
+  description: string;
+  resourceType: string | null;
+  resourceId: string | null;
+  occurrenceCount: number;
+  firstObservedAt: Date;
+  lastObservedAt: Date;
+  resolvedAt: Date | null;
+}) {
+  if (incident.severity === "INFO") {
+    throw new Error("Informational watchdog events must not be serialized as incidents");
+  }
+  return {
+    id: incident.id,
+    fingerprint: incident.fingerprint,
+    domain: incident.domain,
+    code: incident.code,
+    severity: incident.severity === "CRITICAL" ? ("critical" as const) : ("warning" as const),
+    status: incident.status === "OPEN" ? ("open" as const) : ("resolved" as const),
+    title: incident.title,
+    description: incident.description,
+    resourceType: incident.resourceType,
+    resourceId: incident.resourceId,
+    occurrenceCount: incident.occurrenceCount,
+    firstObservedAt: incident.firstObservedAt.toISOString(),
+    lastObservedAt: incident.lastObservedAt.toISOString(),
+    resolvedAt: incident.resolvedAt?.toISOString() ?? null,
+  };
 }
 
 function serializeAnalyticsBreakdown(

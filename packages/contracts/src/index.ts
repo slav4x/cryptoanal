@@ -752,6 +752,77 @@ export const deploymentMutationResultSchema = z.object({
 
 export const deploymentIdParamsSchema = z.object({ deploymentId: z.uuid() });
 
+export const healthLevelSchema = z.enum(["healthy", "degraded", "critical", "unknown"]);
+export const incidentSeveritySchema = z.enum(["warning", "critical"]);
+export const incidentStatusSchema = z.enum(["open", "resolved"]);
+
+const driftMetricsSchema = z.object({
+  trades: z.number().int().nonnegative(),
+  winRatePercent: z.number().nonnegative(),
+  expectancy: z.number(),
+  profitFactor: z.number().nonnegative().nullable(),
+  maxDrawdownPercent: z.number().nonnegative(),
+});
+
+export const healthDashboardSchema = z.object({
+  overallStatus: z.enum(["healthy", "degraded", "critical"]),
+  checkedAt: z.iso.datetime(),
+  watchdogLastSeenAt: z.iso.datetime().nullable(),
+  domains: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      status: healthLevelSchema,
+      summary: z.string(),
+      observedAt: z.iso.datetime().nullable(),
+    }),
+  ),
+  incidents: z.array(
+    z.object({
+      id: z.string(),
+      fingerprint: z.string(),
+      domain: z.string(),
+      code: z.string(),
+      severity: incidentSeveritySchema,
+      status: incidentStatusSchema,
+      title: z.string(),
+      description: z.string(),
+      resourceType: z.string().nullable(),
+      resourceId: z.string().nullable(),
+      occurrenceCount: z.number().int().positive(),
+      firstObservedAt: z.iso.datetime(),
+      lastObservedAt: z.iso.datetime(),
+      resolvedAt: z.iso.datetime().nullable(),
+    }),
+  ),
+  drift: z.array(
+    z.object({
+      deploymentId: z.string(),
+      executionRunId: z.string(),
+      strategyId: z.string(),
+      strategyName: z.string(),
+      strategyVersion: z.number().int().positive(),
+      environment: analyticsEnvironmentSchema,
+      validationRunId: z.string(),
+      status: z.enum(["insufficient-data", "within-range", "warning", "critical"]),
+      minimumSampleSize: z.number().int().positive(),
+      baseline: driftMetricsSchema,
+      runtime: driftMetricsSchema,
+      delta: z.object({
+        winRatePercentagePoints: z.number(),
+        expectancyPercent: z.number().nullable(),
+        profitFactorPercent: z.number().nullable(),
+        maxDrawdownPercentagePoints: z.number(),
+      }),
+    }),
+  ),
+  notices: z.object({
+    riskStops24h: z.number().int().nonnegative(),
+    rejectedOrders24h: z.number().int().nonnegative(),
+    failedJobs24h: z.number().int().nonnegative(),
+  }),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -824,5 +895,9 @@ export type DeploymentsDto = z.infer<typeof deploymentsSchema>;
 export type DeploymentCreateDto = z.infer<typeof deploymentCreateSchema>;
 export type DeploymentCommandInputDto = z.infer<typeof deploymentCommandInputSchema>;
 export type DeploymentMutationResultDto = z.infer<typeof deploymentMutationResultSchema>;
+export type HealthLevel = z.infer<typeof healthLevelSchema>;
+export type IncidentSeverity = z.infer<typeof incidentSeveritySchema>;
+export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
+export type HealthDashboardDto = z.infer<typeof healthDashboardSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

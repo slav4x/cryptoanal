@@ -83,10 +83,12 @@ polling и без прямого обращения UI к exchange.
 
 ## Этап 5. Analytics, health и explainability
 
-- [ ] Реализовать performance projections и фильтры.
-- [ ] Реализовать equity/drawdown/PnL calendar/distributions.
-- [ ] Реализовать breakdowns по strategy/version/symbol/regime/session/exit.
-- [ ] Реализовать costs analysis: fees/funding/slippage.
+- [x] Реализовать performance projections и фильтры.
+- [x] Реализовать equity/drawdown/PnL calendar.
+- [ ] Реализовать distributions результатов сделок.
+- [x] Реализовать breakdowns по strategy/version/symbol/exit.
+- [ ] Добавить breakdowns по market regime и trading session после фиксации этих полей в trade provenance.
+- [x] Реализовать costs analysis: fees/funding/slippage.
 - [ ] Реализовать decision/activity timeline.
 - [ ] Реализовать drift against validated baseline.
 - [ ] Реализовать health/watchdog/incidents.

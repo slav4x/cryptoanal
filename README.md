@@ -60,6 +60,7 @@ pnpm dev
   пары, сделки и provenance;
 - `/validation/compare` — сравнение 2–4 завершённых запусков;
 - `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
+- `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов.
 
 Реализованный private API:
 
@@ -78,6 +79,14 @@ pnpm dev
 - `POST /api/v1/strategies/:strategyId/deployments`;
 - `POST /api/v1/deployments/:deploymentId/commands`;
 - `POST /api/v1/positions/:positionId/close`.
+- `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`.
+
+Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
+стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
+profit factor, expectancy, costs, equity, drawdown, дневной PnL и breakdowns по
+strategy version, symbol и exit reason. Стартовая точка equity берётся из
+`DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
+исторический account snapshot.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit

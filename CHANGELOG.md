@@ -55,6 +55,10 @@
 - Content-addressed immutable validation dataset snapshots with canonical persisted candles.
 - Validation retry recovery from the already linked dataset snapshot.
 - Dataset source, actual coverage and integrity hash in validation report provenance.
+- Server-side performance analytics with period, environment, strategy and symbol filters.
+- Equity, drawdown and daily PnL projections from the canonical closed-trade ledger.
+- Analytics workspace with performance metrics, PnL calendar and strategy/version, symbol and exit-reason breakdowns.
+- Trading cost attribution for fees, funding and slippage in analytics.
 
 ### Changed
 

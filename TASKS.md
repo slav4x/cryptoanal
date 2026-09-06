@@ -54,8 +54,8 @@
 
 ## Этап 5 — Analytics
 
-- [ ] Performance projections и breakdowns.
-- [ ] Equity, drawdown и PnL calendar.
+- [x] Performance projections и breakdowns.
+- [x] Equity, drawdown и PnL calendar.
 - [ ] Health, drift и watchdog.
 - [ ] Activity/explainability.
 

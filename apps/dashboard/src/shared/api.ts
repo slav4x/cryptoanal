@@ -5,6 +5,7 @@ import {
   marketDetailSchema,
   marketsSchema,
   overviewSchema,
+  positionCloseResultSchema,
   requestContextSchema,
   strategyCatalogSchema,
   strategyCreatedSchema,
@@ -25,6 +26,8 @@ import {
   type DeploymentsDto,
   type OverviewPeriod,
   type OverviewDto,
+  type PositionCloseInputDto,
+  type PositionCloseResultDto,
   type RequestContextDto,
   type StrategyCatalogDto,
   type StrategyCreateDto,
@@ -113,6 +116,7 @@ const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedS
 const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailSchema);
 const deploymentsEnvelopeSchema = apiEnvelopeSchema(deploymentsSchema);
 const deploymentMutationResultEnvelopeSchema = apiEnvelopeSchema(deploymentMutationResultSchema);
+const positionCloseResultEnvelopeSchema = apiEnvelopeSchema(positionCloseResultSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -141,6 +145,17 @@ export function setWatchlisted(
 
 export function fetchTradingLedger(): Promise<ApiEnvelope<TradingLedgerDto>> {
   return request("/api/v1/trades", tradingLedgerEnvelopeSchema);
+}
+
+export function closePosition(
+  positionId: string,
+  input: PositionCloseInputDto,
+): Promise<ApiEnvelope<PositionCloseResultDto>> {
+  return request(
+    `/api/v1/positions/${encodeURIComponent(positionId)}/close`,
+    positionCloseResultEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
 }
 
 export function fetchTradeDetail(tradeId: string): Promise<ApiEnvelope<TradeDetailDto>> {

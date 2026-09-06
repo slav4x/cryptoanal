@@ -203,12 +203,16 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
   const [reason, setReason] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
   const mutation = useMutation({
-    mutationFn: (command: DeploymentCommandDto) =>
+    mutationFn: (input: {
+      command: DeploymentCommandDto;
+      reason: string;
+      idempotencyKey: string;
+    }) =>
       applyDeploymentCommand(deployment.id, {
-        command,
+        command: input.command,
         expectedStatus: deployment.status,
-        reason: reason.trim(),
-        idempotencyKey: crypto.randomUUID(),
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
       }),
     onSuccess: () => {
       setPendingCommand(null);
@@ -228,7 +232,11 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
       return;
     }
     setLocalError(null);
-    mutation.mutate(pendingCommand);
+    mutation.mutate({
+      command: pendingCommand,
+      reason: reason.trim(),
+      idempotencyKey: crypto.randomUUID(),
+    });
   }
 
   const executionRun = deployment.latestExecutionRun;
@@ -252,6 +260,18 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
           <MetaRow label="Execution run" value={executionRun?.id.slice(0, 8) ?? "Не создан"} mono />
           <MetaRow label="Engine" value={executionRun?.engineVersion ?? "—"} mono />
           <MetaRow
+            label="Позиции"
+            value={executionRun ? String(executionRun.openPositions) : "0"}
+          />
+          <MetaRow
+            label="Обработано пар"
+            value={executionRun ? String(executionRun.evaluatedSymbols) : "0"}
+          />
+          <MetaRow
+            label="Ошибки пар"
+            value={executionRun ? String(executionRun.failingSymbols) : "0"}
+          />
+          <MetaRow
             label="Context hash"
             value={executionRun ? `${executionRun.contextHash.slice(0, 12)}…` : "—"}
             mono
@@ -260,7 +280,26 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
             label="Запущен"
             value={executionRun?.startedAt ? formatDateTime(executionRun.startedAt) : "—"}
           />
+          <MetaRow
+            label="Последний цикл"
+            value={
+              executionRun?.lastEvaluatedAt ? formatDateTime(executionRun.lastEvaluatedAt) : "—"
+            }
+          />
         </div>
+
+        {executionRun?.lastDecision ? (
+          <div className="rounded-[10px] border border-row-border bg-secondary/35 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-secondary-foreground">Последнее решение</p>
+              <Badge variant="outline">{executionRun.lastDecision.action}</Badge>
+            </div>
+            <p className="mt-2 text-sm">{executionRun.lastDecision.summary}</p>
+            <p className="mt-1 font-mono text-[11px] text-stale">
+              {executionRun.lastDecision.symbol} · {executionRun.lastDecision.reasonCode}
+            </p>
+          </div>
+        ) : null}
 
         <div className="rounded-[10px] border border-row-border bg-secondary/35 p-3">
           <p className="text-xs font-medium text-secondary-foreground">Граница безопасности</p>
@@ -269,6 +308,12 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
             этому контуру пока не подключено.
           </p>
         </div>
+
+        {executionRun && executionRun.openPositions > 0 ? (
+          <p className="text-xs leading-5 text-warning">
+            Stop заблокирован до закрытия позиций. Ручное закрытие доступно в разделе «Сделки».
+          </p>
+        ) : null}
 
         {pendingCommand ? (
           <div className="space-y-3 border-t border-row-border pt-[18px]">

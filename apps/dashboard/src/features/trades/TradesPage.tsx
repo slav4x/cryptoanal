@@ -7,15 +7,17 @@ import {
   CardTitle,
   EmptyState,
   ErrorState,
+  Input,
   MetricCard,
   PageHeader,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ApiClientError, fetchTradingLedger } from "../../shared/api";
+import { ApiClientError, closePosition, fetchTradingLedger } from "../../shared/api";
 import { formatMoney, formatPrice } from "../../shared/format";
 
 export default function TradesPage() {
@@ -142,6 +144,28 @@ function PositionsTable({
 }: {
   positions: Awaited<ReturnType<typeof fetchTradingLedger>>["data"]["positions"];
 }) {
+  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const selectedPosition = positions.find((position) => position.id === selectedPositionId) ?? null;
+  const closeMutation = useMutation({
+    mutationFn: (input: { positionId: string; reason: string; idempotencyKey: string }) =>
+      closePosition(input.positionId, {
+        expectedStatus: "open",
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      }),
+    onSuccess: () => {
+      setSelectedPositionId(null);
+      setReason("");
+      setLocalError(null);
+      void queryClient.invalidateQueries({ queryKey: ["trading-ledger"] });
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    },
+  });
+
   if (positions.length === 0) {
     return (
       <Card>
@@ -161,8 +185,66 @@ function PositionsTable({
         <CardTitle>Открытые позиции</CardTitle>
       </CardHeader>
       <CardContent className="px-0 pb-0">
+        {selectedPosition ? (
+          <div className="grid gap-3 border-b border-row-border bg-secondary/30 px-[18px] py-4 lg:grid-cols-[1fr_320px_auto] lg:items-end">
+            <div>
+              <p className="text-sm font-medium">
+                Закрыть {selectedPosition.symbol} по актуальной dry-run цене?
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Будут созданы fill, trade, decision и audit event. Команда необратима.
+              </p>
+            </div>
+            <label className="space-y-2 text-xs font-medium text-secondary-foreground">
+              Причина закрытия
+              <Input
+                value={reason}
+                onChange={(event) => {
+                  setReason(event.target.value);
+                  setLocalError(null);
+                }}
+                placeholder="Например: ручная фиксация"
+                autoFocus
+              />
+            </label>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={closeMutation.isPending}
+                onClick={() => setSelectedPositionId(null)}
+              >
+                Отмена
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={closeMutation.isPending}
+                onClick={() => {
+                  if (reason.trim().length < 3) {
+                    setLocalError("Укажите причину закрытия");
+                    return;
+                  }
+                  setLocalError(null);
+                  closeMutation.mutate({
+                    positionId: selectedPosition.id,
+                    reason: reason.trim(),
+                    idempotencyKey: crypto.randomUUID(),
+                  });
+                }}
+              >
+                {closeMutation.isPending ? "Закрывается…" : "Подтвердить"}
+              </Button>
+            </div>
+            {localError || closeMutation.isError ? (
+              <p className="text-xs text-loss lg:col-span-3">
+                {localError ?? closeMutation.error?.message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-[13px]">
+          <table className="w-full min-w-[980px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                 <th className="px-4 py-3 font-medium">Открыта</th>
@@ -173,6 +255,7 @@ function PositionsTable({
                 <th className="px-3 py-3 text-right font-medium">Mark</th>
                 <th className="px-3 py-3 text-right font-medium">PnL</th>
                 <th className="px-4 py-3 font-medium">Стратегия</th>
+                <th className="px-4 py-3 text-right font-medium">Действие</th>
               </tr>
             </thead>
             <tbody>
@@ -211,6 +294,26 @@ function PositionsTable({
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {position.strategy.name} · v{position.strategy.version}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={position.environment !== "dry-run"}
+                      title={
+                        position.environment !== "dry-run"
+                          ? "Ручное закрытие сейчас доступно только в dry-run"
+                          : undefined
+                      }
+                      onClick={() => {
+                        closeMutation.reset();
+                        setReason("");
+                        setLocalError(null);
+                        setSelectedPositionId(position.id);
+                      }}
+                    >
+                      Закрыть
+                    </Button>
                   </td>
                 </tr>
               ))}

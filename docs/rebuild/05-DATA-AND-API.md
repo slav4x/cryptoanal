@@ -209,6 +209,11 @@ Worker атомарно получает job через ограниченный
 SHA-256 content hash; отдельная immutable dataset snapshot entity остаётся следующим
 шагом для полной воспроизводимости независимо от market storage.
 
+`GET /api/v1/validations` возвращает лёгкие summary-метрики для очереди и compare.
+`GET /api/v1/validations/:validationRunId` отдаёт полный metrics payload, equity series,
+per-symbol breakdown и paginated `ValidationTrade`. Сделки хранятся отдельно от JSON
+метрик, поэтому run detail не теряет историю и не раздувает каталог запусков.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

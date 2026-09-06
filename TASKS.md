@@ -46,7 +46,7 @@
 - [x] Run composer и мониторинг очереди в Validation Center.
 - [x] Worker execution для backtest/walk-forward jobs.
 - [x] Validation gates и provenance.
-- [ ] Run details и compare.
+- [x] Run details и compare.
 
 ## Этап 5 — Analytics
 

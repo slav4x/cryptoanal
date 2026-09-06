@@ -71,9 +71,9 @@ polling и без прямого обращения UI к exchange.
 - [x] Перевести backtest/walk-forward в asynchronous jobs.
 - [x] Реализовать создание ValidationRun, durable Job и очередь статусов.
 - [x] Реализовать Validation Center composer и список очереди.
-- [ ] Реализовать run detail, trades, charts и breakdowns.
+- [x] Реализовать run detail, trades, charts и breakdowns.
 - [x] Реализовать formal gates и понятные pass/fail reasons.
-- [ ] Реализовать compare нескольких runs.
+- [x] Реализовать compare нескольких runs.
 - [ ] Связать validation verdict с разрешением deployment.
 
 **Готово, когда:** результат можно воспроизвести и объяснить, а UI не блокирует HTTP на

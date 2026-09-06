@@ -56,6 +56,9 @@ pnpm dev
 - `/strategies/:strategyId` — workspace стратегии с обзором, конфигурацией и историей версий;
 - `/strategies/:strategyId/versions/new` — создание новой версии на основе последней;
 - `/validation` — постановка backtest/walk-forward runs и состояние durable очереди.
+- `/validation/:validationRunId` — полный отчёт запуска: метрики, equity/drawdown, gates,
+  пары, сделки и provenance;
+- `/validation/compare` — сравнение 2–4 завершённых запусков.
 
 Реализованный private API:
 
@@ -68,6 +71,7 @@ pnpm dev
 - `POST /api/v1/strategies/:strategyId/versions`;
 - `POST /api/v1/strategies/:strategyId/status`;
 - `GET /api/v1/validations`;
+- `GET /api/v1/validations/:validationRunId?tradePage=1&tradeLimit=50`;
 - `POST /api/v1/strategies/:strategyId/validations`.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
@@ -84,6 +88,11 @@ walk-forward. Результат содержит PnL, доходность, dra
 комиссии, сделки, validation gates и SHA-256 provenance фактического датасета. Один run
 ограничен 10 парами и 250 000 свечей; при недоступных или недостаточных данных run
 завершается явной ошибкой без синтетического результата.
+
+Каталог validation возвращает только лёгкие summary-метрики. Полные equity points,
+per-symbol breakdown и provenance загружаются отдельным detail-запросом. Все сделки run
+хранятся в `ValidationTrade` и выдаются страницами до 100 строк, поэтому размер списка
+запусков не растёт вместе с историей сделок.
 
 Текущая execution policy использует 1× совокупную экспозицию: номинал одной позиции
 ограничен `equity / maxOpenPositions`. Явные leverage и max exposure появятся вместе с

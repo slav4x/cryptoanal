@@ -41,6 +41,9 @@
 - Paginated Bybit historical candle materialization for validation datasets.
 - Deterministic backtest and walk-forward execution with fees, slippage, risk sizing and conservative stop handling.
 - Validation metrics, quality gates, dataset content hash and compact results in Validation Center.
+- Validation run detail API with paginated persisted trades and full metric provenance.
+- Validation report page with equity/drawdown chart, gates, symbol breakdown and trades.
+- Side-by-side comparison for two to four completed validation runs.
 
 ### Changed
 
@@ -51,3 +54,4 @@
 - Request validation errors now return a structured `400` response.
 - Creating a new version from an approved strategy now clears its approval and active version.
 - Validation datasets are capped at 10 symbols and 250,000 candles per run.
+- Validation catalog responses now contain summary metrics; heavy series are loaded by run detail.

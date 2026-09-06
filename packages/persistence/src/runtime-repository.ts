@@ -257,6 +257,8 @@ export class RuntimeRepository {
 
       let decision = input.decision;
       let action = input.positionAction;
+      let decisionPositionId = currentPosition?.id ?? null;
+      let decisionTradeId: string | null = null;
       if (action.kind === "open") {
         const openPositions = await transaction.position.count({
           where: {
@@ -310,6 +312,7 @@ export class RuntimeRepository {
           },
           select: { id: true, entryFee: true },
         });
+        decisionPositionId = position.id;
         await createFilledOrder(transaction, {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
@@ -324,7 +327,7 @@ export class RuntimeRepository {
           filledAt: action.position.openedAt,
         });
         if (action.immediateSettlement) {
-          await persistClosedPosition(
+          const trade = await persistClosedPosition(
             transaction,
             {
               workspaceId: input.workspaceId,
@@ -341,6 +344,7 @@ export class RuntimeRepository {
             },
             action.immediateSettlement,
           );
+          decisionTradeId = trade.id;
         }
       } else if (action.kind === "close") {
         const position = await transaction.position.findUniqueOrThrow({
@@ -354,7 +358,7 @@ export class RuntimeRepository {
             openedAt: true,
           },
         });
-        await persistClosedPosition(
+        const trade = await persistClosedPosition(
           transaction,
           {
             workspaceId: input.workspaceId,
@@ -371,6 +375,8 @@ export class RuntimeRepository {
           },
           action.settlement,
         );
+        decisionPositionId = position.id;
+        decisionTradeId = trade.id;
       }
 
       const persistedDecision = await transaction.decision.create({
@@ -378,6 +384,8 @@ export class RuntimeRepository {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
+          positionId: decisionPositionId,
+          tradeId: decisionTradeId,
           symbol: input.symbol,
           action: decision.action,
           reasonCode: decision.reasonCode,
@@ -563,6 +571,8 @@ export class RuntimeRepository {
           workspaceId: input.workspaceId,
           executionRunId: position.executionRunId,
           strategyVersionId: position.strategyVersionId,
+          positionId: position.id,
+          tradeId: trade.id,
           symbol: position.symbol,
           action: "CLOSE",
           reasonCode: "MANUAL_CLOSE",

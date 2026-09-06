@@ -450,6 +450,7 @@ model Position {
   instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   orders            Order[]
   trade             Trade?
+  decisions         Decision[]
 
   @@index([workspaceId, status, openedAt])
   @@index([workspaceId, symbol, status])
@@ -524,6 +525,7 @@ model Trade {
   executionRun      ExecutionRun       @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
   strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
   instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  decisions         Decision[]
 
   @@index([workspaceId, closedAt])
   @@index([workspaceId, strategyVersionId, closedAt])
@@ -534,6 +536,8 @@ model Decision {
   workspaceId       String
   executionRunId    String
   strategyVersionId String
+  positionId        String?
+  tradeId           String?
   symbol            String
   action            DecisionAction
   reasonCode        String
@@ -546,11 +550,15 @@ model Decision {
   workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   executionRun      ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
   strategyVersion   StrategyVersion  @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  position          Position?        @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  trade             Trade?           @relation(fields: [tradeId], references: [id], onDelete: SetNull)
   instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
 
   @@unique([workspaceId, correlationId])
   @@index([workspaceId, decidedAt])
   @@index([workspaceId, symbol, decidedAt])
+  @@index([positionId])
+  @@index([tradeId])
 }
 
 model RuntimeCursor {

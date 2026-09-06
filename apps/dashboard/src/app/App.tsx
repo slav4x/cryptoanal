@@ -18,6 +18,7 @@ const ValidationRunPage = lazy(() => import("../features/validation/ValidationRu
 const ValidationComparePage = lazy(() => import("../features/validation/ValidationComparePage"));
 const RuntimePage = lazy(() => import("../features/runtime/RuntimePage"));
 const AnalyticsPage = lazy(() => import("../features/analytics/AnalyticsPage"));
+const HealthPage = lazy(() => import("../features/health/HealthPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 
 export function App() {
@@ -134,6 +135,14 @@ export function App() {
             element={
               <Suspense fallback={<RouteFallback />}>
                 <AnalyticsPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="analytics/health"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <HealthPage />
               </Suspense>
             }
           />

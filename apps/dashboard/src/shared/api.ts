@@ -3,6 +3,7 @@ import {
   analyticsSchema,
   deploymentMutationResultSchema,
   deploymentsSchema,
+  healthDashboardSchema,
   marketDetailSchema,
   marketsSchema,
   overviewSchema,
@@ -27,6 +28,7 @@ import {
   type DeploymentCreateDto,
   type DeploymentMutationResultDto,
   type DeploymentsDto,
+  type HealthDashboardDto,
   type OverviewPeriod,
   type OverviewDto,
   type PositionCloseInputDto,
@@ -104,6 +106,7 @@ async function request<T>(
 
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
+const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
@@ -136,6 +139,10 @@ export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<
   if (filters.strategyId) query.set("strategyId", filters.strategyId);
   if (filters.symbol) query.set("symbol", filters.symbol);
   return request(`/api/v1/analytics?${query.toString()}`, analyticsEnvelopeSchema);
+}
+
+export function fetchHealthDashboard(): Promise<ApiEnvelope<HealthDashboardDto>> {
+  return request("/api/v1/health", healthDashboardEnvelopeSchema);
 }
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {

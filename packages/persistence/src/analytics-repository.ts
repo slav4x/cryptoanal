@@ -27,6 +27,8 @@ export class AnalyticsRepository {
           id: true,
           symbol: true,
           environment: true,
+          entryRegime: true,
+          entrySession: true,
           grossPnl: true,
           fees: true,
           funding: true,
@@ -70,6 +72,8 @@ export class AnalyticsRepository {
         id: trade.id,
         symbol: trade.symbol,
         environment: trade.environment,
+        entryRegime: analyticsMarketRegime[trade.entryRegime],
+        entrySession: analyticsTradingSession[trade.entrySession],
         grossPnl: trade.grossPnl.toNumber(),
         fees: trade.fees.toNumber(),
         funding: trade.funding.toNumber(),
@@ -94,3 +98,18 @@ export class AnalyticsRepository {
     };
   }
 }
+
+const analyticsMarketRegime = {
+  BULL: "bull",
+  BEAR: "bear",
+  NEUTRAL: "neutral",
+  UNKNOWN: "unknown",
+} as const;
+
+const analyticsTradingSession = {
+  ASIA: "asia",
+  EUROPE: "europe",
+  US: "us",
+  OFF_HOURS: "off-hours",
+  UNKNOWN: "unknown",
+} as const;

@@ -50,6 +50,8 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 export type ExecutionPosition = {
   symbol: string;
   side: "long" | "short";
+  entryRegime: ExecutionMarketRegime;
+  entrySession: ExecutionTradingSession;
   openedAt: Date;
   entryPrice: number;
   quantity: number;
@@ -66,12 +68,17 @@ export type PendingExecutionSignal = {
   signalPrice: number;
 };
 
+export type ExecutionMarketRegime = "bull" | "bear" | "neutral" | "unknown";
+export type ExecutionTradingSession = "asia" | "europe" | "us" | "off-hours" | "unknown";
+
 export type AutomaticExitReason = "stop-loss" | "take-profit" | "trailing-stop";
 export type ExecutionExitReason = AutomaticExitReason | "end-of-data" | "manual";
 
 export type ExecutionSettlement<Reason extends ExecutionExitReason = ExecutionExitReason> = {
   symbol: string;
   side: "long" | "short";
+  entryRegime: ExecutionMarketRegime;
+  entrySession: ExecutionTradingSession;
   openedAt: string;
   closedAt: string;
   entryPrice: number;
@@ -184,6 +191,8 @@ export function openExecutionPosition(
   return {
     symbol: candle.symbol,
     side,
+    entryRegime: getExecutionMarketRegime(candle),
+    entrySession: getExecutionTradingSession(candle.openTime),
     openedAt: candle.openTime,
     entryPrice,
     quantity,
@@ -282,6 +291,8 @@ export function settleExecutionPosition<Reason extends ExecutionExitReason>(
   return {
     symbol: position.symbol,
     side: position.side,
+    entryRegime: position.entryRegime,
+    entrySession: position.entrySession,
     openedAt: position.openedAt.toISOString(),
     closedAt: closedAt.toISOString(),
     entryPrice: roundExecutionValue(position.entryPrice),
@@ -298,6 +309,23 @@ export function settleExecutionPosition<Reason extends ExecutionExitReason>(
 export function executionUnrealizedPnl(position: ExecutionPosition, markPrice: number): number {
   const direction = position.side === "long" ? 1 : -1;
   return roundExecutionValue((markPrice - position.entryPrice) * position.quantity * direction);
+}
+
+export function getExecutionMarketRegime(
+  candle: Pick<EnrichedExecutionCandle, "emaFast" | "emaSlow">,
+): ExecutionMarketRegime {
+  if (candle.emaFast === null || candle.emaSlow === null) return "unknown";
+  if (candle.emaFast > candle.emaSlow) return "bull";
+  if (candle.emaFast < candle.emaSlow) return "bear";
+  return "neutral";
+}
+
+export function getExecutionTradingSession(date: Date): ExecutionTradingSession {
+  const hour = date.getUTCHours();
+  if (hour < 8) return "asia";
+  if (hour < 13) return "europe";
+  if (hour < 21) return "us";
+  return "off-hours";
 }
 
 export function minimumExecutionCandleCount(config: ExecutionStrategyConfig): number {

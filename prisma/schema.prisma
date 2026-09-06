@@ -113,6 +113,21 @@ enum IncidentStatus {
   RESOLVED
 }
 
+enum MarketRegime {
+  BULL
+  BEAR
+  NEUTRAL
+  UNKNOWN
+}
+
+enum TradingSession {
+  ASIA
+  EUROPE
+  US
+  OFF_HOURS
+  UNKNOWN
+}
+
 model Workspace {
   id                String             @id @default(uuid())
   slug              String             @unique
@@ -428,6 +443,8 @@ model Position {
   symbol            String
   environment       TradingEnvironment
   side              OrderSide
+  entryRegime       MarketRegime       @default(UNKNOWN)
+  entrySession      TradingSession     @default(UNKNOWN)
   status            PositionStatus     @default(OPEN)
   quantity          Decimal            @db.Decimal(38, 18)
   entryPrice        Decimal            @db.Decimal(38, 18)
@@ -508,6 +525,8 @@ model Trade {
   symbol            String
   environment       TradingEnvironment
   side              OrderSide
+  entryRegime       MarketRegime       @default(UNKNOWN)
+  entrySession      TradingSession     @default(UNKNOWN)
   quantity          Decimal            @db.Decimal(38, 18)
   averageEntryPrice Decimal            @db.Decimal(38, 18)
   averageExitPrice  Decimal            @db.Decimal(38, 18)

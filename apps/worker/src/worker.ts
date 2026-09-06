@@ -4,6 +4,8 @@ import {
   evaluateExecutionExit,
   executionUnrealizedPnl,
   getExecutionSignal,
+  getExecutionMarketRegime,
+  getExecutionTradingSession,
   getTradingDateKey,
   minimumExecutionCandleCount,
   openExecutionPosition,
@@ -779,6 +781,8 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 function deserializeExecutionPosition(position: {
   symbol?: string;
   side: "BUY" | "SELL";
+  entryRegime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN";
+  entrySession: "ASIA" | "EUROPE" | "US" | "OFF_HOURS" | "UNKNOWN";
   openedAt: Date;
   entryPrice: { toNumber(): number };
   quantity: { toNumber(): number };
@@ -792,6 +796,8 @@ function deserializeExecutionPosition(position: {
   return {
     symbol: position.symbol ?? "",
     side: position.side === "BUY" ? "long" : "short",
+    entryRegime: deserializeMarketRegime(position.entryRegime),
+    entrySession: deserializeTradingSession(position.entrySession),
     openedAt: position.openedAt,
     entryPrice: position.entryPrice.toNumber(),
     quantity: position.quantity.toNumber(),
@@ -808,6 +814,8 @@ function serializePosition(position: ExecutionPosition) {
   return {
     symbol: position.symbol,
     side: position.side === "long" ? ("BUY" as const) : ("SELL" as const),
+    entryRegime: serializeMarketRegime(position.entryRegime),
+    entrySession: serializeTradingSession(position.entrySession),
     openedAt: position.openedAt,
     entryPrice: String(position.entryPrice),
     quantity: String(position.quantity),
@@ -844,6 +852,7 @@ function parsePendingSignal(value: unknown): PendingExecutionSignal | null {
 
 function runtimeFactors(
   candle: {
+    openTime: Date;
     open: number;
     high: number;
     low: number;
@@ -859,6 +868,10 @@ function runtimeFactors(
 ) {
   return {
     candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close },
+    market: {
+      regime: getExecutionMarketRegime(candle),
+      session: getExecutionTradingSession(candle.openTime),
+    },
     indicators: {
       emaFast: candle.emaFast,
       emaSlow: candle.emaSlow,
@@ -868,6 +881,50 @@ function runtimeFactors(
     },
     risk: { dailyPnl, equity },
   };
+}
+
+function serializeMarketRegime(regime: ExecutionPosition["entryRegime"]) {
+  return regime === "bull"
+    ? ("BULL" as const)
+    : regime === "bear"
+      ? ("BEAR" as const)
+      : regime === "neutral"
+        ? ("NEUTRAL" as const)
+        : ("UNKNOWN" as const);
+}
+
+function deserializeMarketRegime(regime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN") {
+  return regime === "BULL"
+    ? ("bull" as const)
+    : regime === "BEAR"
+      ? ("bear" as const)
+      : regime === "NEUTRAL"
+        ? ("neutral" as const)
+        : ("unknown" as const);
+}
+
+function serializeTradingSession(session: ExecutionPosition["entrySession"]) {
+  return session === "asia"
+    ? ("ASIA" as const)
+    : session === "europe"
+      ? ("EUROPE" as const)
+      : session === "us"
+        ? ("US" as const)
+        : session === "off-hours"
+          ? ("OFF_HOURS" as const)
+          : ("UNKNOWN" as const);
+}
+
+function deserializeTradingSession(session: "ASIA" | "EUROPE" | "US" | "OFF_HOURS" | "UNKNOWN") {
+  return session === "ASIA"
+    ? ("asia" as const)
+    : session === "EUROPE"
+      ? ("europe" as const)
+      : session === "US"
+        ? ("us" as const)
+        : session === "OFF_HOURS"
+          ? ("off-hours" as const)
+          : ("unknown" as const);
 }
 
 function validationFailure(error: unknown): { code: string; message: string } {

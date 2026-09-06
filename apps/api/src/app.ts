@@ -587,6 +587,20 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             strategies: serializeAnalyticsBreakdown(analytics.breakdowns.strategies),
             symbols: serializeAnalyticsBreakdown(analytics.breakdowns.symbols),
             exitReasons: serializeAnalyticsBreakdown(analytics.breakdowns.exitReasons),
+            regimes: serializeAnalyticsBreakdown(analytics.breakdowns.regimes),
+            sessions: serializeAnalyticsBreakdown(analytics.breakdowns.sessions),
+          },
+          distributions: {
+            pnl: analytics.distributions.pnl.map((bucket) => ({
+              ...bucket,
+              from: String(bucket.from),
+              to: String(bucket.to),
+              netPnl: String(bucket.netPnl),
+            })),
+            holdingTime: analytics.distributions.holdingTime.map((bucket) => ({
+              ...bucket,
+              netPnl: String(bucket.netPnl),
+            })),
           },
         },
         meta: createMeta(request.id, analytics.summary.trades > 0 ? "fresh" : "unavailable"),
@@ -1468,6 +1482,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           {
             symbol: position.symbol,
             side: position.side === "BUY" ? "long" : "short",
+            entryRegime: marketRegime[position.entryRegime],
+            entrySession: tradingSession[position.entrySession],
             openedAt: position.openedAt,
             entryPrice: position.entryPrice.toNumber(),
             quantity: position.quantity.toNumber(),
@@ -1548,6 +1564,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             symbol: trade.symbol,
             environment: tradingEnvironment[trade.environment],
             side: orderSide[trade.side],
+            entryRegime: marketRegime[trade.entryRegime],
+            entrySession: tradingSession[trade.entrySession],
             quantity: trade.quantity.toFixed(),
             averageEntryPrice: trade.averageEntryPrice.toFixed(),
             averageExitPrice: trade.averageExitPrice.toFixed(),
@@ -1597,6 +1615,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             symbol: detail.symbol,
             environment: tradingEnvironment[detail.environment],
             side: orderSide[detail.side],
+            entryRegime: marketRegime[detail.entryRegime],
+            entrySession: tradingSession[detail.entrySession],
             quantity: detail.quantity.toFixed(),
             averageEntryPrice: detail.averageEntryPrice.toFixed(),
             averageExitPrice: detail.averageExitPrice.toFixed(),
@@ -2129,6 +2149,21 @@ const analyticsTradingEnvironment = {
 const orderSide = {
   BUY: "buy",
   SELL: "sell",
+} as const;
+
+const marketRegime = {
+  BULL: "bull",
+  BEAR: "bear",
+  NEUTRAL: "neutral",
+  UNKNOWN: "unknown",
+} as const;
+
+const tradingSession = {
+  ASIA: "asia",
+  EUROPE: "europe",
+  US: "us",
+  OFF_HOURS: "off-hours",
+  UNKNOWN: "unknown",
 } as const;
 
 const orderType = {

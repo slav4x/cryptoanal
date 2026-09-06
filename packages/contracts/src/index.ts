@@ -137,6 +137,8 @@ export const positionSchema = z.object({
 
 export const analyticsPeriodSchema = z.enum(["7d", "30d", "90d", "all"]);
 export const analyticsEnvironmentSchema = z.enum(["dry-run", "demo", "live"]);
+export const marketRegimeSchema = z.enum(["bull", "bear", "neutral", "unknown"]);
+export const tradingSessionSchema = z.enum(["asia", "europe", "us", "off-hours", "unknown"]);
 export const analyticsQuerySchema = z.object({
   period: analyticsPeriodSchema.default("30d"),
   environment: analyticsEnvironmentSchema.optional(),
@@ -210,6 +212,29 @@ export const analyticsSchema = z.object({
     strategies: z.array(analyticsBreakdownSchema),
     symbols: z.array(analyticsBreakdownSchema),
     exitReasons: z.array(analyticsBreakdownSchema),
+    regimes: z.array(analyticsBreakdownSchema),
+    sessions: z.array(analyticsBreakdownSchema),
+  }),
+  distributions: z.object({
+    pnl: z.array(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        trades: z.number().int().nonnegative(),
+        netPnl: z.string(),
+      }),
+    ),
+    holdingTime: z.array(
+      z.object({
+        key: z.string(),
+        label: z.string(),
+        minMinutes: z.number().nonnegative(),
+        maxMinutes: z.number().positive().nullable(),
+        trades: z.number().int().nonnegative(),
+        winRatePercent: z.number().nonnegative(),
+        netPnl: z.string(),
+      }),
+    ),
   }),
 });
 
@@ -218,6 +243,8 @@ export const tradeSchema = z.object({
   symbol: z.string(),
   environment: z.enum(["dry-run", "demo", "live"]),
   side: z.enum(["buy", "sell"]),
+  entryRegime: marketRegimeSchema,
+  entrySession: tradingSessionSchema,
   quantity: z.string(),
   averageEntryPrice: z.string(),
   averageExitPrice: z.string(),

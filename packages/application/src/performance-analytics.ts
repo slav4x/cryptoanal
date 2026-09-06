@@ -2,6 +2,8 @@ export type PerformanceTrade = {
   id: string;
   symbol: string;
   environment: "dry-run" | "demo" | "live";
+  entryRegime: "bull" | "bear" | "neutral" | "unknown";
+  entrySession: "asia" | "europe" | "us" | "off-hours" | "unknown";
   grossPnl: number;
   fees: number;
   funding: number;
@@ -26,6 +28,23 @@ export type PerformanceBreakdown = {
   grossPnl: number;
   netPnl: number;
   costs: number;
+};
+
+export type PerformancePnlDistributionBucket = {
+  from: number;
+  to: number;
+  trades: number;
+  netPnl: number;
+};
+
+export type PerformanceHoldingTimeBucket = {
+  key: string;
+  label: string;
+  minMinutes: number;
+  maxMinutes: number | null;
+  trades: number;
+  winRatePercent: number;
+  netPnl: number;
 };
 
 export type PerformanceAnalytics = {
@@ -60,6 +79,12 @@ export type PerformanceAnalytics = {
     strategies: PerformanceBreakdown[];
     symbols: PerformanceBreakdown[];
     exitReasons: PerformanceBreakdown[];
+    regimes: PerformanceBreakdown[];
+    sessions: PerformanceBreakdown[];
+  };
+  distributions: {
+    pnl: PerformancePnlDistributionBucket[];
+    holdingTime: PerformanceHoldingTimeBucket[];
   };
 };
 
@@ -152,8 +177,84 @@ export function buildPerformanceAnalytics(
         (trade) => trade.exitReason,
         (trade) => trade.exitReason,
       ),
+      regimes: createBreakdown(
+        trades,
+        (trade) => trade.entryRegime,
+        (trade) => trade.entryRegime,
+      ),
+      sessions: createBreakdown(
+        trades,
+        (trade) => trade.entrySession,
+        (trade) => trade.entrySession,
+      ),
+    },
+    distributions: {
+      pnl: createPnlDistribution(trades),
+      holdingTime: createHoldingTimeDistribution(trades),
     },
   };
+}
+
+function createPnlDistribution(trades: PerformanceTrade[]): PerformancePnlDistributionBucket[] {
+  if (trades.length === 0) return [];
+  const values = trades.map((trade) => trade.netPnl);
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  if (minimum === maximum) {
+    return [
+      {
+        from: round(minimum),
+        to: round(maximum),
+        trades: trades.length,
+        netPnl: round(sum(values)),
+      },
+    ];
+  }
+
+  const bucketCount = Math.min(10, Math.max(1, Math.ceil(Math.sqrt(trades.length))));
+  const width = (maximum - minimum) / bucketCount;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    from: round(minimum + width * index),
+    to: round(index === bucketCount - 1 ? maximum : minimum + width * (index + 1)),
+    trades: 0,
+    netPnl: 0,
+  }));
+
+  for (const trade of trades) {
+    const index = Math.min(bucketCount - 1, Math.floor((trade.netPnl - minimum) / width));
+    const bucket = buckets[index]!;
+    bucket.trades += 1;
+    bucket.netPnl = round(bucket.netPnl + trade.netPnl);
+  }
+  return buckets;
+}
+
+function createHoldingTimeDistribution(trades: PerformanceTrade[]): PerformanceHoldingTimeBucket[] {
+  const definitions = [
+    { key: "under-15m", label: "< 15 мин", minMinutes: 0, maxMinutes: 15 },
+    { key: "15m-1h", label: "15 мин – 1 ч", minMinutes: 15, maxMinutes: 60 },
+    { key: "1h-4h", label: "1–4 ч", minMinutes: 60, maxMinutes: 240 },
+    { key: "4h-24h", label: "4–24 ч", minMinutes: 240, maxMinutes: 1_440 },
+    { key: "1d-3d", label: "1–3 дня", minMinutes: 1_440, maxMinutes: 4_320 },
+    { key: "over-3d", label: "> 3 дней", minMinutes: 4_320, maxMinutes: null },
+  ] as const;
+
+  return definitions.map((definition) => {
+    const groupedTrades = trades.filter((trade) => {
+      const minutes = Math.max(0, trade.closedAt.getTime() - trade.openedAt.getTime()) / 60_000;
+      return (
+        minutes >= definition.minMinutes &&
+        (definition.maxMinutes === null || minutes < definition.maxMinutes)
+      );
+    });
+    const wins = groupedTrades.filter((trade) => trade.netPnl > 0).length;
+    return {
+      ...definition,
+      trades: groupedTrades.length,
+      winRatePercent: round(ratio(wins, groupedTrades.length) * 100),
+      netPnl: round(sum(groupedTrades.map((trade) => trade.netPnl))),
+    };
+  });
 }
 
 function createBreakdown(

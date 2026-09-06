@@ -6,6 +6,8 @@ type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 export type RuntimeCyclePosition = {
   symbol: string;
   side: "BUY" | "SELL";
+  entryRegime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN";
+  entrySession: "ASIA" | "EUROPE" | "US" | "OFF_HOURS" | "UNKNOWN";
   openedAt: Date;
   entryPrice: string;
   quantity: string;
@@ -140,6 +142,8 @@ export class RuntimeRepository {
           bestPrice: true,
           entryFee: true,
           entrySlippage: true,
+          entryRegime: true,
+          entrySession: true,
         },
       }),
       this.prisma.marketCandle.findMany({
@@ -297,6 +301,8 @@ export class RuntimeRepository {
             symbol: input.symbol,
             environment: "DRY_RUN",
             side: action.position.side,
+            entryRegime: action.position.entryRegime,
+            entrySession: action.position.entrySession,
             status: "OPEN",
             quantity: action.position.quantity,
             entryPrice: action.position.entryPrice,
@@ -339,6 +345,8 @@ export class RuntimeRepository {
               quantity: action.position.quantity,
               entryPrice: action.position.entryPrice,
               entryFee: position.entryFee.toFixed(),
+              entryRegime: action.position.entryRegime,
+              entrySession: action.position.entrySession,
               openedAt: action.position.openedAt,
               correlationId,
             },
@@ -355,6 +363,8 @@ export class RuntimeRepository {
             quantity: true,
             entryPrice: true,
             entryFee: true,
+            entryRegime: true,
+            entrySession: true,
             openedAt: true,
           },
         });
@@ -370,6 +380,8 @@ export class RuntimeRepository {
             quantity: position.quantity.toFixed(),
             entryPrice: position.entryPrice.toFixed(),
             entryFee: position.entryFee.toFixed(),
+            entryRegime: position.entryRegime,
+            entrySession: position.entrySession,
             openedAt: position.openedAt,
             correlationId,
           },
@@ -443,6 +455,8 @@ export class RuntimeRepository {
         bestPrice: true,
         entryFee: true,
         entrySlippage: true,
+        entryRegime: true,
+        entrySession: true,
         executionRunId: true,
         strategyVersionId: true,
         strategyVersion: { select: { config: true } },
@@ -526,6 +540,8 @@ export class RuntimeRepository {
           quantity: true,
           entryPrice: true,
           entryFee: true,
+          entryRegime: true,
+          entrySession: true,
           openedAt: true,
           executionRun: {
             select: { status: true, deployment: { select: { status: true } } },
@@ -561,6 +577,8 @@ export class RuntimeRepository {
           quantity: position.quantity.toFixed(),
           entryPrice: position.entryPrice.toFixed(),
           entryFee: position.entryFee.toFixed(),
+          entryRegime: position.entryRegime,
+          entrySession: position.entrySession,
           openedAt: position.openedAt,
           correlationId,
         },
@@ -706,6 +724,8 @@ async function persistClosedPosition(
     quantity: string;
     entryPrice: string;
     entryFee: string;
+    entryRegime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN";
+    entrySession: "ASIA" | "EUROPE" | "US" | "OFF_HOURS" | "UNKNOWN";
     openedAt: Date;
     correlationId: string;
   },
@@ -747,6 +767,8 @@ async function persistClosedPosition(
       symbol: position.symbol,
       environment: "DRY_RUN",
       side: position.side,
+      entryRegime: position.entryRegime,
+      entrySession: position.entrySession,
       quantity: position.quantity,
       averageEntryPrice: position.entryPrice,
       averageExitPrice: settlement.exitPrice,

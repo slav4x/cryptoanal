@@ -34,6 +34,13 @@ import {
   marketsSchema,
   overviewQuerySchema,
   overviewSchema,
+  playbookCreateSchema,
+  playbookIdParamsSchema,
+  playbookMutationSchema,
+  playbookQuerySchema,
+  playbookStatusChangeSchema,
+  playbooksSchema,
+  playbookUpdateSchema,
   positionCloseInputSchema,
   positionCloseResultSchema,
   positionIdParamsSchema,
@@ -85,6 +92,12 @@ import {
   JournalCursorNotFoundError,
   JournalRepository,
   JournalTargetNotFoundError,
+  PlaybookLinkNotFoundError,
+  PlaybookNameConflictError,
+  PlaybookNotFoundError,
+  PlaybookRepository,
+  PlaybookStatusConflictError,
+  PlaybookUpdateConflictError,
   RuntimeIdempotencyConflictError,
   RuntimeManualCloseNotAllowedError,
   RuntimeMarketPriceUnavailableError,
@@ -140,6 +153,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const activityRepository = new ActivityRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
   const journalRepository = new JournalRepository(prisma);
+  const playbookRepository = new PlaybookRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
@@ -620,6 +634,168 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         data: { review: serializeReviewSession(review) },
         meta: createMeta(request.id, "fresh"),
       };
+    },
+  );
+
+  app.get(
+    "/api/v1/playbooks",
+    {
+      schema: {
+        querystring: playbookQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(playbooksSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const query = request.query;
+      const library = await playbookRepository.list(workspace.id, {
+        status: query.status ? persistedPlaybookStatus[query.status] : null,
+        strategyId: query.strategyId ?? null,
+        tag: query.tag?.toLocaleLowerCase() ?? null,
+        query: query.query ?? null,
+      });
+      const active = library.counts.get("ACTIVE") ?? 0;
+      const archived = library.counts.get("ARCHIVED") ?? 0;
+      return {
+        data: {
+          filters: {
+            status: query.status ?? null,
+            strategyId: query.strategyId ?? null,
+            tag: query.tag ?? null,
+            query: query.query ?? null,
+          },
+          filterOptions: {
+            statuses: ["active" as const, "archived" as const],
+            strategies: library.strategies,
+            tags: library.tags,
+          },
+          linkOptions: {
+            strategies: library.strategies.map((strategy) => ({
+              id: strategy.id,
+              label: strategy.name,
+            })),
+            trades: library.trades.map((trade) => ({
+              id: trade.id,
+              label: `${trade.symbol} · ${orderSide[trade.side]} · ${trade.closedAt.toISOString().slice(0, 10)} · ${trade.netPnl.toFixed()} USDT`,
+            })),
+          },
+          summary: {
+            total: active + archived,
+            active,
+            archived,
+            linkedStrategies: library.strategyLinks,
+            exampleTrades: library.tradeLinks,
+          },
+          items: library.items.map(serializePlaybook),
+        },
+        meta: createMeta(request.id, active + archived > 0 ? "fresh" : "unavailable"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/playbooks",
+    {
+      schema: {
+        body: playbookCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(playbookMutationSchema),
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = await requireWorkspace();
+      try {
+        const playbook = await playbookRepository.create({
+          ...request.body,
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+        });
+        return reply.status(201).send({
+          data: { playbook: serializePlaybook(playbook) },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        throwPlaybookApiError(error);
+      }
+    },
+  );
+
+  app.put(
+    "/api/v1/playbooks/:playbookId",
+    {
+      schema: {
+        params: playbookIdParamsSchema,
+        body: playbookUpdateSchema,
+        response: {
+          200: apiEnvelopeSchema(playbookMutationSchema),
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const playbook = await playbookRepository.update({
+          ...request.body,
+          expectedUpdatedAt: new Date(request.body.expectedUpdatedAt),
+          playbookId: request.params.playbookId,
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+        });
+        return {
+          data: { playbook: serializePlaybook(playbook) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwPlaybookApiError(error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/playbooks/:playbookId/status",
+    {
+      schema: {
+        params: playbookIdParamsSchema,
+        body: playbookStatusChangeSchema,
+        response: {
+          200: apiEnvelopeSchema(playbookMutationSchema),
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const playbook = await playbookRepository.changeStatus({
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          playbookId: request.params.playbookId,
+          expectedStatus: persistedPlaybookStatus[request.body.expectedStatus],
+          status: persistedPlaybookStatus[request.body.status],
+          reason: request.body.reason,
+        });
+        return {
+          data: { playbook: serializePlaybook(playbook) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwPlaybookApiError(error);
+      }
     },
   );
 
@@ -1966,6 +2142,33 @@ function serializeAnalyticsBreakdown(
 
 type JournalEntryResult = Awaited<ReturnType<JournalRepository["createEntry"]>>;
 type ReviewSessionResult = Awaited<ReturnType<JournalRepository["createReview"]>>;
+type PlaybookResult = Awaited<ReturnType<PlaybookRepository["create"]>>;
+
+function serializePlaybook(playbook: PlaybookResult) {
+  return {
+    id: playbook.id,
+    name: playbook.name,
+    description: playbook.description,
+    status: playbookStatus[playbook.status],
+    marketConditions: playbook.marketConditions,
+    entryRules: playbook.entryRules,
+    exitRules: playbook.exitRules,
+    riskRules: playbook.riskRules,
+    invalidationRules: playbook.invalidationRules,
+    checklist: playbook.checklist,
+    tags: playbook.tags,
+    strategies: playbook.strategies.map(({ strategy }) => strategy),
+    exampleTrades: playbook.exampleTrades.map(({ trade }) => ({
+      id: trade.id,
+      symbol: trade.symbol,
+      side: orderSide[trade.side],
+      netPnl: trade.netPnl.toFixed(),
+      closedAt: trade.closedAt.toISOString(),
+    })),
+    createdAt: playbook.createdAt.toISOString(),
+    updatedAt: playbook.updatedAt.toISOString(),
+  };
+}
 
 function serializeJournalEntry(entry: JournalEntryResult) {
   return {
@@ -2376,6 +2579,39 @@ function throwManualCloseApiError(error: unknown): never {
   throw error;
 }
 
+function throwPlaybookApiError(error: unknown): never {
+  if (error instanceof PlaybookNotFoundError) {
+    throw new ApiError(404, "PLAYBOOK_NOT_FOUND", "Плейбук не найден");
+  }
+  if (error instanceof PlaybookLinkNotFoundError) {
+    throw new ApiError(
+      404,
+      "PLAYBOOK_LINK_NOT_FOUND",
+      error.target === "strategy"
+        ? "Связанная стратегия не найдена в текущем workspace"
+        : "Связанная сделка не найдена в текущем workspace",
+    );
+  }
+  if (error instanceof PlaybookNameConflictError) {
+    throw new ApiError(409, "PLAYBOOK_NAME_CONFLICT", "Плейбук с таким названием уже существует");
+  }
+  if (error instanceof PlaybookUpdateConflictError) {
+    throw new ApiError(
+      409,
+      "PLAYBOOK_UPDATE_CONFLICT",
+      "Плейбук уже изменился. Обновите данные и повторите попытку",
+    );
+  }
+  if (error instanceof PlaybookStatusConflictError) {
+    throw new ApiError(
+      409,
+      "PLAYBOOK_STATUS_CONFLICT",
+      "Статус плейбука уже изменился. Обновите данные",
+    );
+  }
+  throw error;
+}
+
 function getValidationMessages(error: unknown): string[] | null {
   if (
     !error ||
@@ -2484,6 +2720,16 @@ const persistedJournalLinkType = {
   trade: "TRADE",
   decision: "DECISION",
   symbol: "SYMBOL",
+} as const;
+
+const playbookStatus = {
+  ACTIVE: "active",
+  ARCHIVED: "archived",
+} as const;
+
+const persistedPlaybookStatus = {
+  active: "ACTIVE",
+  archived: "ARCHIVED",
 } as const;
 
 const persistedDecisionAction = {

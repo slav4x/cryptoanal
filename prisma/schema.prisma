@@ -145,6 +145,11 @@ enum JournalLinkType {
   SYMBOL
 }
 
+enum PlaybookStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 model Workspace {
   id                String             @id @default(uuid())
   slug              String             @unique
@@ -175,6 +180,7 @@ model Workspace {
   journalEntries    JournalEntry[]
   journalLinks      JournalLink[]
   reviewSessions    ReviewSession[]
+  playbooks         Playbook[]
 }
 
 model WorkspaceSettings {
@@ -284,6 +290,7 @@ model Strategy {
   validationRuns   ValidationRun[]
   deployments      Deployment[]
   journalLinks     JournalLink[]
+  playbooks        PlaybookStrategy[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, status])
@@ -571,6 +578,7 @@ model Trade {
   instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   decisions         Decision[]
   journalLinks      JournalLink[]
+  playbooks         PlaybookTrade[]
 
   @@index([workspaceId, closedAt])
   @@index([workspaceId, strategyVersionId, closedAt])
@@ -678,6 +686,54 @@ model ReviewSession {
 
   @@index([workspaceId, endsAt(sort: Desc)])
   @@index([tags], type: Gin)
+}
+
+model Playbook {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  name              String
+  description       String             @db.Text
+  status            PlaybookStatus     @default(ACTIVE)
+  marketConditions  String             @db.Text
+  entryRules        String[]           @default([])
+  exitRules         String[]           @default([])
+  riskRules         String[]           @default([])
+  invalidationRules String[]           @default([])
+  checklist         String[]           @default([])
+  tags              String[]           @default([])
+  createdByActorId  String
+  updatedByActorId  String
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategies        PlaybookStrategy[]
+  exampleTrades     PlaybookTrade[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, status, updatedAt(sort: Desc)])
+  @@index([tags], type: Gin)
+}
+
+model PlaybookStrategy {
+  playbookId String
+  strategyId String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  playbook   Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+  strategy   Strategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+
+  @@id([playbookId, strategyId])
+  @@index([strategyId])
+}
+
+model PlaybookTrade {
+  playbookId String
+  tradeId    String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  playbook   Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+  trade      Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  @@id([playbookId, tradeId])
+  @@index([tradeId])
 }
 
 model ReviewSessionEntry {

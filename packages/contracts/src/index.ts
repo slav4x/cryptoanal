@@ -1057,6 +1057,100 @@ export const journalSchema = z.object({
 export const journalEntryCreatedSchema = z.object({ entry: journalEntrySchema });
 export const reviewSessionCreatedSchema = z.object({ review: reviewSessionSchema });
 
+export const playbookStatusSchema = z.enum(["active", "archived"]);
+export const playbookQuerySchema = z.object({
+  status: playbookStatusSchema.optional(),
+  strategyId: z.uuid().optional(),
+  tag: z.string().trim().min(1).max(40).optional(),
+  query: z.string().trim().min(1).max(100).optional(),
+});
+
+const playbookRuleSchema = z.string().trim().min(1).max(500);
+const playbookTagSchema = z.string().trim().min(1).max(40);
+const playbookContentSchema = z.object({
+  name: z.string().trim().min(3).max(120),
+  description: z.string().trim().min(3).max(2_000),
+  marketConditions: z.string().trim().min(3).max(4_000),
+  entryRules: z.array(playbookRuleSchema).min(1).max(30),
+  exitRules: z.array(playbookRuleSchema).max(30).default([]),
+  riskRules: z.array(playbookRuleSchema).max(30).default([]),
+  invalidationRules: z.array(playbookRuleSchema).min(1).max(30),
+  checklist: z.array(playbookRuleSchema).max(40).default([]),
+  tags: z.array(playbookTagSchema).max(12).default([]),
+  strategyIds: z.array(z.uuid()).max(20).default([]),
+  tradeIds: z.array(z.uuid()).max(50).default([]),
+});
+
+export const playbookCreateSchema = playbookContentSchema;
+export const playbookUpdateSchema = playbookContentSchema.extend({
+  expectedUpdatedAt: z.iso.datetime(),
+});
+export const playbookIdParamsSchema = z.object({ playbookId: z.uuid() });
+export const playbookStatusChangeSchema = z
+  .object({
+    expectedStatus: playbookStatusSchema,
+    status: playbookStatusSchema,
+    reason: z.string().trim().min(3).max(300),
+  })
+  .refine((value) => value.expectedStatus !== value.status, {
+    message: "Новый статус должен отличаться от текущего",
+    path: ["status"],
+  });
+
+export const playbookSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  status: playbookStatusSchema,
+  marketConditions: z.string(),
+  entryRules: z.array(z.string()),
+  exitRules: z.array(z.string()),
+  riskRules: z.array(z.string()),
+  invalidationRules: z.array(z.string()),
+  checklist: z.array(z.string()),
+  tags: z.array(z.string()),
+  strategies: z.array(z.object({ id: z.string(), name: z.string() })),
+  exampleTrades: z.array(
+    z.object({
+      id: z.string(),
+      symbol: z.string(),
+      side: z.enum(["buy", "sell"]),
+      netPnl: z.string(),
+      closedAt: z.iso.datetime(),
+    }),
+  ),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const playbooksSchema = z.object({
+  filters: z.object({
+    status: playbookStatusSchema.nullable(),
+    strategyId: z.string().nullable(),
+    tag: z.string().nullable(),
+    query: z.string().nullable(),
+  }),
+  filterOptions: z.object({
+    statuses: z.array(playbookStatusSchema),
+    strategies: z.array(z.object({ id: z.string(), name: z.string() })),
+    tags: z.array(z.string()),
+  }),
+  linkOptions: z.object({
+    strategies: z.array(z.object({ id: z.string(), label: z.string() })),
+    trades: z.array(z.object({ id: z.string(), label: z.string() })),
+  }),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    active: z.number().int().nonnegative(),
+    archived: z.number().int().nonnegative(),
+    linkedStrategies: z.number().int().nonnegative(),
+    exampleTrades: z.number().int().nonnegative(),
+  }),
+  items: z.array(playbookSchema),
+});
+
+export const playbookMutationSchema = z.object({ playbook: playbookSchema });
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -1147,5 +1241,13 @@ export type ReviewSessionDto = z.infer<typeof reviewSessionSchema>;
 export type JournalDto = z.infer<typeof journalSchema>;
 export type JournalEntryCreatedDto = z.infer<typeof journalEntryCreatedSchema>;
 export type ReviewSessionCreatedDto = z.infer<typeof reviewSessionCreatedSchema>;
+export type PlaybookStatus = z.infer<typeof playbookStatusSchema>;
+export type PlaybookQueryDto = z.infer<typeof playbookQuerySchema>;
+export type PlaybookCreateDto = z.infer<typeof playbookCreateSchema>;
+export type PlaybookUpdateDto = z.infer<typeof playbookUpdateSchema>;
+export type PlaybookStatusChangeDto = z.infer<typeof playbookStatusChangeSchema>;
+export type PlaybookDto = z.infer<typeof playbookSchema>;
+export type PlaybooksDto = z.infer<typeof playbooksSchema>;
+export type PlaybookMutationDto = z.infer<typeof playbookMutationSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

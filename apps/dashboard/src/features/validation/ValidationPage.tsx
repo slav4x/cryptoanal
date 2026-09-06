@@ -36,7 +36,7 @@ export default function ValidationPage() {
   const validationsQuery = useQuery({
     queryKey: ["validations"],
     queryFn: fetchValidations,
-    refetchInterval: 10_000,
+    refetchInterval: 5_000,
   });
 
   if (strategiesQuery.isPending || validationsQuery.isPending) return <ValidationSkeleton />;
@@ -339,13 +339,14 @@ function RunsTable({ runs }: { runs: ValidationRunDto[] }) {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-xs">
+            <table className="w-full min-w-[920px] border-collapse text-xs">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                   <th className="px-[18px] py-3 font-medium">Стратегия</th>
                   <th className="px-3 py-3 font-medium">Тип</th>
                   <th className="px-3 py-3 font-medium">Период</th>
                   <th className="px-3 py-3 font-medium">Статус</th>
+                  <th className="px-3 py-3 font-medium">Результат</th>
                   <th className="px-[18px] py-3 text-right font-medium">Создан</th>
                 </tr>
               </thead>
@@ -371,6 +372,9 @@ function RunsTable({ runs }: { runs: ValidationRunDto[] }) {
                     <td className="px-3 py-3.5">
                       <RunStatusBadge run={run} />
                     </td>
+                    <td className="max-w-[300px] px-3 py-3.5">
+                      <RunResult run={run} />
+                    </td>
                     <td className="px-[18px] py-3.5 text-right text-muted-foreground">
                       {formatDateTime(run.queuedAt)}
                     </td>
@@ -386,8 +390,37 @@ function RunsTable({ runs }: { runs: ValidationRunDto[] }) {
 }
 
 function RunStatusBadge({ run }: { run: ValidationRunDto }) {
+  if (run.status === "completed") {
+    const content = verdictContent[run.verdict];
+    return <Badge variant={content.variant}>{content.label}</Badge>;
+  }
   const content = runStatusContent[run.status];
   return <Badge variant={content.variant}>{content.label}</Badge>;
+}
+
+function RunResult({ run }: { run: ValidationRunDto }) {
+  if (run.status === "failed") {
+    return (
+      <p className="line-clamp-2 text-loss" title={run.failureMessage ?? undefined}>
+        {run.failureMessage ?? "Проверка завершилась с ошибкой"}
+      </p>
+    );
+  }
+  if (!run.metrics) {
+    return <span className="text-stale">Метрики появятся после расчёта</span>;
+  }
+
+  return (
+    <div>
+      <p className={run.metrics.netPnl >= 0 ? "text-profit" : "text-loss"}>
+        {formatSignedUsdt(run.metrics.netPnl)} · {run.metrics.returnPercent.toFixed(2)}%
+      </p>
+      <p className="mt-1 text-[10px] text-stale">
+        {run.metrics.trades} сделок · PF {formatProfitFactor(run.metrics.profitFactor)} · DD{" "}
+        {run.metrics.maxDrawdownPercent.toFixed(2)}%
+      </p>
+    </div>
+  );
 }
 
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
@@ -420,6 +453,18 @@ function formatDateTime(value: string): string {
   });
 }
 
+function formatSignedUsdt(value: number): string {
+  const formatted = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Math.abs(value));
+  return `${value >= 0 ? "+" : "−"}${formatted} USDT`;
+}
+
+function formatProfitFactor(value: number | null): string {
+  return value === null ? "∞" : value.toFixed(2);
+}
+
 function ValidationSkeleton() {
   return (
     <div className="space-y-[18px]">
@@ -443,6 +488,16 @@ const runStatusContent: Record<
   completed: { label: "Завершена", variant: "profit" },
   failed: { label: "Ошибка", variant: "loss" },
   cancelled: { label: "Отменена", variant: "secondary" },
+};
+
+const verdictContent: Record<
+  ValidationRunDto["verdict"],
+  { label: string; variant: BadgeVariant }
+> = {
+  pending: { label: "Ожидает", variant: "outline" },
+  passed: { label: "Пройдена", variant: "profit" },
+  failed: { label: "Не пройдена", variant: "loss" },
+  warning: { label: "Есть замечания", variant: "warning" },
 };
 
 const kindLabels: Record<ValidationKindDto, string> = {

@@ -7,6 +7,7 @@ export type RequestContext = {
 
 export * from "./market-analysis";
 export * from "./strategy-lifecycle";
+export * from "./validation-engine";
 
 export type DevelopmentIdentity = Pick<RequestContext, "actorId" | "workspaceId" | "role">;
 

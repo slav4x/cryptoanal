@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cryptoanal/application": "workspace:*",
     "@cryptoanal/config": "workspace:*",
+    "@cryptoanal/contracts": "workspace:*",
     "@cryptoanal/exchange-bybit": "workspace:*",
     "@cryptoanal/persistence": "workspace:*",
     "pino": "10.3.1"

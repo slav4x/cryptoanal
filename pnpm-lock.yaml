@@ -126,9 +126,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@cryptoanal/application':
+        specifier: workspace:*
+        version: link:../../packages/application
       '@cryptoanal/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@cryptoanal/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@cryptoanal/exchange-bybit':
         specifier: workspace:*
         version: link:../../packages/exchange-bybit

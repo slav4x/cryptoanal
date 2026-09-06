@@ -29,6 +29,7 @@ import {
   tradeIdParamsSchema,
   tradingLedgerSchema,
   validationExecutionInputSchema,
+  validationMetricsSchema,
   validationRunInputSchema,
   validationRunQueuedSchema,
   validationsSchema,
@@ -1155,6 +1156,7 @@ function serializeValidationRun(run: {
   engineVersion: string;
   configHash: string;
   input: unknown;
+  metrics: unknown;
   failureCode: string | null;
   failureMessage: string | null;
   queuedAt: Date;
@@ -1175,6 +1177,7 @@ function serializeValidationRun(run: {
     engineVersion: run.engineVersion,
     configHash: run.configHash,
     input: validationExecutionInputSchema.parse(run.input),
+    metrics: run.metrics === null ? null : validationMetricsSchema.parse(run.metrics),
     failureCode: run.failureCode,
     failureMessage: run.failureMessage,
     queuedAt: run.queuedAt.toISOString(),

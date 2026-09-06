@@ -407,7 +407,7 @@ const validationDatasetSchema = z.object({
   symbols: z
     .array(z.string().regex(/^[A-Z0-9]{4,24}$/))
     .min(1)
-    .max(50),
+    .max(10),
   timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
 });
 
@@ -458,6 +458,49 @@ export const validationExecutionInputSchema = z.object({
   walkForward: validationWalkForwardSchema,
 });
 
+export const validationTradeResultSchema = z.object({
+  symbol: z.string(),
+  side: z.enum(["long", "short"]),
+  openedAt: z.iso.datetime(),
+  closedAt: z.iso.datetime(),
+  entryPrice: z.number(),
+  exitPrice: z.number(),
+  quantity: z.number(),
+  netPnl: z.number(),
+  fees: z.number().nonnegative(),
+  exitReason: z.enum(["stop-loss", "take-profit", "trailing-stop", "end-of-data"]),
+});
+
+export const validationMetricsSchema = z.object({
+  trades: z.number().int().nonnegative(),
+  wins: z.number().int().nonnegative(),
+  losses: z.number().int().nonnegative(),
+  winRatePercent: z.number(),
+  netPnl: z.number(),
+  returnPercent: z.number(),
+  maxDrawdownPercent: z.number().nonnegative(),
+  profitFactor: z.number().nonnegative().nullable(),
+  expectancy: z.number(),
+  totalFees: z.number().nonnegative(),
+  candleCount: z.number().int().nonnegative(),
+  windows: z.number().int().nonnegative(),
+  perSymbol: z.record(
+    z.string(),
+    z.object({ trades: z.number().int().nonnegative(), netPnl: z.number() }),
+  ),
+  equitySeries: z.array(z.object({ observedAt: z.iso.datetime(), equity: z.number() })),
+  sampleTrades: z.array(validationTradeResultSchema),
+  gateReasons: z.array(z.string()),
+  provenance: z.object({
+    datasetHash: z.string(),
+    symbols: z.array(z.string()),
+    timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+    startDate: z.iso.date(),
+    endDate: z.iso.date(),
+    candleCount: z.number().int().nonnegative(),
+  }),
+});
+
 export const validationRunSchema = z.object({
   id: z.string(),
   strategy: z.object({ id: z.string(), name: z.string() }),
@@ -470,6 +513,7 @@ export const validationRunSchema = z.object({
   engineVersion: z.string(),
   configHash: z.string(),
   input: validationExecutionInputSchema,
+  metrics: validationMetricsSchema.nullable(),
   failureCode: z.string().nullable(),
   failureMessage: z.string().nullable(),
   queuedAt: z.iso.datetime(),
@@ -549,6 +593,8 @@ export type StrategyStatusChangedDto = z.infer<typeof strategyStatusChangedSchem
 export type ValidationKindDto = z.infer<typeof validationKindSchema>;
 export type ValidationRunInputDto = z.infer<typeof validationRunInputSchema>;
 export type ValidationExecutionInputDto = z.infer<typeof validationExecutionInputSchema>;
+export type ValidationMetricsDto = z.infer<typeof validationMetricsSchema>;
+export type ValidationTradeResultDto = z.infer<typeof validationTradeResultSchema>;
 export type ValidationRunDto = z.infer<typeof validationRunSchema>;
 export type ValidationsDto = z.infer<typeof validationsSchema>;
 export type ValidationRunQueuedDto = z.infer<typeof validationRunQueuedSchema>;

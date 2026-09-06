@@ -135,6 +135,84 @@ export const positionSchema = z.object({
   }),
 });
 
+export const analyticsPeriodSchema = z.enum(["7d", "30d", "90d", "all"]);
+export const analyticsEnvironmentSchema = z.enum(["dry-run", "demo", "live"]);
+export const analyticsQuerySchema = z.object({
+  period: analyticsPeriodSchema.default("30d"),
+  environment: analyticsEnvironmentSchema.optional(),
+  strategyId: z.uuid().optional(),
+  symbol: z
+    .string()
+    .regex(/^[A-Z0-9]{4,24}$/)
+    .optional(),
+});
+
+export const analyticsBreakdownSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  trades: z.number().int().nonnegative(),
+  wins: z.number().int().nonnegative(),
+  winRatePercent: z.number().nonnegative(),
+  grossPnl: z.string(),
+  netPnl: z.string(),
+  costs: z.string(),
+});
+
+export const analyticsSchema = z.object({
+  filters: z.object({
+    period: analyticsPeriodSchema,
+    environment: analyticsEnvironmentSchema.nullable(),
+    strategyId: z.string().nullable(),
+    symbol: z.string().nullable(),
+  }),
+  filterOptions: z.object({
+    strategies: z.array(z.object({ id: z.string(), name: z.string() })),
+    symbols: z.array(z.string()),
+    environments: z.array(analyticsEnvironmentSchema),
+  }),
+  initialCapital: z.string(),
+  summary: z.object({
+    trades: z.number().int().nonnegative(),
+    wins: z.number().int().nonnegative(),
+    losses: z.number().int().nonnegative(),
+    breakeven: z.number().int().nonnegative(),
+    winRatePercent: z.number().nonnegative(),
+    grossPnl: z.string(),
+    netPnl: z.string(),
+    totalFees: z.string(),
+    totalFunding: z.string(),
+    totalSlippage: z.string(),
+    profitFactor: z.number().nonnegative().nullable(),
+    expectancy: z.string(),
+    maxDrawdownPercent: z.number().nonnegative(),
+    averageWin: z.string(),
+    averageLoss: z.string(),
+    payoffRatio: z.number().nonnegative().nullable(),
+    bestTrade: z.string(),
+    worstTrade: z.string(),
+  }),
+  equitySeries: z.array(
+    z.object({
+      observedAt: z.iso.datetime(),
+      equity: z.string(),
+      cumulativeNetPnl: z.string(),
+      drawdownPercent: z.number().nonnegative(),
+    }),
+  ),
+  dailyPnl: z.array(
+    z.object({
+      date: z.iso.date(),
+      netPnl: z.string(),
+      trades: z.number().int().nonnegative(),
+    }),
+  ),
+  breakdowns: z.object({
+    strategies: z.array(analyticsBreakdownSchema),
+    symbols: z.array(analyticsBreakdownSchema),
+    exitReasons: z.array(analyticsBreakdownSchema),
+  }),
+});
+
 export const tradeSchema = z.object({
   id: z.string(),
   symbol: z.string(),
@@ -696,6 +774,11 @@ export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
 export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
 export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;
 export type OverviewDto = z.infer<typeof overviewSchema>;
+export type AnalyticsPeriod = z.infer<typeof analyticsPeriodSchema>;
+export type AnalyticsEnvironment = z.infer<typeof analyticsEnvironmentSchema>;
+export type AnalyticsQueryDto = z.infer<typeof analyticsQuerySchema>;
+export type AnalyticsBreakdownDto = z.infer<typeof analyticsBreakdownSchema>;
+export type AnalyticsDto = z.infer<typeof analyticsSchema>;
 export type MarketDto = z.infer<typeof marketSchema>;
 export type MarketsDto = z.infer<typeof marketsSchema>;
 export type MarketCandleDto = z.infer<typeof marketCandleSchema>;

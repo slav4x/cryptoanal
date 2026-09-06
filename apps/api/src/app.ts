@@ -1,5 +1,6 @@
 import {
   calculateMarketAnalysis,
+  buildPerformanceAnalytics,
   canTransitionStrategyStatus,
   createDevelopmentContext,
   executionEngineVersion,
@@ -11,6 +12,8 @@ import {
 import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
+  analyticsQuerySchema,
+  analyticsSchema,
   deploymentCommandInputSchema,
   deploymentCreateSchema,
   deploymentIdParamsSchema,
@@ -53,6 +56,7 @@ import {
 } from "@cryptoanal/contracts";
 import {
   ActiveDeploymentExistsError,
+  AnalyticsRepository,
   type CryptoAnalPrismaClient,
   DashboardRepository,
   DeploymentCommandNotAllowedError,
@@ -116,6 +120,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   }).withTypeProvider<ZodTypeProvider>();
 
   const repository = new DashboardRepository(prisma);
+  const analyticsRepository = new AnalyticsRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
@@ -332,6 +337,84 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           request.id,
           !overview.account ? "unavailable" : accountFresh && workerHealthy ? "fresh" : "stale",
         ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/analytics",
+    {
+      schema: {
+        querystring: analyticsQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(analyticsSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const filters = request.query;
+      const dataset = await analyticsRepository.getPerformanceDataset(workspace.id, {
+        startsAt: getAnalyticsStartsAt(filters.period),
+        environment: filters.environment ? analyticsTradingEnvironment[filters.environment] : null,
+        strategyId: filters.strategyId ?? null,
+        symbol: filters.symbol ?? null,
+      });
+      const analytics = buildPerformanceAnalytics(
+        dataset.trades.map((trade) => ({
+          ...trade,
+          environment: tradingEnvironment[trade.environment],
+        })),
+        config.DRY_RUN_INITIAL_BALANCE,
+      );
+
+      return {
+        data: {
+          filters: {
+            period: filters.period,
+            environment: filters.environment ?? null,
+            strategyId: filters.strategyId ?? null,
+            symbol: filters.symbol ?? null,
+          },
+          filterOptions: {
+            strategies: dataset.options.strategies,
+            symbols: dataset.options.symbols,
+            environments: dataset.options.environments.map(
+              (environment) => tradingEnvironment[environment],
+            ),
+          },
+          initialCapital: String(config.DRY_RUN_INITIAL_BALANCE),
+          summary: {
+            ...analytics.summary,
+            grossPnl: String(analytics.summary.grossPnl),
+            netPnl: String(analytics.summary.netPnl),
+            totalFees: String(analytics.summary.totalFees),
+            totalFunding: String(analytics.summary.totalFunding),
+            totalSlippage: String(analytics.summary.totalSlippage),
+            expectancy: String(analytics.summary.expectancy),
+            averageWin: String(analytics.summary.averageWin),
+            averageLoss: String(analytics.summary.averageLoss),
+            bestTrade: String(analytics.summary.bestTrade),
+            worstTrade: String(analytics.summary.worstTrade),
+          },
+          equitySeries: analytics.equitySeries.map((point) => ({
+            ...point,
+            observedAt: point.observedAt.toISOString(),
+            equity: String(point.equity),
+            cumulativeNetPnl: String(point.cumulativeNetPnl),
+          })),
+          dailyPnl: analytics.dailyPnl.map((day) => ({
+            ...day,
+            netPnl: String(day.netPnl),
+          })),
+          breakdowns: {
+            strategies: serializeAnalyticsBreakdown(analytics.breakdowns.strategies),
+            symbols: serializeAnalyticsBreakdown(analytics.breakdowns.symbols),
+            exitReasons: serializeAnalyticsBreakdown(analytics.breakdowns.exitReasons),
+          },
+        },
+        meta: createMeta(request.id, analytics.summary.trades > 0 ? "fresh" : "unavailable"),
       };
     },
   );
@@ -1408,6 +1491,38 @@ const overviewPeriodConfig = {
   "30d": { durationMs: 30 * 24 * 60 * 60 * 1_000, bucketSeconds: 8 * 60 * 60 },
 } as const;
 
+const analyticsPeriodDurationMs = {
+  "7d": 7 * 24 * 60 * 60 * 1_000,
+  "30d": 30 * 24 * 60 * 60 * 1_000,
+  "90d": 90 * 24 * 60 * 60 * 1_000,
+  all: null,
+} as const;
+
+function getAnalyticsStartsAt(period: keyof typeof analyticsPeriodDurationMs): Date | null {
+  const durationMs = analyticsPeriodDurationMs[period];
+  return durationMs === null ? null : new Date(Date.now() - durationMs);
+}
+
+function serializeAnalyticsBreakdown(
+  items: Array<{
+    key: string;
+    label: string;
+    trades: number;
+    wins: number;
+    winRatePercent: number;
+    grossPnl: number;
+    netPnl: number;
+    costs: number;
+  }>,
+) {
+  return items.map((item) => ({
+    ...item,
+    grossPnl: String(item.grossPnl),
+    netPnl: String(item.netPnl),
+    costs: String(item.costs),
+  }));
+}
+
 function createMeta(requestId: string, freshness: "fresh" | "stale" | "unavailable") {
   return {
     requestId,
@@ -1762,6 +1877,12 @@ const tradingEnvironment = {
   DRY_RUN: "dry-run",
   DEMO: "demo",
   LIVE: "live",
+} as const;
+
+const analyticsTradingEnvironment = {
+  "dry-run": "DRY_RUN",
+  demo: "DEMO",
+  live: "LIVE",
 } as const;
 
 const orderSide = {

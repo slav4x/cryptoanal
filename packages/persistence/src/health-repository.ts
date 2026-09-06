@@ -1,5 +1,5 @@
 import type { CryptoAnalPrismaClient } from "./client";
-import { Prisma } from "./generated/prisma/client";
+import type { Prisma } from "./generated/prisma/client";
 
 type PersistedHealthCondition = {
   fingerprint: string;

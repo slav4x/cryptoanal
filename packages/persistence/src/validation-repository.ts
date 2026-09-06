@@ -18,6 +18,36 @@ export type QueueValidationRunInput = {
   idempotencyKey: string;
 };
 
+export type ClaimedValidationJob = {
+  jobId: string;
+  runId: string;
+  workspaceId: string;
+  kind: ValidationJobKind;
+  input: Prisma.JsonValue;
+  config: Prisma.JsonValue;
+  configHash: string;
+};
+
+export type CompleteValidationJobInput = {
+  workerId: string;
+  jobId: string;
+  runId: string;
+  workspaceId: string;
+  datasetId: string;
+  datasetAsOf: Date;
+  metrics: Prisma.InputJsonValue;
+  verdict: "PASSED" | "FAILED" | "WARNING";
+};
+
+export type FailValidationJobInput = {
+  workerId: string;
+  jobId: string;
+  runId: string;
+  workspaceId: string;
+  failureCode: string;
+  failureMessage: string;
+};
+
 export class ValidationStrategyNotFoundError extends Error {}
 export class ValidationVersionMismatchError extends Error {}
 export class ValidationNotEligibleError extends Error {}
@@ -32,6 +62,228 @@ export class ValidationRepository {
       orderBy: { queuedAt: "desc" },
       take: 200,
       select: validationRunSelect,
+    });
+  }
+
+  public async claimNext(
+    workerId: string,
+    staleBefore: Date,
+  ): Promise<ClaimedValidationJob | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const jobs = await transaction.$queryRaw<
+        Array<{
+          id: string;
+          workspaceId: string;
+          kind: ValidationJobKind;
+          input: Prisma.JsonValue;
+          startedAt: Date | null;
+        }>
+      >(Prisma.sql`
+        SELECT "id", "workspaceId", "kind", "input", "startedAt"
+        FROM "Job"
+        WHERE "kind" IN ('BACKTEST', 'WALK_FORWARD')
+          AND (
+            "status" = 'QUEUED'
+            OR (
+              "status" = 'RUNNING'
+              AND ("lockedAt" IS NULL OR "lockedAt" < ${staleBefore})
+            )
+          )
+        ORDER BY "queuedAt" ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      `);
+      const job = jobs[0];
+      if (!job) return null;
+
+      const validationRunId = getValidationRunId(job.input);
+      if (!validationRunId) {
+        await transaction.job.update({
+          where: { id: job.id },
+          data: {
+            status: "FAILED",
+            failureCode: "INVALID_JOB_INPUT",
+            failureMessage: "Validation job has no validationRunId",
+            completedAt: new Date(),
+            lockedBy: null,
+            lockedAt: null,
+          },
+        });
+        return null;
+      }
+
+      const run = await transaction.validationRun.findFirst({
+        where: {
+          id: validationRunId,
+          workspaceId: job.workspaceId,
+          status: { in: ["QUEUED", "RUNNING"] },
+        },
+        select: {
+          id: true,
+          workspaceId: true,
+          kind: true,
+          input: true,
+          startedAt: true,
+          configHash: true,
+          strategyVersion: { select: { config: true, configHash: true } },
+        },
+      });
+      if (!run || run.kind !== job.kind || run.configHash !== run.strategyVersion.configHash) {
+        await transaction.job.update({
+          where: { id: job.id },
+          data: {
+            status: "FAILED",
+            failureCode: "INVALID_VALIDATION_RUN",
+            failureMessage: "Validation run is missing or does not match the queued job",
+            completedAt: new Date(),
+            lockedBy: null,
+            lockedAt: null,
+          },
+        });
+        return null;
+      }
+
+      const now = new Date();
+      await transaction.job.update({
+        where: { id: job.id },
+        data: {
+          status: "RUNNING",
+          progress: 1,
+          attempts: { increment: 1 },
+          lockedBy: workerId,
+          lockedAt: now,
+          startedAt: job.startedAt ?? now,
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+      await transaction.validationRun.update({
+        where: { id: run.id },
+        data: {
+          status: "RUNNING",
+          startedAt: run.startedAt ?? now,
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+
+      return {
+        jobId: job.id,
+        runId: run.id,
+        workspaceId: run.workspaceId,
+        kind: run.kind,
+        input: run.input,
+        config: run.strategyVersion.config,
+        configHash: run.configHash,
+      };
+    });
+  }
+
+  public async updateProgress(jobId: string, workerId: string, progress: number): Promise<boolean> {
+    const result = await this.prisma.job.updateMany({
+      where: { id: jobId, status: "RUNNING", lockedBy: workerId },
+      data: {
+        progress: Math.max(1, Math.min(99, Math.round(progress))),
+        lockedAt: new Date(),
+      },
+    });
+    return result.count === 1;
+  }
+
+  public async complete(input: CompleteValidationJobInput): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const job = await transaction.job.findFirst({
+        where: { id: input.jobId, status: "RUNNING", lockedBy: input.workerId },
+        select: { id: true },
+      });
+      if (!job) throw new Error("Validation job lease was lost before completion");
+
+      const completedAt = new Date();
+      await transaction.validationRun.update({
+        where: { id: input.runId },
+        data: {
+          status: "COMPLETED",
+          verdict: input.verdict,
+          datasetId: input.datasetId,
+          datasetAsOf: input.datasetAsOf,
+          metrics: input.metrics,
+          failureCode: null,
+          failureMessage: null,
+          completedAt,
+        },
+      });
+      await transaction.job.update({
+        where: { id: input.jobId },
+        data: {
+          status: "COMPLETED",
+          progress: 100,
+          resultRef: input.runId,
+          completedAt,
+          lockedBy: null,
+          lockedAt: null,
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.workerId,
+          action: "validation.run.complete",
+          resourceType: "validation-run",
+          resourceId: input.runId,
+          outcome: "COMPLETED",
+          reason: `Validation completed with ${input.verdict.toLowerCase()} verdict`,
+          requestId: `job:${input.jobId}`,
+          metadata: { jobId: input.jobId, datasetId: input.datasetId },
+        },
+      });
+    });
+  }
+
+  public async fail(input: FailValidationJobInput): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const job = await transaction.job.findFirst({
+        where: { id: input.jobId, status: "RUNNING", lockedBy: input.workerId },
+        select: { id: true },
+      });
+      if (!job) throw new Error("Validation job lease was lost before failure persistence");
+
+      const completedAt = new Date();
+      await transaction.validationRun.update({
+        where: { id: input.runId },
+        data: {
+          status: "FAILED",
+          verdict: "FAILED",
+          failureCode: input.failureCode,
+          failureMessage: input.failureMessage,
+          completedAt,
+        },
+      });
+      await transaction.job.update({
+        where: { id: input.jobId },
+        data: {
+          status: "FAILED",
+          failureCode: input.failureCode,
+          failureMessage: input.failureMessage,
+          completedAt,
+          lockedBy: null,
+          lockedAt: null,
+        },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.workerId,
+          action: "validation.run.fail",
+          resourceType: "validation-run",
+          resourceId: input.runId,
+          outcome: "FAILED",
+          reason: input.failureMessage,
+          requestId: `job:${input.jobId}`,
+          metadata: { jobId: input.jobId, failureCode: input.failureCode },
+        },
+      });
     });
   }
 
@@ -158,6 +410,7 @@ const validationRunSelect = {
   engineVersion: true,
   configHash: true,
   input: true,
+  metrics: true,
   failureCode: true,
   failureMessage: true,
   queuedAt: true,

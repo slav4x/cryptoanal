@@ -466,6 +466,11 @@ model Job {
   input            Json
   resultRef        String?
   progress         Int       @default(0)
+  attempts         Int       @default(0)
+  lockedBy         String?
+  lockedAt         DateTime? @db.Timestamptz(3)
+  failureCode      String?
+  failureMessage   String?
   idempotencyKey   String
   createdByActorId String
   queuedAt         DateTime  @default(now()) @db.Timestamptz(3)

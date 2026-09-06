@@ -24,4 +24,7 @@ export {
   ValidationStrategyNotFoundError,
   ValidationVersionMismatchError,
   type QueueValidationRunInput,
+  type ClaimedValidationJob,
+  type CompleteValidationJobInput,
+  type FailValidationJobInput,
 } from "./validation-repository";

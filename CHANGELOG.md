@@ -48,6 +48,10 @@
 - Immutable execution contexts with validation provenance and deterministic context hashes.
 - Start, pause, resume and stop commands with optimistic status checks, durable idempotency receipts and audit events.
 - Runtime dashboard with command confirmations and execution-run visibility.
+- Idempotent dry-run execution loop with per-symbol candle cursors and durable failure state.
+- Canonical dry-run decisions, positions, filled orders, fills and completed trades.
+- Manual dry-run position close command with current-price validation, audit event and replay-safe receipt.
+- Runtime status details for evaluated symbols, failures, open positions and the latest decision.
 
 ### Changed
 
@@ -59,3 +63,6 @@
 - Creating a new version from an approved strategy now clears its approval and active version.
 - Validation datasets are capped at 10 symbols and 250,000 candles per run.
 - Validation catalog responses now contain summary metrics; heavy series are loaded by run detail.
+- Runtime and validation now share signal, sizing, cost and exit semantics.
+- Paused deployments continue managing open positions but cannot open new ones.
+- Deployment stop is blocked while positions remain open.

@@ -227,7 +227,20 @@ context hash позволяет обнаружить любое изменени
 обеспечивает не более одного deployment в ready/running/paused на dry-run account.
 Pause/resume сохраняют исходный execution run, stop атомарно завершает его и возвращает
 стратегию в approved. Каждая успешная команда создаёт `AuditEvent` с причиной и
-переходом состояния. Worker execution loop пока не является частью control-plane.
+переходом состояния.
+
+Worker выполняет running/paused deployments по последней завершённой свече. Таблица
+`RuntimeCursor` хранит прогресс, pending signal и последнюю ошибку пары. Решение имеет
+уникальный workspace-scoped correlation id, поэтому повтор цикла не создаёт второй
+order/fill. В running состоянии разрешены входы и сопровождение; в paused — только
+сопровождение и выходы. Stop возвращает `DEPLOYMENT_HAS_OPEN_POSITIONS`, пока у run есть
+открытая позиция.
+
+`POST /api/v1/positions/:positionId/close` закрывает активную dry-run позицию по свежему
+market snapshot. Команда требует `expectedStatus: open`, reason и UUID idempotency key.
+Результат безопасно повторяется с тем же ключом; ключ, ранее использованный для другого
+ресурса или команды, возвращает конфликт. Exit order, fill, canonical trade, decision,
+audit event и receipt записываются атомарно.
 
 ## 6. Команды и queries
 

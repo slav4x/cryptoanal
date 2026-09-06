@@ -58,17 +58,17 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать status transitions и validation eligibility.
 - [x] Создавать immutable `ExecutionContext` при каждом start.
 - [x] Реализовать start/pause/resume/stop как атомарные commands.
-- [ ] Реализовать manual close позиции как отдельную command.
+- [x] Реализовать manual close позиции как отдельную command.
 - [x] Добавить confirmations, optimistic state, durable idempotency и audit events.
 - [x] Поддерживать один активный deployment на account до multi-strategy readiness.
-- [ ] Подключить worker execution loop к running dry-run deployment.
+- [x] Подключить worker execution loop к running dry-run deployment.
 
 **Готово, когда:** стратегию можно создать, версионировать и безопасно запустить из UI;
 каждая позиция знает точную version/run.
 
 ## Этап 4. Validation Center
 
-- [ ] Выделить общую runtime/backtest execution semantics.
+- [x] Выделить общую runtime/backtest execution semantics.
 - [ ] Материализовать immutable dataset snapshot; request/engine/config provenance уже фиксируется при постановке.
 - [x] Перевести backtest/walk-forward в asynchronous jobs.
 - [x] Реализовать создание ValidationRun, durable Job и очередь статусов.

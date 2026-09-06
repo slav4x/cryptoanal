@@ -76,7 +76,8 @@ pnpm dev
 - `POST /api/v1/strategies/:strategyId/validations`;
 - `GET /api/v1/deployments`;
 - `POST /api/v1/strategies/:strategyId/deployments`;
-- `POST /api/v1/deployments/:deploymentId/commands`.
+- `POST /api/v1/deployments/:deploymentId/commands`;
+- `POST /api/v1/positions/:positionId/close`.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit
@@ -104,8 +105,16 @@ deployment в состоянии ready/running/paused. Start создаёт но
 `ExecutionRun.context` с version/config/validation provenance и SHA-256 context hash;
 pause/resume продолжают тот же run, stop завершает его. Каждая команда требует
 `expectedStatus`, reason и idempotency key, а результат и audit event записываются в той
-же транзакции. Текущий срез является control-plane: worker execution loop и генерация
-dry-run ордеров будут подключены отдельно.
+же транзакции.
+
+Worker обрабатывает только завершённые свечи и фиксирует не более одного решения на
+пару и свечу. Сигнал переносится на открытие следующей свечи, после чего dry-run
+исполнение атомарно создаёт `Decision`, `Position`, `Order` и `Fill`; закрытие также
+создаёт канонический `Trade`. Pause запрещает новые входы, но продолжает сопровождать
+уже открытые позиции. Stop недоступен до их закрытия. Ручное закрытие выполняется на
+странице `/trades` по свежему market snapshot и имеет собственные idempotency receipt и
+audit event. Runtime и validation используют общие функции сигналов, risk sizing,
+комиссий, slippage и exit rules.
 
 Текущая execution policy использует 1× совокупную экспозицию: номинал одной позиции
 ограничен `equity / maxOpenPositions`. Явные leverage и max exposure появятся вместе с
@@ -136,4 +145,5 @@ Worker сохраняет account snapshots для development workspace. Кап
 
 - `DRY_RUN_ACCOUNT_ID` — стабильный идентификатор development-счёта;
 - `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
-- `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут.
+- `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут;
+- `RUNTIME_POLL_INTERVAL_MS` — частота поиска новых завершённых свечей, по умолчанию 5 секунд.

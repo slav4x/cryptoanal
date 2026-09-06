@@ -177,6 +177,18 @@ Signal evaluation, sizing, costs, fill policy и exit rules — чистые д�
 которые используют runtime и validation. Отличия среды передаются через adapters/policies,
 а не через копирование большой функции.
 
+Текущая реализация находится в `packages/application/src/execution-engine.ts`: validation
+прогоняет через неё последовательность исторических свечей, а worker применяет те же
+правила к последней завершённой свече. Runtime cursor хранит последнюю обработанную
+свечу, pending signal и диагностическое состояние отдельно для каждой пары запуска.
+Уникальный correlation id и transaction-level advisory lock не допускают повторного
+решения или исполнения при параллельных циклах и перезапуске worker.
+
+Pause блокирует только новые входы: открытые позиции продолжают получать mark, trailing
+и автоматические exits. Stop разрешён только без открытых позиций. Ручной exit проходит
+через ту же settlement semantics, после чего одной транзакцией создаются exit order,
+fill, trade, decision, audit event и idempotency receipt.
+
 ### State machines
 
 Для `Deployment`, `ExecutionRun`, `ValidationRun`, `Position` использовать явные допустимые

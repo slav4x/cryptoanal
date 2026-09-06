@@ -19,6 +19,7 @@ export {
 } from "./market-data-repository";
 export {
   ValidationAlreadyActiveError,
+  ValidationDatasetConflictError,
   ValidationNotEligibleError,
   ValidationRepository,
   ValidationStrategyNotFoundError,
@@ -27,6 +28,8 @@ export {
   type ClaimedValidationJob,
   type CompleteValidationJobInput,
   type FailValidationJobInput,
+  type MaterializeValidationDatasetInput,
+  type ValidationDatasetCandlePersistenceInput,
   type ValidationTradePersistenceInput,
 } from "./validation-repository";
 export {

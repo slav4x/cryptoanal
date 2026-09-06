@@ -114,6 +114,7 @@ model Workspace {
   strategyVersions StrategyVersion[]
   validationRuns   ValidationRun[]
   validationTrades ValidationTrade[]
+  datasetSnapshots DatasetSnapshot[]
   deployments      Deployment[]
   executionRuns    ExecutionRun[]
   runtimeCursors   RuntimeCursor[]
@@ -140,20 +141,21 @@ model WorkspaceSettings {
 }
 
 model MarketInstrument {
-  symbol           String            @id
+  symbol           String                  @id
   baseAsset        String
   quoteAsset       String
   exchange         String
   instrumentType   String
-  enabled          Boolean           @default(true)
-  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  enabled          Boolean                 @default(true)
+  createdAt        DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                @updatedAt @db.Timestamptz(3)
   watchlistItems   WatchlistItem[]
   positions        Position[]
   orders           Order[]
   trades           Trade[]
   decisions        Decision[]
   validationTrades ValidationTrade[]
+  datasetCandles   DatasetSnapshotCandle[]
   runtimeCursors   RuntimeCursor[]
   snapshots        MarketSnapshot[]
   candles          MarketCandle[]
@@ -273,6 +275,7 @@ model ValidationRun {
   status            RunStatus         @default(QUEUED)
   verdict           ValidationVerdict @default(PENDING)
   datasetId         String
+  datasetSnapshotId String?
   datasetAsOf       DateTime          @db.Timestamptz(3)
   engineVersion     String
   configHash        String
@@ -287,10 +290,51 @@ model ValidationRun {
   workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   strategy          Strategy          @relation(fields: [strategyId], references: [id], onDelete: Cascade)
   strategyVersion   StrategyVersion   @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  datasetSnapshot   DatasetSnapshot?  @relation(fields: [datasetSnapshotId], references: [id], onDelete: Restrict)
   trades            ValidationTrade[]
 
   @@index([workspaceId, status, queuedAt])
   @@index([strategyVersionId, queuedAt])
+  @@index([datasetSnapshotId])
+}
+
+model DatasetSnapshot {
+  id             String                  @id @default(uuid())
+  workspaceId    String
+  schemaVersion  Int                     @default(1)
+  source         String
+  exchange       String
+  instrumentType String
+  timeframe      String
+  symbols        Json
+  startsAt       DateTime                @db.Timestamptz(3)
+  endsAt         DateTime                @db.Timestamptz(3)
+  candleCount    Int
+  contentHash    String
+  createdAt      DateTime                @default(now()) @db.Timestamptz(3)
+  workspace      Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  validationRuns ValidationRun[]
+  candles        DatasetSnapshotCandle[]
+
+  @@unique([workspaceId, contentHash])
+  @@index([workspaceId, createdAt])
+}
+
+model DatasetSnapshotCandle {
+  datasetSnapshotId String
+  symbol            String
+  openTime          DateTime         @db.Timestamptz(3)
+  open              Decimal          @db.Decimal(38, 18)
+  high              Decimal          @db.Decimal(38, 18)
+  low               Decimal          @db.Decimal(38, 18)
+  close             Decimal          @db.Decimal(38, 18)
+  volume            Decimal          @db.Decimal(38, 8)
+  turnover          Decimal          @db.Decimal(38, 8)
+  datasetSnapshot   DatasetSnapshot  @relation(fields: [datasetSnapshotId], references: [id], onDelete: Cascade)
+  instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@id([datasetSnapshotId, symbol, openTime])
+  @@index([datasetSnapshotId, openTime])
 }
 
 model ValidationTrade {

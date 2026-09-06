@@ -26,11 +26,12 @@ import {
   MarketDataRepository,
   RuntimeRepository,
   RuntimeStateConflictError,
+  ValidationDatasetConflictError,
   ValidationRepository,
   type ClaimedValidationJob,
+  type ValidationDatasetCandlePersistenceInput,
 } from "@cryptoanal/persistence";
 import pino from "pino";
-import { createHash } from "node:crypto";
 
 const heartbeatIntervalMs = 15_000;
 const workerId = `worker-${process.pid}`;
@@ -438,137 +439,24 @@ async function processValidationJob(job: ClaimedValidationJob) {
       );
     }
 
-    const symbols = [...new Set(executionInput.dataset.symbols)].sort();
-    const enabledSymbols = new Set(await marketDataRepository.listEnabledSymbols());
-    const unknownSymbols = symbols.filter((symbol) => !enabledSymbols.has(symbol));
-    if (unknownSymbols.length > 0) {
-      throw new ValidationWorkerError(
-        "UNKNOWN_MARKET_INSTRUMENT",
-        `Пары отсутствуют в каталоге рынков: ${unknownSymbols.join(", ")}`,
-      );
-    }
-
-    const interval = bybitIntervals[executionInput.dataset.timeframe];
-    const intervalMs = timeframeMinutes[executionInput.dataset.timeframe] * 60_000;
-    const startTime = new Date(`${executionInput.dataset.startDate}T00:00:00.000Z`);
-    const requestedEnd = new Date(`${executionInput.dataset.endDate}T23:59:59.999Z`);
-    const lastCompleteCandleEnd = Math.floor(Date.now() / intervalMs) * intervalMs - 1;
-    const endTime = new Date(Math.min(requestedEnd.getTime(), lastCompleteCandleEnd));
-    if (endTime <= startTime) {
-      throw new ValidationWorkerError(
-        "DATASET_EMPTY",
-        "Выбранный период не содержит завершённых свечей",
-      );
-    }
-
-    const estimatedCandles =
-      Math.ceil((endTime.getTime() - startTime.getTime()) / intervalMs) * symbols.length;
-    if (estimatedCandles > maximumDatasetCandles) {
-      throw new ValidationWorkerError(
-        "DATASET_TOO_LARGE",
-        `Расчётный объём ${estimatedCandles} свечей превышает лимит ${maximumDatasetCandles}`,
-      );
-    }
-
-    const candles: ValidationCandle[] = [];
-    const datasetHasher = createHash("sha256");
-    let datasetAsOf = startTime;
-    for (const [index, symbol] of symbols.entries()) {
-      let marketCandles;
-      try {
-        marketCandles = await marketClient.getLinearKlinesRange(
-          symbol,
-          interval,
-          startTime,
-          endTime,
-        );
-      } catch (error) {
-        throw new ValidationWorkerError(
-          "DATASET_FETCH_FAILED",
-          `Не удалось загрузить ${symbol}: ${errorMessage(error)}`,
-        );
-      }
-
-      const requiredCandles = minimumRequiredCandles(strategyConfig);
-      if (marketCandles.length < requiredCandles) {
-        throw new ValidationWorkerError(
-          "DATASET_INSUFFICIENT",
-          `Для ${symbol} получено ${marketCandles.length} свечей, требуется минимум ${requiredCandles}`,
-        );
-      }
-      if (candles.length + marketCandles.length > maximumDatasetCandles) {
-        throw new ValidationWorkerError(
-          "DATASET_TOO_LARGE",
-          `Фактический объём превышает лимит ${maximumDatasetCandles} свечей`,
-        );
-      }
-
-      for (const candle of marketCandles) {
-        datasetHasher.update(
-          [
-            candle.symbol,
-            candle.interval,
-            candle.openTime.toISOString(),
-            candle.open,
-            candle.high,
-            candle.low,
-            candle.close,
-            candle.volume,
-            candle.turnover,
-          ].join("|"),
-        );
-        datasetHasher.update("\n");
-        candles.push({
-          symbol: candle.symbol,
-          openTime: candle.openTime,
-          open: finiteNumber(candle.open, "open", symbol),
-          high: finiteNumber(candle.high, "high", symbol),
-          low: finiteNumber(candle.low, "low", symbol),
-          close: finiteNumber(candle.close, "close", symbol),
-          turnover: finiteNumber(candle.turnover, "turnover", symbol),
-        });
-        if (candle.openTime > datasetAsOf) datasetAsOf = candle.openTime;
-      }
-      for (let offset = 0; offset < marketCandles.length; offset += persistenceBatchSize) {
-        await marketDataRepository.saveCandles(
-          marketCandles.slice(offset, offset + persistenceBatchSize),
-        );
-      }
-      const leaseKept = await validationRepository.updateProgress(
-        job.jobId,
-        workerId,
-        5 + ((index + 1) / symbols.length) * 65,
-      );
-      if (!leaseKept) {
-        throw new ValidationWorkerError("JOB_LEASE_LOST", "Worker потерял lease задачи");
-      }
-    }
-
-    if (candles.length === 0) {
-      throw new ValidationWorkerError("DATASET_EMPTY", "Bybit не вернул свечи за выбранный период");
-    }
-    const leaseKept = await validationRepository.updateProgress(job.jobId, workerId, 75);
-    if (!leaseKept) {
-      throw new ValidationWorkerError("JOB_LEASE_LOST", "Worker потерял lease задачи");
-    }
+    const dataset = await prepareValidationDataset(job, executionInput, strategyConfig);
     const result = runValidationEngine({
       config: strategyConfig,
-      candles,
+      candles: dataset.candles,
       initialCapital: Number(executionInput.initialCapital),
       kind: executionInput.kind,
       walkForward: executionInput.walkForward,
     });
-    const datasetHash = datasetHasher.digest("hex");
     const metrics = validationMetricsSchema.parse({
       ...result.metrics,
       gateReasons: result.gateReasons,
       provenance: {
-        datasetHash,
-        symbols,
+        datasetHash: dataset.contentHash,
+        symbols: dataset.symbols,
         timeframe: executionInput.dataset.timeframe,
         startDate: executionInput.dataset.startDate,
         endDate: executionInput.dataset.endDate,
-        candleCount: candles.length,
+        candleCount: dataset.candles.length,
       },
     });
     await validationRepository.complete({
@@ -576,8 +464,7 @@ async function processValidationJob(job: ClaimedValidationJob) {
       jobId: job.jobId,
       runId: job.runId,
       workspaceId: job.workspaceId,
-      datasetId: `market-candles:sha256:${datasetHash}`,
-      datasetAsOf,
+      datasetSnapshotId: dataset.id,
       metrics,
       verdict: persistedVerdicts[result.verdict],
       trades: result.trades.map((trade) => ({
@@ -598,7 +485,7 @@ async function processValidationJob(job: ClaimedValidationJob) {
         jobId: job.jobId,
         runId: job.runId,
         verdict: result.verdict,
-        candles: candles.length,
+        candles: dataset.candles.length,
         trades: result.metrics.trades,
       },
       "Validation job completed",
@@ -623,6 +510,189 @@ async function processValidationJob(job: ClaimedValidationJob) {
     }
     logger.error({ err: error, jobId: job.jobId, runId: job.runId }, "Validation job failed");
   }
+}
+
+async function prepareValidationDataset(
+  job: ClaimedValidationJob,
+  executionInput: ReturnType<typeof validationExecutionInputSchema.parse>,
+  strategyConfig: ReturnType<typeof strategyConfigSchema.parse>,
+): Promise<{
+  id: string;
+  contentHash: string;
+  symbols: string[];
+  candles: ValidationCandle[];
+}> {
+  const symbols = [...new Set(executionInput.dataset.symbols)].sort();
+  if (job.datasetSnapshotId) {
+    const snapshot = await validationRepository.getDatasetSnapshot(
+      job.workspaceId,
+      job.datasetSnapshotId,
+    );
+    if (!snapshot) {
+      throw new ValidationWorkerError(
+        "DATASET_SNAPSHOT_MISSING",
+        "Связанный immutable dataset snapshot не найден",
+      );
+    }
+    const snapshotSymbols = readDatasetSymbols(snapshot.symbols);
+    if (
+      snapshot.source !== validationDatasetSource ||
+      snapshot.exchange !== "bybit" ||
+      snapshot.instrumentType !== "linear-perpetual" ||
+      snapshot.timeframe !== executionInput.dataset.timeframe ||
+      JSON.stringify(snapshotSymbols) !== JSON.stringify(symbols)
+    ) {
+      throw new ValidationWorkerError(
+        "DATASET_SNAPSHOT_MISMATCH",
+        "Immutable dataset snapshot не соответствует параметрам validation run",
+      );
+    }
+    const leaseKept = await validationRepository.updateProgress(job.jobId, workerId, 80);
+    if (!leaseKept) {
+      throw new ValidationWorkerError("JOB_LEASE_LOST", "Worker потерял lease задачи");
+    }
+    return deserializeValidationDataset(snapshot, snapshotSymbols);
+  }
+
+  const enabledSymbols = new Set(await marketDataRepository.listEnabledSymbols());
+  const unknownSymbols = symbols.filter((symbol) => !enabledSymbols.has(symbol));
+  if (unknownSymbols.length > 0) {
+    throw new ValidationWorkerError(
+      "UNKNOWN_MARKET_INSTRUMENT",
+      `Пары отсутствуют в каталоге рынков: ${unknownSymbols.join(", ")}`,
+    );
+  }
+
+  const interval = bybitIntervals[executionInput.dataset.timeframe];
+  const intervalMs = timeframeMinutes[executionInput.dataset.timeframe] * 60_000;
+  const startTime = new Date(`${executionInput.dataset.startDate}T00:00:00.000Z`);
+  const requestedEnd = new Date(`${executionInput.dataset.endDate}T23:59:59.999Z`);
+  const lastCompleteCandleEnd = Math.floor(Date.now() / intervalMs) * intervalMs - 1;
+  const endTime = new Date(Math.min(requestedEnd.getTime(), lastCompleteCandleEnd));
+  if (endTime <= startTime) {
+    throw new ValidationWorkerError(
+      "DATASET_EMPTY",
+      "Выбранный период не содержит завершённых свечей",
+    );
+  }
+
+  const estimatedCandles =
+    Math.ceil((endTime.getTime() - startTime.getTime()) / intervalMs) * symbols.length;
+  if (estimatedCandles > maximumDatasetCandles) {
+    throw new ValidationWorkerError(
+      "DATASET_TOO_LARGE",
+      `Расчётный объём ${estimatedCandles} свечей превышает лимит ${maximumDatasetCandles}`,
+    );
+  }
+
+  const snapshotCandles: ValidationDatasetCandlePersistenceInput[] = [];
+  for (const [index, symbol] of symbols.entries()) {
+    let marketCandles;
+    try {
+      marketCandles = await marketClient.getLinearKlinesRange(symbol, interval, startTime, endTime);
+    } catch (error) {
+      throw new ValidationWorkerError(
+        "DATASET_FETCH_FAILED",
+        `Не удалось загрузить ${symbol}: ${errorMessage(error)}`,
+      );
+    }
+
+    const requiredCandles = minimumRequiredCandles(strategyConfig);
+    if (marketCandles.length < requiredCandles) {
+      throw new ValidationWorkerError(
+        "DATASET_INSUFFICIENT",
+        `Для ${symbol} получено ${marketCandles.length} свечей, требуется минимум ${requiredCandles}`,
+      );
+    }
+    if (snapshotCandles.length + marketCandles.length > maximumDatasetCandles) {
+      throw new ValidationWorkerError(
+        "DATASET_TOO_LARGE",
+        `Фактический объём превышает лимит ${maximumDatasetCandles} свечей`,
+      );
+    }
+
+    for (const candle of marketCandles) {
+      finiteNumber(candle.open, "open", symbol);
+      finiteNumber(candle.high, "high", symbol);
+      finiteNumber(candle.low, "low", symbol);
+      finiteNumber(candle.close, "close", symbol);
+      finiteNumber(candle.volume, "volume", symbol);
+      finiteNumber(candle.turnover, "turnover", symbol);
+      snapshotCandles.push({
+        symbol: candle.symbol,
+        openTime: candle.openTime,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        volume: candle.volume,
+        turnover: candle.turnover,
+      });
+    }
+    for (let offset = 0; offset < marketCandles.length; offset += persistenceBatchSize) {
+      await marketDataRepository.saveCandles(
+        marketCandles.slice(offset, offset + persistenceBatchSize),
+      );
+    }
+    const leaseKept = await validationRepository.updateProgress(
+      job.jobId,
+      workerId,
+      5 + ((index + 1) / symbols.length) * 65,
+    );
+    if (!leaseKept) {
+      throw new ValidationWorkerError("JOB_LEASE_LOST", "Worker потерял lease задачи");
+    }
+  }
+
+  if (snapshotCandles.length === 0) {
+    throw new ValidationWorkerError("DATASET_EMPTY", "Bybit не вернул свечи за выбранный период");
+  }
+  const materialized = await validationRepository.materializeDataset({
+    workerId,
+    jobId: job.jobId,
+    runId: job.runId,
+    workspaceId: job.workspaceId,
+    source: validationDatasetSource,
+    exchange: "bybit",
+    instrumentType: "linear-perpetual",
+    timeframe: executionInput.dataset.timeframe,
+    symbols,
+    candles: snapshotCandles,
+  });
+  const snapshot = await validationRepository.getDatasetSnapshot(job.workspaceId, materialized.id);
+  if (!snapshot) {
+    throw new ValidationWorkerError(
+      "DATASET_SNAPSHOT_MISSING",
+      "Материализованный immutable dataset snapshot не найден",
+    );
+  }
+  return deserializeValidationDataset(snapshot, symbols);
+}
+
+function deserializeValidationDataset(
+  snapshot: NonNullable<Awaited<ReturnType<ValidationRepository["getDatasetSnapshot"]>>>,
+  symbols: string[],
+) {
+  return {
+    id: snapshot.id,
+    contentHash: snapshot.contentHash,
+    symbols,
+    candles: snapshot.candles.map((candle) => ({
+      symbol: candle.symbol,
+      openTime: candle.openTime,
+      open: candle.open.toNumber(),
+      high: candle.high.toNumber(),
+      low: candle.low.toNumber(),
+      close: candle.close.toNumber(),
+      turnover: candle.turnover.toNumber(),
+    })),
+  };
+}
+
+function readDatasetSymbols(value: unknown): string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? [...value].sort()
+    : [];
 }
 
 async function shutdown(signal: string) {
@@ -757,6 +827,12 @@ function runtimeFactors(
 }
 
 function validationFailure(error: unknown): { code: string; message: string } {
+  if (error instanceof ValidationDatasetConflictError) {
+    return {
+      code: "DATASET_SNAPSHOT_CONFLICT",
+      message: "Immutable dataset snapshot не прошёл проверку целостности",
+    };
+  }
   if (error instanceof ValidationWorkerError) {
     return { code: error.code, message: error.message.slice(0, 500) };
   }
@@ -794,6 +870,7 @@ const validationPollIntervalMs = 2_000;
 const validationLeaseMs = 5 * 60_000;
 const maximumDatasetCandles = 250_000;
 const persistenceBatchSize = 2_000;
+const validationDatasetSource = "bybit-public-linear-klines";
 const timeframeMinutes = { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 } as const;
 const bybitIntervals: Record<keyof typeof timeframeMinutes, string> = {
   "5m": "5",

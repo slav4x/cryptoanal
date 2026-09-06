@@ -395,10 +395,38 @@ function RunProvenance({ run }: { run: ValidationRunDetailDto["run"] }) {
           <DetailRow label="Engine" value={run.engineVersion} mono />
           <DetailRow label="Config hash" value={run.configHash} mono />
           <DetailRow label="Dataset ID" value={run.datasetId} mono />
+          {run.datasetSnapshot ? (
+            <DetailRow label="Dataset hash" value={run.datasetSnapshot.contentHash} mono />
+          ) : null}
         </div>
         <div>
-          <DetailRow label="Пары" value={run.input.dataset.symbols.join(", ")} mono />
-          <DetailRow label="Таймфрейм" value={run.input.dataset.timeframe} />
+          <DetailRow
+            label="Источник"
+            value={run.datasetSnapshot?.source ?? "Ожидает материализации"}
+            mono
+          />
+          <DetailRow
+            label="Пары"
+            value={(run.datasetSnapshot?.symbols ?? run.input.dataset.symbols).join(", ")}
+            mono
+          />
+          <DetailRow
+            label="Таймфрейм"
+            value={run.datasetSnapshot?.timeframe ?? run.input.dataset.timeframe}
+          />
+          {run.datasetSnapshot ? (
+            <>
+              <DetailRow
+                label="Фактический период"
+                value={`${formatDateTime(run.datasetSnapshot.startsAt)} — ${formatDateTime(run.datasetSnapshot.endsAt)}`}
+              />
+              <DetailRow
+                label="Свечей"
+                value={run.datasetSnapshot.candleCount.toLocaleString("ru-RU")}
+                mono
+              />
+            </>
+          ) : null}
           <DetailRow label="Капитал" value={`${run.input.initialCapital} USDT`} mono />
           <DetailRow label="Завершён" value={formatDateTime(run.completedAt)} />
         </div>

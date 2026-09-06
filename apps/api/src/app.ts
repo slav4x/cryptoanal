@@ -1466,6 +1466,20 @@ type ValidationRunSource = {
   status: keyof typeof runStatus;
   verdict: keyof typeof validationVerdict;
   datasetId: string;
+  datasetSnapshot: {
+    id: string;
+    schemaVersion: number;
+    source: string;
+    exchange: string;
+    instrumentType: string;
+    timeframe: string;
+    symbols: unknown;
+    startsAt: Date;
+    endsAt: Date;
+    candleCount: number;
+    contentHash: string;
+    createdAt: Date;
+  } | null;
   datasetAsOf: Date;
   engineVersion: string;
   configHash: string;
@@ -1481,6 +1495,17 @@ type ValidationRunSource = {
 };
 
 function serializeValidationRunBase(run: ValidationRunSource) {
+  const parsedInput = validationExecutionInputSchema.parse(run.input);
+  const datasetSnapshot = run.datasetSnapshot;
+  const snapshotSymbols = datasetSnapshot ? readStringArray(datasetSnapshot.symbols) : [];
+  if (
+    datasetSnapshot &&
+    (datasetSnapshot.timeframe !== parsedInput.dataset.timeframe ||
+      JSON.stringify(snapshotSymbols) !==
+        JSON.stringify([...new Set(parsedInput.dataset.symbols)].sort()))
+  ) {
+    throw new Error("Validation dataset snapshot does not match run input");
+  }
   return {
     id: run.id,
     strategy: run.strategy,
@@ -1489,10 +1514,26 @@ function serializeValidationRunBase(run: ValidationRunSource) {
     status: runStatus[run.status],
     verdict: validationVerdict[run.verdict],
     datasetId: run.datasetId,
+    datasetSnapshot: datasetSnapshot
+      ? {
+          id: datasetSnapshot.id,
+          schemaVersion: datasetSnapshot.schemaVersion,
+          source: datasetSnapshot.source,
+          exchange: datasetSnapshot.exchange,
+          instrumentType: datasetSnapshot.instrumentType,
+          timeframe: parsedInput.dataset.timeframe,
+          symbols: snapshotSymbols,
+          startsAt: datasetSnapshot.startsAt.toISOString(),
+          endsAt: datasetSnapshot.endsAt.toISOString(),
+          candleCount: datasetSnapshot.candleCount,
+          contentHash: datasetSnapshot.contentHash,
+          createdAt: datasetSnapshot.createdAt.toISOString(),
+        }
+      : null,
     datasetAsOf: run.datasetAsOf.toISOString(),
     engineVersion: run.engineVersion,
     configHash: run.configHash,
-    input: validationExecutionInputSchema.parse(run.input),
+    input: parsedInput,
     failureCode: run.failureCode,
     failureMessage: run.failureMessage,
     queuedAt: run.queuedAt.toISOString(),
@@ -1709,6 +1750,12 @@ function getValidationMessages(error: unknown): string[] | null {
     }
     return "Некорректное значение";
   });
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? [...value].sort()
+    : [];
 }
 
 const tradingEnvironment = {

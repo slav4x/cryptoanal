@@ -547,6 +547,22 @@ const validationRunBaseSchema = z.object({
   status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
   verdict: z.enum(["pending", "passed", "failed", "warning"]),
   datasetId: z.string(),
+  datasetSnapshot: z
+    .object({
+      id: z.uuid(),
+      schemaVersion: z.number().int().positive(),
+      source: z.string(),
+      exchange: z.string(),
+      instrumentType: z.string(),
+      timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+      symbols: z.array(z.string()),
+      startsAt: z.iso.datetime(),
+      endsAt: z.iso.datetime(),
+      candleCount: z.number().int().nonnegative(),
+      contentHash: z.string(),
+      createdAt: z.iso.datetime(),
+    })
+    .nullable(),
   datasetAsOf: z.iso.datetime(),
   engineVersion: z.string(),
   configHash: z.string(),

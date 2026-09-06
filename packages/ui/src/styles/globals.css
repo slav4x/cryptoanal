@@ -110,6 +110,12 @@ html {
   background: var(--background);
 }
 
+html[data-density="comfortable"] th,
+html[data-density="comfortable"] td {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;

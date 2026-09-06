@@ -1151,6 +1151,62 @@ export const playbooksSchema = z.object({
 
 export const playbookMutationSchema = z.object({ playbook: playbookSchema });
 
+export const tableDensitySchema = z.enum(["compact", "comfortable"]);
+export const workspacePreferencesSchema = z.object({
+  timezone: z.string(),
+  currency: z.literal("USDT"),
+  tableDensity: tableDensitySchema,
+  updatedAt: z.iso.datetime(),
+});
+export const settingsUpdateSchema = z.object({
+  timezone: z.string().trim().min(1).max(100),
+  tableDensity: tableDensitySchema,
+  expectedUpdatedAt: z.iso.datetime(),
+});
+export const settingsSchema = z.object({
+  preferences: workspacePreferencesSchema,
+  runtimeSafety: z.object({
+    environment: z.enum(["development", "test", "production"]),
+    tradingEnvironment: z.literal("dry-run"),
+    confirmationsRequired: z.literal(true),
+    liveTradingEnabled: z.literal(false),
+    maxActiveDeployments: z.literal(1),
+  }),
+  marketData: z.object({
+    provider: z.literal("Bybit public API"),
+    marketPollIntervalMs: z.number().int().positive(),
+    candlePollIntervalMs: z.number().int().positive(),
+    accountSnapshotIntervalMs: z.number().int().positive(),
+  }),
+  exchange: z.object({
+    publicConnectionConfigured: z.boolean(),
+    privateConnectionConfigured: z.literal(false),
+    accountId: z.string(),
+  }),
+  notifications: z.object({
+    configured: z.literal(false),
+    reason: z.string(),
+  }),
+  retention: z.object({
+    automaticCleanupEnabled: z.literal(false),
+    exportFormat: z.literal("json"),
+    exportIncludes: z.array(z.string()),
+    exportExcludes: z.array(z.string()),
+  }),
+  system: z.object({
+    applicationVersion: z.string(),
+    workspaceId: z.string(),
+    actorId: z.string(),
+    database: z.enum(["connected", "unavailable"]),
+  }),
+});
+export const settingsMutationSchema = z.object({ preferences: workspacePreferencesSchema });
+export const settingsExportSchema = z.object({
+  filename: z.string(),
+  mediaType: z.literal("application/json"),
+  content: z.string(),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -1249,5 +1305,11 @@ export type PlaybookStatusChangeDto = z.infer<typeof playbookStatusChangeSchema>
 export type PlaybookDto = z.infer<typeof playbookSchema>;
 export type PlaybooksDto = z.infer<typeof playbooksSchema>;
 export type PlaybookMutationDto = z.infer<typeof playbookMutationSchema>;
+export type TableDensity = z.infer<typeof tableDensitySchema>;
+export type WorkspacePreferencesDto = z.infer<typeof workspacePreferencesSchema>;
+export type SettingsDto = z.infer<typeof settingsSchema>;
+export type SettingsUpdateDto = z.infer<typeof settingsUpdateSchema>;
+export type SettingsMutationDto = z.infer<typeof settingsMutationSchema>;
+export type SettingsExportDto = z.infer<typeof settingsExportSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

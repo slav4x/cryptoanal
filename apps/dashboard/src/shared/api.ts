@@ -15,6 +15,9 @@ import {
   positionCloseResultSchema,
   requestContextSchema,
   reviewSessionCreatedSchema,
+  settingsExportSchema,
+  settingsMutationSchema,
+  settingsSchema,
   strategyCatalogSchema,
   strategyCreatedSchema,
   strategyDetailSchema,
@@ -54,6 +57,10 @@ import {
   type RequestContextDto,
   type ReviewSessionCreateDto,
   type ReviewSessionCreatedDto,
+  type SettingsDto,
+  type SettingsExportDto,
+  type SettingsMutationDto,
+  type SettingsUpdateDto,
   type StrategyCatalogDto,
   type StrategyCreateDto,
   type StrategyCreatedDto,
@@ -131,6 +138,9 @@ const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
 const journalEnvelopeSchema = apiEnvelopeSchema(journalSchema);
 const journalEntryCreatedEnvelopeSchema = apiEnvelopeSchema(journalEntryCreatedSchema);
 const reviewSessionCreatedEnvelopeSchema = apiEnvelopeSchema(reviewSessionCreatedSchema);
+const settingsEnvelopeSchema = apiEnvelopeSchema(settingsSchema);
+const settingsMutationEnvelopeSchema = apiEnvelopeSchema(settingsMutationSchema);
+const settingsExportEnvelopeSchema = apiEnvelopeSchema(settingsExportSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const playbooksEnvelopeSchema = apiEnvelopeSchema(playbooksSchema);
 const playbookMutationEnvelopeSchema = apiEnvelopeSchema(playbookMutationSchema);
@@ -226,6 +236,23 @@ export function changePlaybookStatus(
     playbookMutationEnvelopeSchema,
     { method: "POST", body: JSON.stringify(input) },
   );
+}
+
+export function fetchSettings(): Promise<ApiEnvelope<SettingsDto>> {
+  return request("/api/v1/settings", settingsEnvelopeSchema);
+}
+
+export function updateWorkspacePreferences(
+  input: SettingsUpdateDto,
+): Promise<ApiEnvelope<SettingsMutationDto>> {
+  return request("/api/v1/settings/preferences", settingsMutationEnvelopeSchema, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function exportWorkspace(): Promise<ApiEnvelope<SettingsExportDto>> {
+  return request("/api/v1/settings/export", settingsExportEnvelopeSchema);
 }
 
 export function createJournalEntry(

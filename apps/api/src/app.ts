@@ -47,6 +47,10 @@ import {
   requestContextSchema,
   reviewSessionCreateSchema,
   reviewSessionCreatedSchema,
+  settingsExportSchema,
+  settingsMutationSchema,
+  settingsSchema,
+  settingsUpdateSchema,
   strategyCatalogSchema,
   strategyConfigSchema,
   strategyCreateSchema,
@@ -104,12 +108,16 @@ import {
   RuntimePositionNotFoundError,
   RuntimePositionStatusConflictError,
   RuntimeRepository,
+  SettingsRepository,
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
   StrategyNotFoundError,
   StrategyRepository,
   StrategyStatusConflictError,
   StrategyVersionNotAllowedError,
+  WorkspaceSettingsConflictError,
+  WorkspaceSettingsNotFoundError,
+  WorkspaceTimezoneInvalidError,
   ValidationAlreadyActiveError,
   ValidationNotEligibleError,
   ValidationRepository,
@@ -156,6 +164,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const playbookRepository = new PlaybookRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
+  const settingsRepository = new SettingsRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
   const validationRepository = new ValidationRepository(prisma);
 
@@ -795,6 +804,144 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         };
       } catch (error) {
         throwPlaybookApiError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/settings",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(settingsSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const [preferences, databaseConnected] = await Promise.all([
+        settingsRepository.get(workspace.id),
+        repository.ping(),
+      ]);
+      return {
+        data: {
+          preferences: serializeWorkspacePreferences(preferences),
+          runtimeSafety: {
+            environment: config.NODE_ENV,
+            tradingEnvironment: "dry-run" as const,
+            confirmationsRequired: true as const,
+            liveTradingEnabled: false as const,
+            maxActiveDeployments: 1 as const,
+          },
+          marketData: {
+            provider: "Bybit public API" as const,
+            marketPollIntervalMs: config.MARKET_POLL_INTERVAL_MS,
+            candlePollIntervalMs: config.CANDLE_POLL_INTERVAL_MS,
+            accountSnapshotIntervalMs: config.ACCOUNT_SNAPSHOT_INTERVAL_MS,
+          },
+          exchange: {
+            publicConnectionConfigured: Boolean(config.BYBIT_PUBLIC_BASE_URL),
+            privateConnectionConfigured: false as const,
+            accountId: config.DRY_RUN_ACCOUNT_ID,
+          },
+          notifications: {
+            configured: false as const,
+            reason: "Канал доставки будет добавлен после users/workspaces и авторизации.",
+          },
+          retention: {
+            automaticCleanupEnabled: false as const,
+            exportFormat: "json" as const,
+            exportIncludes: [
+              "настройки workspace",
+              "стратегии и версии",
+              "закрытые сделки",
+              "journal и review sessions",
+              "playbooks и связи",
+            ],
+            exportExcludes: ["market candles", "system logs", "secrets"],
+          },
+          system: {
+            applicationVersion,
+            workspaceId: workspace.id,
+            actorId: config.DEVELOPMENT_ACTOR_ID,
+            database: databaseConnected ? ("connected" as const) : ("unavailable" as const),
+          },
+        },
+        meta: createMeta(request.id, databaseConnected ? "fresh" : "stale"),
+      };
+    },
+  );
+
+  app.put(
+    "/api/v1/settings/preferences",
+    {
+      schema: {
+        body: settingsUpdateSchema,
+        response: {
+          200: apiEnvelopeSchema(settingsMutationSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const preferences = await settingsRepository.update({
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          timezone: request.body.timezone,
+          tableDensity: request.body.tableDensity,
+          expectedUpdatedAt: new Date(request.body.expectedUpdatedAt),
+        });
+        return {
+          data: { preferences: serializeWorkspacePreferences(preferences) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwSettingsApiError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/settings/export",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(settingsExportSchema),
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const exportedAt = new Date();
+        const payload = await settingsRepository.exportWorkspace({
+          workspaceId: workspace.id,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+        });
+        return {
+          data: {
+            filename: `cryptoanal-${workspace.id}-${exportedAt.toISOString().slice(0, 10)}.json`,
+            mediaType: "application/json" as const,
+            content: JSON.stringify(
+              { schemaVersion: 1, exportedAt: exportedAt.toISOString(), workspace: payload },
+              null,
+              2,
+            ),
+          },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwSettingsApiError(error);
       }
     },
   );
@@ -2143,6 +2290,22 @@ function serializeAnalyticsBreakdown(
 type JournalEntryResult = Awaited<ReturnType<JournalRepository["createEntry"]>>;
 type ReviewSessionResult = Awaited<ReturnType<JournalRepository["createReview"]>>;
 type PlaybookResult = Awaited<ReturnType<PlaybookRepository["create"]>>;
+type WorkspacePreferencesResult = Awaited<ReturnType<SettingsRepository["get"]>>;
+
+function serializeWorkspacePreferences(preferences: WorkspacePreferencesResult) {
+  if (preferences.currency !== "USDT") {
+    throw new Error(`Unsupported workspace currency: ${preferences.currency}`);
+  }
+  if (preferences.tableDensity !== "compact" && preferences.tableDensity !== "comfortable") {
+    throw new Error(`Unsupported table density: ${preferences.tableDensity}`);
+  }
+  return {
+    timezone: preferences.timezone,
+    currency: "USDT" as const,
+    tableDensity: preferences.tableDensity as "compact" | "comfortable",
+    updatedAt: preferences.updatedAt.toISOString(),
+  };
+}
 
 function serializePlaybook(playbook: PlaybookResult) {
   return {
@@ -2607,6 +2770,23 @@ function throwPlaybookApiError(error: unknown): never {
       409,
       "PLAYBOOK_STATUS_CONFLICT",
       "Статус плейбука уже изменился. Обновите данные",
+    );
+  }
+  throw error;
+}
+
+function throwSettingsApiError(error: unknown): never {
+  if (error instanceof WorkspaceTimezoneInvalidError) {
+    throw new ApiError(400, "WORKSPACE_TIMEZONE_INVALID", "Укажите корректную IANA timezone");
+  }
+  if (error instanceof WorkspaceSettingsNotFoundError) {
+    throw new ApiError(404, "WORKSPACE_SETTINGS_NOT_FOUND", "Настройки workspace не найдены");
+  }
+  if (error instanceof WorkspaceSettingsConflictError) {
+    throw new ApiError(
+      409,
+      "WORKSPACE_SETTINGS_CONFLICT",
+      "Настройки уже изменились. Обновите страницу",
     );
   }
   throw error;

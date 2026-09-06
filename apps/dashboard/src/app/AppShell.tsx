@@ -15,11 +15,12 @@ import {
   LayoutDashboard,
   Menu,
   RadioTower,
+  Settings,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { fetchOverview, fetchRequestContext } from "../shared/api";
+import { fetchOverview, fetchRequestContext, fetchSettings } from "../shared/api";
 
 const navigation = [
   { label: "Главная", href: "/", icon: LayoutDashboard, end: true },
@@ -33,6 +34,7 @@ const navigation = [
   { label: "Активность", href: "/activity", icon: ListTree, end: false },
   { label: "Разбор", href: "/journal", icon: BookOpenText, end: false },
   { label: "Плейбуки", href: "/playbooks", icon: BookMarked, end: false },
+  { label: "Настройки", href: "/settings", icon: Settings, end: false },
 ] as const;
 
 export function AppShell() {
@@ -48,6 +50,16 @@ export function AppShell() {
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    const density = settingsQuery.data?.data.preferences.tableDensity;
+    if (density) document.documentElement.dataset.density = density;
+  }, [settingsQuery.data?.data.preferences.tableDensity]);
 
   const workspaceName = contextQuery.data?.data.workspaceName;
   const runtimeState = overviewQuery.data?.data.runtimeState ?? "offline";

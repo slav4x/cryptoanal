@@ -16,6 +16,12 @@ export {
 } from "./journal-repository";
 export { HealthRepository } from "./health-repository";
 export {
+  SettingsRepository,
+  WorkspaceSettingsConflictError,
+  WorkspaceSettingsNotFoundError,
+  WorkspaceTimezoneInvalidError,
+} from "./settings-repository";
+export {
   PlaybookLinkNotFoundError,
   PlaybookNameConflictError,
   PlaybookNotFoundError,

@@ -23,12 +23,19 @@ import {
   Check,
   FlaskConical,
   GitCompareArrows,
+  LoaderCircle,
   Plus,
+  Rocket,
   RotateCcw,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ApiClientError, changeStrategyStatus, fetchStrategyDetail } from "../../shared/api";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  ApiClientError,
+  changeStrategyStatus,
+  createDeployment,
+  fetchStrategyDetail,
+} from "../../shared/api";
 
 type Tab = "overview" | "config" | "versions";
 
@@ -179,8 +186,74 @@ function OverviewTab({ strategy }: { strategy: StrategyDetailDto }) {
         </CardContent>
       </Card>
 
+      <DeploymentCard strategy={strategy} />
       <LifecycleCard strategy={strategy} />
     </div>
+  );
+}
+
+function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const latestVersion = strategy.latestVersion;
+  const mutation = useMutation({
+    mutationFn: () => {
+      if (!latestVersion) throw new Error("У стратегии нет версии");
+      return createDeployment(strategy.id, {
+        strategyVersionId: latestVersion.id,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    },
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ["strategy", strategy.id] });
+      void queryClient.invalidateQueries({ queryKey: ["strategies"] });
+      void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      navigate(`/runtime?deployment=${result.data.deployment.id}`);
+    },
+  });
+
+  return (
+    <Card className="lg:col-span-3">
+      <CardHeader className="flex-row items-center justify-between gap-4 border-b">
+        <div>
+          <h2 className="text-sm font-medium">Dry-run deployment</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Фиксирует одобренную версию и переводит её в безопасный контур управления запуском.
+          </p>
+        </div>
+        {strategy.deployment ? (
+          <Button asChild size="sm">
+            <Link to={`/runtime?deployment=${strategy.deployment.id}`}>
+              <Rocket aria-hidden="true" />
+              Управление
+            </Link>
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={strategy.status !== "approved" || !latestVersion || mutation.isPending}
+            onClick={() => mutation.mutate()}
+            title={
+              strategy.status !== "approved"
+                ? "Сначала одобрите стратегию с пройденной валидацией"
+                : undefined
+            }
+          >
+            {mutation.isPending ? (
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Rocket aria-hidden="true" />
+            )}
+            Подготовить dry-run
+          </Button>
+        )}
+      </CardHeader>
+      {mutation.isError ? (
+        <CardContent className="p-[18px]">
+          <p className="text-xs text-loss">{mutation.error.message}</p>
+        </CardContent>
+      ) : null}
+    </Card>
   );
 }
 

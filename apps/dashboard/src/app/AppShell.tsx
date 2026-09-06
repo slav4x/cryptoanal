@@ -9,6 +9,7 @@ import {
   Layers3,
   LayoutDashboard,
   Menu,
+  RadioTower,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -21,6 +22,7 @@ const navigation = [
   { label: "Сделки", href: "/trades", icon: ArrowLeftRight, end: false },
   { label: "Стратегии", href: "/strategies", icon: Layers3, end: false },
   { label: "Валидация", href: "/validation", icon: FlaskConical, end: false },
+  { label: "Запуск", href: "/runtime", icon: RadioTower, end: false },
 ] as const;
 
 export function AppShell() {

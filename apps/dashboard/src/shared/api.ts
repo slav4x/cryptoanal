@@ -1,5 +1,7 @@
 import {
   apiEnvelopeSchema,
+  deploymentMutationResultSchema,
+  deploymentsSchema,
   marketDetailSchema,
   marketsSchema,
   overviewSchema,
@@ -17,6 +19,10 @@ import {
   watchlistStateSchema,
   type MarketsDto,
   type MarketDetailDto,
+  type DeploymentCommandInputDto,
+  type DeploymentCreateDto,
+  type DeploymentMutationResultDto,
+  type DeploymentsDto,
   type OverviewPeriod,
   type OverviewDto,
   type RequestContextDto,
@@ -105,6 +111,8 @@ const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCr
 const validationsEnvelopeSchema = apiEnvelopeSchema(validationsSchema);
 const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedSchema);
 const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailSchema);
+const deploymentsEnvelopeSchema = apiEnvelopeSchema(deploymentsSchema);
+const deploymentMutationResultEnvelopeSchema = apiEnvelopeSchema(deploymentMutationResultSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -203,6 +211,32 @@ export function queueValidationRun(
   return request(
     `/api/v1/strategies/${encodeURIComponent(strategyId)}/validations`,
     validationRunQueuedEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function fetchDeployments(): Promise<ApiEnvelope<DeploymentsDto>> {
+  return request("/api/v1/deployments", deploymentsEnvelopeSchema);
+}
+
+export function createDeployment(
+  strategyId: string,
+  input: DeploymentCreateDto,
+): Promise<ApiEnvelope<DeploymentMutationResultDto>> {
+  return request(
+    `/api/v1/strategies/${encodeURIComponent(strategyId)}/deployments`,
+    deploymentMutationResultEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function applyDeploymentCommand(
+  deploymentId: string,
+  input: DeploymentCommandInputDto,
+): Promise<ApiEnvelope<DeploymentMutationResultDto>> {
+  return request(
+    `/api/v1/deployments/${encodeURIComponent(deploymentId)}/commands`,
+    deploymentMutationResultEnvelopeSchema,
     { method: "POST", body: JSON.stringify(input) },
   );
 }

@@ -90,8 +90,8 @@ polling и без прямого обращения UI к exchange.
 - [ ] Добавить breakdowns по market regime и trading session после фиксации этих полей в trade provenance.
 - [x] Реализовать costs analysis: fees/funding/slippage.
 - [ ] Реализовать decision/activity timeline.
-- [ ] Реализовать drift against validated baseline.
-- [ ] Реализовать health/watchdog/incidents.
+- [x] Реализовать drift against validated baseline.
+- [x] Реализовать health/watchdog/incidents.
 - [ ] Отделить product activity от raw system logs.
 
 **Готово, когда:** пользователь отвечает из UI не только «сколько», но и «почему»,

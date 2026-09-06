@@ -88,11 +88,16 @@ PlaybookVersion   # можно отложить до P1
 OutboxEvent
 AuditEvent
 HealthSnapshot
-Incident
+WatchdogIncident
 Job
 ```
 
 Raw application logs остаются в log storage; не нужно дублировать каждый log line в БД.
+
+`WatchdogIncident` хранит не log line, а отдельный эпизод известного operational
+условия. Стабильный fingerprint не даёт создавать дубликаты на каждом цикле. При
+повторном обнаружении открытый эпизод обновляет `lastObservedAt`, после восстановления
+получает `resolvedAt`, а новое появление увеличивает `occurrenceCount`.
 
 ## 3. Поля, добавляемые сейчас ради будущего P1
 
@@ -233,6 +238,18 @@ context hash позволяет обнаружить любое изменени
 Pause/resume сохраняют исходный execution run, stop атомарно завершает его и возвращает
 стратегию в approved. Каждая успешная команда создаёт `AuditEvent` с причиной и
 переходом состояния.
+
+`GET /api/v1/health` строит текущую проекцию API/database/worker/market/account/queue/
+execution/outbox health и возвращает историю `WatchdogIncident`. Worker выполняет
+edge-triggered watchdog-цикл: открывает инциденты для stale data, queue/outbox lag,
+failed jobs, rejected orders и runtime failures, затем автоматически закрывает их после
+восстановления.
+
+Для активного execution run API читает именно `validation.runId`, зафиксированный в его
+immutable context, и сравнивает runtime win rate, expectancy, profit factor и drawdown с
+этим baseline. До 20 закрытых runtime-сделок результат имеет статус
+`insufficient-data`. После достижения порога warning/critical определяется явной
+threshold policy, а не визуальной оценкой графика.
 
 Worker выполняет running/paused deployments по последней завершённой свече. Таблица
 `RuntimeCursor` хранит прогресс, pending signal и последнюю ошибку пары. Решение имеет

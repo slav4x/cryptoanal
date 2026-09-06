@@ -61,6 +61,7 @@ pnpm dev
 - `/validation/compare` — сравнение 2–4 завершённых запусков;
 - `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
 - `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов.
+- `/analytics/health` — operational health, watchdog incidents и validation drift.
 
 Реализованный private API:
 
@@ -78,8 +79,9 @@ pnpm dev
 - `GET /api/v1/deployments`;
 - `POST /api/v1/strategies/:strategyId/deployments`;
 - `POST /api/v1/deployments/:deploymentId/commands`;
-- `POST /api/v1/positions/:positionId/close`.
-- `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`.
+- `POST /api/v1/positions/:positionId/close`;
+- `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`;
+- `GET /api/v1/health`.
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
@@ -87,6 +89,13 @@ profit factor, expectancy, costs, equity, drawdown, дневной PnL и breakd
 strategy version, symbol и exit reason. Стартовая точка equity берётся из
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
+
+Health projection проверяет API/database, worker heartbeat, свежесть market/account
+данных, validation queue, runtime failures, rejected orders и outbox lag. Worker с
+интервалом `WATCHDOG_INTERVAL_MS` сохраняет edge-triggered инциденты и автоматически
+закрывает их после восстановления. Drift сравнивает runtime только с тем validation run,
+который зафиксирован в immutable execution context; до 20 закрытых сделок вывод не
+делается.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit
@@ -163,3 +172,4 @@ Worker сохраняет account snapshots для development workspace. Кап
 - `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
 - `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут;
 - `RUNTIME_POLL_INTERVAL_MS` — частота поиска новых завершённых свечей, по умолчанию 5 секунд.
+- `WATCHDOG_INTERVAL_MS` — частота пересчёта и синхронизации инцидентов, по умолчанию 30 секунд.

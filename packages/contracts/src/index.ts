@@ -234,10 +234,21 @@ export const strategyValidationSummarySchema = z.object({
   completedAt: z.iso.datetime().nullable(),
 });
 
+export const deploymentStatusSchema = z.enum([
+  "draft",
+  "ready",
+  "running",
+  "paused",
+  "stopped",
+  "failed",
+]);
+
+export const deploymentCommandSchema = z.enum(["start", "pause", "resume", "stop"]);
+
 export const strategyDeploymentSummarySchema = z.object({
   id: z.string(),
   environment: z.enum(["dry-run", "demo", "live"]),
-  status: z.enum(["draft", "ready", "running", "paused", "stopped", "failed"]),
+  status: deploymentStatusSchema,
   strategyVersion: z.number().int().positive(),
   updatedAt: z.iso.datetime(),
 });
@@ -574,6 +585,54 @@ export const validationRunQueuedSchema = z.object({
   }),
 });
 
+export const executionRunSummarySchema = z.object({
+  id: z.string(),
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+  contextHash: z.string(),
+  engineVersion: z.string(),
+  startedAt: z.iso.datetime().nullable(),
+  stoppedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+});
+
+export const deploymentSchema = z.object({
+  id: z.string(),
+  strategy: z.object({ id: z.string(), name: z.string() }),
+  strategyVersion: z.object({ id: z.string(), version: z.number().int().positive() }),
+  environment: z.enum(["dry-run", "demo", "live"]),
+  exchangeAccountId: z.string(),
+  status: deploymentStatusSchema,
+  allowedCommands: z.array(deploymentCommandSchema),
+  latestExecutionRun: executionRunSummarySchema.nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const deploymentsSchema = z.object({
+  items: z.array(deploymentSchema),
+  total: z.number().int().nonnegative(),
+  counts: z.record(deploymentStatusSchema, z.number().int().nonnegative()),
+});
+
+export const deploymentCreateSchema = z.object({
+  strategyVersionId: z.uuid(),
+  idempotencyKey: z.uuid(),
+});
+
+export const deploymentCommandInputSchema = z.object({
+  command: deploymentCommandSchema,
+  expectedStatus: deploymentStatusSchema,
+  reason: z.string().trim().min(3).max(300),
+  idempotencyKey: z.uuid(),
+});
+
+export const deploymentMutationResultSchema = z.object({
+  deployment: deploymentSchema,
+  replayed: z.boolean(),
+});
+
+export const deploymentIdParamsSchema = z.object({ deploymentId: z.uuid() });
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -632,5 +691,12 @@ export type ValidationRunDto = z.infer<typeof validationRunSchema>;
 export type ValidationRunDetailDto = z.infer<typeof validationRunDetailSchema>;
 export type ValidationsDto = z.infer<typeof validationsSchema>;
 export type ValidationRunQueuedDto = z.infer<typeof validationRunQueuedSchema>;
+export type DeploymentStatusDto = z.infer<typeof deploymentStatusSchema>;
+export type DeploymentCommandDto = z.infer<typeof deploymentCommandSchema>;
+export type DeploymentDto = z.infer<typeof deploymentSchema>;
+export type DeploymentsDto = z.infer<typeof deploymentsSchema>;
+export type DeploymentCreateDto = z.infer<typeof deploymentCreateSchema>;
+export type DeploymentCommandInputDto = z.infer<typeof deploymentCommandInputSchema>;
+export type DeploymentMutationResultDto = z.infer<typeof deploymentMutationResultSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

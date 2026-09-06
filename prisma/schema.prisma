@@ -123,6 +123,7 @@ model Workspace {
   decisions        Decision[]
   jobs             Job[]
   auditEvents      AuditEvent[]
+  commandReceipts  CommandReceipt[]
   outboxEvents     OutboxEvent[]
   accountSnapshots AccountSnapshot[]
 }
@@ -340,8 +341,11 @@ model ExecutionRun {
   strategyVersionId String
   environment       TradingEnvironment
   configHash        String
+  context           Json
+  contextHash       String
   engineVersion     String
   status            RunStatus          @default(QUEUED)
+  createdByActorId  String
   startedAt         DateTime?          @db.Timestamptz(3)
   stoppedAt         DateTime?          @db.Timestamptz(3)
   createdAt         DateTime           @default(now()) @db.Timestamptz(3)
@@ -524,6 +528,21 @@ model AuditEvent {
 
   @@index([workspaceId, createdAt])
   @@index([requestId])
+}
+
+model CommandReceipt {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  idempotencyKey String
+  command        String
+  resourceType   String
+  resourceId     String
+  result         Json
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, resourceType, resourceId, createdAt])
 }
 
 model OutboxEvent {

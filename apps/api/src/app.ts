@@ -2,12 +2,19 @@ import {
   calculateMarketAnalysis,
   canTransitionStrategyStatus,
   createDevelopmentContext,
+  executionEngineVersion,
   evaluateStrategyLifecycle,
+  getDeploymentCommands,
   validationEngineVersion,
 } from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
+  deploymentCommandInputSchema,
+  deploymentCreateSchema,
+  deploymentIdParamsSchema,
+  deploymentMutationResultSchema,
+  deploymentsSchema,
   errorEnvelopeSchema,
   healthSchema,
   marketDetailSchema,
@@ -41,8 +48,18 @@ import {
   watchlistStateSchema,
 } from "@cryptoanal/contracts";
 import {
+  ActiveDeploymentExistsError,
   type CryptoAnalPrismaClient,
   DashboardRepository,
+  DeploymentCommandNotAllowedError,
+  DeploymentIdempotencyConflictError,
+  DeploymentNotEligibleError,
+  DeploymentNotFoundError,
+  DeploymentRepository,
+  DeploymentStatusConflictError,
+  DeploymentStrategyNotFoundError,
+  DeploymentValidationRequiredError,
+  DeploymentVersionMismatchError,
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
   StrategyNotFoundError,
@@ -88,6 +105,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   }).withTypeProvider<ZodTypeProvider>();
 
   const repository = new DashboardRepository(prisma);
+  const deploymentRepository = new DeploymentRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
   const validationRepository = new ValidationRepository(prisma);
 
@@ -861,6 +879,120 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   );
 
   app.get(
+    "/api/v1/deployments",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(deploymentsSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const deployments = await deploymentRepository.list(workspace.id);
+      const counts = Object.fromEntries(deploymentStatuses.map((status) => [status, 0])) as Record<
+        (typeof deploymentStatuses)[number],
+        number
+      >;
+      const items = deployments.map((deployment) => {
+        const status = deploymentStatus[deployment.status];
+        counts[status] += 1;
+        return serializeDeployment(deployment);
+      });
+
+      return {
+        data: { items, total: items.length, counts },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/strategies/:strategyId/deployments",
+    {
+      schema: {
+        params: strategyIdParamsSchema,
+        body: deploymentCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(deploymentMutationResultSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = await requireWorkspace();
+      try {
+        const result = await deploymentRepository.create({
+          workspaceId: workspace.id,
+          strategyId: request.params.strategyId,
+          strategyVersionId: request.body.strategyVersionId,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          idempotencyKey: request.body.idempotencyKey,
+          exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
+        });
+
+        return reply.status(201).send({
+          data: {
+            deployment: serializeDeployment(result.deployment),
+            replayed: result.replayed,
+          },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        throwDeploymentApiError(error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/deployments/:deploymentId/commands",
+    {
+      schema: {
+        params: deploymentIdParamsSchema,
+        body: deploymentCommandInputSchema,
+        response: {
+          200: apiEnvelopeSchema(deploymentMutationResultSchema),
+          400: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      try {
+        const result = await deploymentRepository.applyCommand({
+          workspaceId: workspace.id,
+          deploymentId: request.params.deploymentId,
+          actorId: config.DEVELOPMENT_ACTOR_ID,
+          requestId: request.id,
+          idempotencyKey: request.body.idempotencyKey,
+          command: persistedDeploymentCommand[request.body.command],
+          expectedStatus: persistedDeploymentStatus[request.body.expectedStatus],
+          reason: request.body.reason,
+          engineVersion: executionEngineVersion,
+        });
+
+        return {
+          data: {
+            deployment: serializeDeployment(result.deployment),
+            replayed: result.replayed,
+          },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwDeploymentApiError(error);
+      }
+    },
+  );
+
+  app.get(
     "/api/v1/markets/:symbol",
     {
       schema: {
@@ -1257,6 +1389,113 @@ function serializeValidationRunDetail(run: ValidationRunSource) {
   };
 }
 
+type DeploymentSource = {
+  id: string;
+  environment: keyof typeof tradingEnvironment;
+  exchangeAccountId: string;
+  status: keyof typeof deploymentStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  strategy: { id: string; name: string };
+  strategyVersion: { id: string; version: number };
+  executionRuns: Array<{
+    id: string;
+    status: keyof typeof runStatus;
+    contextHash: string;
+    engineVersion: string;
+    startedAt: Date | null;
+    stoppedAt: Date | null;
+    createdAt: Date;
+  }>;
+};
+
+function serializeDeployment(deployment: DeploymentSource) {
+  const status = deploymentStatus[deployment.status];
+  const latestExecutionRun = deployment.executionRuns[0] ?? null;
+
+  return {
+    id: deployment.id,
+    strategy: deployment.strategy,
+    strategyVersion: deployment.strategyVersion,
+    environment: tradingEnvironment[deployment.environment],
+    exchangeAccountId: deployment.exchangeAccountId,
+    status,
+    allowedCommands: getDeploymentCommands(status),
+    latestExecutionRun: latestExecutionRun
+      ? {
+          id: latestExecutionRun.id,
+          status: runStatus[latestExecutionRun.status],
+          contextHash: latestExecutionRun.contextHash,
+          engineVersion: latestExecutionRun.engineVersion,
+          startedAt: latestExecutionRun.startedAt?.toISOString() ?? null,
+          stoppedAt: latestExecutionRun.stoppedAt?.toISOString() ?? null,
+          createdAt: latestExecutionRun.createdAt.toISOString(),
+        }
+      : null,
+    createdAt: deployment.createdAt.toISOString(),
+    updatedAt: deployment.updatedAt.toISOString(),
+  };
+}
+
+function throwDeploymentApiError(error: unknown): never {
+  if (error instanceof DeploymentStrategyNotFoundError) {
+    throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
+  }
+  if (error instanceof DeploymentNotFoundError) {
+    throw new ApiError(404, "DEPLOYMENT_NOT_FOUND", "Deployment не найден");
+  }
+  if (error instanceof DeploymentNotEligibleError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_NOT_ELIGIBLE",
+      "Deployment доступен только для одобренной стратегии",
+    );
+  }
+  if (error instanceof DeploymentVersionMismatchError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_VERSION_MISMATCH",
+      "Deployment должен использовать активную версию стратегии",
+    );
+  }
+  if (error instanceof DeploymentValidationRequiredError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_VALIDATION_REQUIRED",
+      "Для этой версии нет успешно завершённой проверки",
+    );
+  }
+  if (error instanceof ActiveDeploymentExistsError) {
+    throw new ApiError(
+      409,
+      "ACTIVE_DEPLOYMENT_EXISTS",
+      "На dry-run счёте уже есть активный deployment",
+    );
+  }
+  if (error instanceof DeploymentStatusConflictError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_STATUS_CONFLICT",
+      "Статус deployment уже изменился. Обновите страницу",
+    );
+  }
+  if (error instanceof DeploymentCommandNotAllowedError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_COMMAND_NOT_ALLOWED",
+      "Команда недоступна для текущего состояния deployment",
+    );
+  }
+  if (error instanceof DeploymentIdempotencyConflictError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_IDEMPOTENCY_CONFLICT",
+      "Idempotency key уже использован другой командой",
+    );
+  }
+  throw error;
+}
+
 function getValidationMessages(error: unknown): string[] | null {
   if (
     !error ||
@@ -1385,4 +1624,22 @@ const deploymentStatus = {
   PAUSED: "paused",
   STOPPED: "stopped",
   FAILED: "failed",
+} as const;
+
+const deploymentStatuses = ["draft", "ready", "running", "paused", "stopped", "failed"] as const;
+
+const persistedDeploymentStatus = {
+  draft: "DRAFT",
+  ready: "READY",
+  running: "RUNNING",
+  paused: "PAUSED",
+  stopped: "STOPPED",
+  failed: "FAILED",
+} as const;
+
+const persistedDeploymentCommand = {
+  start: "START",
+  pause: "PAUSE",
+  resume: "RESUME",
+  stop: "STOP",
 } as const;

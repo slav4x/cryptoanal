@@ -6,6 +6,7 @@ export type RequestContext = {
 };
 
 export * from "./market-analysis";
+export * from "./deployment-lifecycle";
 export * from "./strategy-lifecycle";
 export * from "./validation-engine";
 

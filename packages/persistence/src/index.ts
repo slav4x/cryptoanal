@@ -29,3 +29,17 @@ export {
   type FailValidationJobInput,
   type ValidationTradePersistenceInput,
 } from "./validation-repository";
+export {
+  ActiveDeploymentExistsError,
+  DeploymentCommandNotAllowedError,
+  DeploymentIdempotencyConflictError,
+  DeploymentNotEligibleError,
+  DeploymentNotFoundError,
+  DeploymentRepository,
+  DeploymentStatusConflictError,
+  DeploymentStrategyNotFoundError,
+  DeploymentValidationRequiredError,
+  DeploymentVersionMismatchError,
+  type ApplyDeploymentCommandInput,
+  type CreateDeploymentInput,
+} from "./deployment-repository";

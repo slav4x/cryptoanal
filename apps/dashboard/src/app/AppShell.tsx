@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   Box,
   ChevronsUpDown,
+  ChartNoAxesCombined,
   FlaskConical,
   Layers3,
   LayoutDashboard,
@@ -23,6 +24,7 @@ const navigation = [
   { label: "Стратегии", href: "/strategies", icon: Layers3, end: false },
   { label: "Валидация", href: "/validation", icon: FlaskConical, end: false },
   { label: "Запуск", href: "/runtime", icon: RadioTower, end: false },
+  { label: "Аналитика", href: "/analytics", icon: ChartNoAxesCombined, end: false },
 ] as const;
 
 export function AppShell() {

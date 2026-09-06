@@ -1,5 +1,6 @@
 import {
   apiEnvelopeSchema,
+  analyticsSchema,
   deploymentMutationResultSchema,
   deploymentsSchema,
   marketDetailSchema,
@@ -19,6 +20,8 @@ import {
   validationsSchema,
   watchlistStateSchema,
   type MarketsDto,
+  type AnalyticsDto,
+  type AnalyticsQueryDto,
   type MarketDetailDto,
   type DeploymentCommandInputDto,
   type DeploymentCreateDto,
@@ -100,6 +103,7 @@ async function request<T>(
 }
 
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
+const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
 const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
@@ -124,6 +128,14 @@ export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
 
 export function fetchOverview(period: OverviewPeriod = "7d"): Promise<ApiEnvelope<OverviewDto>> {
   return request(`/api/v1/overview?period=${period}`, overviewEnvelopeSchema);
+}
+
+export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<AnalyticsDto>> {
+  const query = new URLSearchParams({ period: filters.period });
+  if (filters.environment) query.set("environment", filters.environment);
+  if (filters.strategyId) query.set("strategyId", filters.strategyId);
+  if (filters.symbol) query.set("symbol", filters.symbol);
+  return request(`/api/v1/analytics?${query.toString()}`, analyticsEnvelopeSchema);
 }
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {

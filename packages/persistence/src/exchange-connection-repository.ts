@@ -1,4 +1,5 @@
 import type { CryptoAnalPrismaClient } from "./client";
+import { Prisma } from "./generated/prisma/client";
 
 type PersistedEnvironment = "DEMO" | "LIVE";
 
@@ -9,6 +10,12 @@ const exchangeConnectionSelect = {
   environment: true,
   status: true,
   apiKeyHint: true,
+  readOnly: true,
+  tradingPermission: true,
+  ipBound: true,
+  permissions: true,
+  lastVerificationCode: true,
+  lastVerificationMessage: true,
   lastVerifiedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -35,6 +42,20 @@ export class ExchangeConnectionRepository {
         exchange: true,
         label: true,
         environment: true,
+      },
+    });
+  }
+
+  public findWithCredentials(workspaceId: string, connectionId: string) {
+    return this.prisma.exchangeConnection.findFirst({
+      where: { id: connectionId, workspaceId, revokedAt: null },
+      select: {
+        id: true,
+        exchange: true,
+        label: true,
+        environment: true,
+        encryptedApiKey: true,
+        encryptedApiSecret: true,
       },
     });
   }
@@ -106,6 +127,13 @@ export class ExchangeConnectionRepository {
           encryptedApiSecret: input.encryptedApiSecret,
           apiKeyHint: input.apiKeyHint,
           status: "UNVERIFIED",
+          readOnly: null,
+          tradingPermission: null,
+          ipBound: null,
+          accountUid: null,
+          permissions: Prisma.DbNull,
+          lastVerificationCode: null,
+          lastVerificationMessage: null,
           lastVerifiedAt: null,
         },
         select: exchangeConnectionSelect,
@@ -119,6 +147,65 @@ export class ExchangeConnectionRepository {
           resourceId: connection.id,
           outcome: "COMPLETED",
           requestId: input.requestId,
+        },
+      });
+      return connection;
+    });
+  }
+
+  public async recordVerification(input: {
+    workspaceId: string;
+    connectionId: string;
+    actorId: string;
+    requestId: string;
+    status: "ACTIVE" | "INVALID";
+    code: string;
+    message: string;
+    readOnly: boolean | null;
+    tradingPermission: boolean | null;
+    ipBound: boolean | null;
+    accountUid: string | null;
+    permissions: Record<string, string[]> | null;
+    verifiedAt: Date;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const existing = await transaction.exchangeConnection.findFirst({
+        where: { id: input.connectionId, workspaceId: input.workspaceId, revokedAt: null },
+        select: { id: true },
+      });
+      if (!existing) throw new ExchangeConnectionNotFoundError();
+      const connection = await transaction.exchangeConnection.update({
+        where: { id: existing.id },
+        data: {
+          status: input.status,
+          readOnly: input.readOnly,
+          tradingPermission: input.tradingPermission,
+          ipBound: input.ipBound,
+          accountUid: input.accountUid,
+          permissions: input.permissions ?? Prisma.DbNull,
+          lastVerificationCode: input.code,
+          lastVerificationMessage: input.message,
+          lastVerifiedAt: input.verifiedAt,
+        },
+        select: exchangeConnectionSelect,
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          action: "exchange.connection.verify",
+          resourceType: "exchange-connection",
+          resourceId: input.connectionId,
+          outcome: input.status === "ACTIVE" ? "COMPLETED" : "REJECTED",
+          requestId: input.requestId,
+          metadata: {
+            status: input.status,
+            code: input.code,
+            readOnly: input.readOnly,
+            tradingPermission: input.tradingPermission,
+            ipBound: input.ipBound,
+            permissionGroups: input.permissions ? Object.keys(input.permissions) : [],
+          },
         },
       });
       return connection;

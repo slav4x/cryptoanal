@@ -128,6 +128,10 @@ export const exchangeConnectionCredentialsSchema = exchangeConnectionCreateSchem
   apiSecret: true,
 });
 export const exchangeConnectionParamsSchema = z.object({ connectionId: z.uuid() });
+export const exchangePermissionGroupSchema = z.object({
+  name: z.string(),
+  permissions: z.array(z.string()),
+});
 export const exchangeConnectionSchema = z.object({
   id: z.uuid(),
   exchange: z.literal("bybit"),
@@ -135,6 +139,12 @@ export const exchangeConnectionSchema = z.object({
   environment: exchangeConnectionEnvironmentSchema,
   status: exchangeConnectionStatusSchema,
   apiKeyHint: z.string(),
+  readOnly: z.boolean().nullable(),
+  tradingPermission: z.boolean().nullable(),
+  ipBound: z.boolean().nullable(),
+  permissionGroups: z.array(exchangePermissionGroupSchema),
+  lastVerificationCode: z.string().nullable(),
+  lastVerificationMessage: z.string().nullable(),
   lastVerifiedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

@@ -30,6 +30,14 @@ const serverConfigSchema = z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
     BYBIT_PUBLIC_BASE_URL: z.url().default("https://api.bybit.com"),
+    BYBIT_DEMO_BASE_URL: z.url().default("https://api-demo.bybit.com"),
+    BYBIT_LIVE_BASE_URL: z.url().default("https://api.bybit.com"),
+    BYBIT_PRIVATE_REQUEST_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(30_000)
+      .default(10_000),
     MARKET_POLL_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
     CANDLE_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).default(60_000),
     ACCOUNT_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),

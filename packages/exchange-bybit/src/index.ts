@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 const tickerResponseSchema = z.object({
@@ -30,6 +31,23 @@ const klineResponseSchema = z.object({
   }),
 });
 
+const apiKeyInformationResultSchema = z
+  .object({
+    readOnly: z.union([z.literal(0), z.literal(1)]),
+    permissions: z.record(z.string(), z.array(z.string())).default({}),
+    ips: z.array(z.string()).default([]),
+    userID: z.union([z.string(), z.number()]).optional(),
+    userIDInt64: z.union([z.string(), z.number()]).optional(),
+  })
+  .passthrough();
+
+const apiKeyInformationResponseSchema = z.object({
+  retCode: z.number(),
+  retMsg: z.string(),
+  result: z.unknown(),
+  time: z.number().optional(),
+});
+
 export type BybitMarketTicker = {
   symbol: string;
   price: string;
@@ -49,6 +67,146 @@ export type BybitMarketCandle = {
   volume: string;
   turnover: string;
 };
+
+export type BybitApiKeyInformation = {
+  readOnly: boolean;
+  permissions: Record<string, string[]>;
+  ipBound: boolean;
+  accountUid: string | null;
+};
+
+export function evaluateBybitPermissions(permissions: Record<string, string[]>) {
+  const tradingPermissions = new Set(["order", "spottrade", "optionstrade", "derivativestrade"]);
+  const withdrawalPermission = Object.entries(permissions).some(
+    ([group, values]) =>
+      group.toLowerCase() === "wallet" &&
+      values.some((permission) => permission.toLowerCase() === "withdraw"),
+  );
+  const tradingPermission = Object.values(permissions).some((values) =>
+    values.some((permission) => tradingPermissions.has(permission.toLowerCase())),
+  );
+  return { tradingPermission, withdrawalPermission };
+}
+
+export class BybitCredentialsRejectedError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export class BybitPrivateApiUnavailableError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export class BybitPrivateClient {
+  public constructor(
+    private readonly baseUrl: string,
+    private readonly receiveWindowMs = 5_000,
+  ) {}
+
+  public async getApiKeyInformation(
+    apiKey: string,
+    apiSecret: string,
+    signal?: AbortSignal,
+  ): Promise<BybitApiKeyInformation> {
+    const timestamp = String(Date.now());
+    const receiveWindow = String(this.receiveWindowMs);
+    const signaturePayload = `${timestamp}${apiKey}${receiveWindow}`;
+    const signature = createHmac("sha256", apiSecret).update(signaturePayload).digest("hex");
+    const url = new URL("/v5/user/query-api", this.baseUrl);
+    const requestInit: RequestInit = {
+      headers: {
+        Accept: "application/json",
+        "X-BAPI-API-KEY": apiKey,
+        "X-BAPI-TIMESTAMP": timestamp,
+        "X-BAPI-RECV-WINDOW": receiveWindow,
+        "X-BAPI-SIGN": signature,
+        "cdn-request-id": randomUUID(),
+      },
+    };
+    if (signal) requestInit.signal = signal;
+
+    let response: Response;
+    try {
+      response = await fetch(url, requestInit);
+    } catch (error) {
+      const timedOut =
+        signal?.aborted === true || (error instanceof Error && error.name === "TimeoutError");
+      throw new BybitPrivateApiUnavailableError(
+        timedOut ? "TIMEOUT" : "NETWORK_ERROR",
+        timedOut ? "Bybit verification timed out" : "Bybit verification request failed",
+      );
+    }
+
+    if (response.status === 401) {
+      throw new BybitCredentialsRejectedError("HTTP_401", "Bybit rejected authentication");
+    }
+    if (!response.ok) {
+      throw new BybitPrivateApiUnavailableError(
+        `HTTP_${response.status}`,
+        `Bybit verification failed with HTTP ${response.status}`,
+      );
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new BybitPrivateApiUnavailableError(
+        "INVALID_RESPONSE",
+        "Bybit returned a non-JSON response",
+      );
+    }
+    const parsed = apiKeyInformationResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new BybitPrivateApiUnavailableError(
+        "INVALID_RESPONSE",
+        "Bybit returned an unexpected response",
+      );
+    }
+    if (parsed.data.retCode !== 0) {
+      const code = String(parsed.data.retCode);
+      const message = sanitizeBybitMessage(parsed.data.retMsg, apiKey, apiSecret);
+      if (definitiveCredentialErrorCodes.has(parsed.data.retCode)) {
+        throw new BybitCredentialsRejectedError(code, message || "Bybit rejected credentials");
+      }
+      throw new BybitPrivateApiUnavailableError(
+        code,
+        message || "Bybit could not verify credentials",
+      );
+    }
+
+    const result = apiKeyInformationResultSchema.safeParse(parsed.data.result);
+    if (!result.success) {
+      throw new BybitPrivateApiUnavailableError(
+        "INVALID_RESPONSE",
+        "Bybit returned incomplete API key information",
+      );
+    }
+    const extendedAccountUid =
+      result.data.userIDInt64 === undefined ? null : String(result.data.userIDInt64);
+    const accountUid =
+      extendedAccountUid && extendedAccountUid !== "0"
+        ? extendedAccountUid
+        : result.data.userID === undefined
+          ? null
+          : String(result.data.userID);
+    return {
+      readOnly: result.data.readOnly === 1,
+      permissions: result.data.permissions,
+      ipBound: result.data.ips.length > 0,
+      accountUid,
+    };
+  }
+}
 
 export class BybitPublicMarketClient {
   public constructor(private readonly baseUrl: string) {}
@@ -189,4 +347,22 @@ export class BybitPublicMarketClient {
       }))
       .reverse();
   }
+}
+
+const definitiveCredentialErrorCodes = new Set([
+  -2015, 33004, 10003, 10004, 10005, 10007, 10008, 10009, 10010, 10024, 10027,
+]);
+
+function sanitizeBybitMessage(message: string, apiKey: string, apiSecret: string) {
+  return message
+    .replaceAll(apiKey, "[redacted]")
+    .replaceAll(apiSecret, "[redacted]")
+    .split("")
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127 ? " " : character;
+    })
+    .join("")
+    .trim()
+    .slice(0, 240);
 }

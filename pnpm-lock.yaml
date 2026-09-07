@@ -65,6 +65,9 @@ importers:
       '@cryptoanal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@cryptoanal/exchange-bybit':
+        specifier: workspace:*
+        version: link:../../packages/exchange-bybit
       '@cryptoanal/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence

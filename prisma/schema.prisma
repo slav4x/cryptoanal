@@ -274,22 +274,29 @@ model WorkspaceInvitation {
 }
 
 model ExchangeConnection {
-  id                   String                   @id @default(uuid())
-  workspaceId          String
-  exchange             String                   @default("bybit") @db.VarChar(40)
-  label                String                   @db.VarChar(80)
-  environment          TradingEnvironment
-  status               ExchangeConnectionStatus @default(UNVERIFIED)
-  encryptedApiKey      Bytes?
-  encryptedApiSecret   Bytes?
-  apiKeyHint           String                   @db.VarChar(16)
-  encryptionKeyVersion Int                      @default(1)
-  lastVerifiedAt       DateTime?                @db.Timestamptz(3)
-  revokedAt            DateTime?                @db.Timestamptz(3)
-  createdByActorId     String
-  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
-  workspace            Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id                      String                   @id @default(uuid())
+  workspaceId             String
+  exchange                String                   @default("bybit") @db.VarChar(40)
+  label                   String                   @db.VarChar(80)
+  environment             TradingEnvironment
+  status                  ExchangeConnectionStatus @default(UNVERIFIED)
+  encryptedApiKey         Bytes?
+  encryptedApiSecret      Bytes?
+  apiKeyHint              String                   @db.VarChar(16)
+  encryptionKeyVersion    Int                      @default(1)
+  readOnly                Boolean?
+  tradingPermission       Boolean?
+  ipBound                 Boolean?
+  accountUid              String?                  @db.VarChar(64)
+  permissions             Json?
+  lastVerificationCode    String?                  @db.VarChar(80)
+  lastVerificationMessage String?                  @db.VarChar(300)
+  lastVerifiedAt          DateTime?                @db.Timestamptz(3)
+  revokedAt               DateTime?                @db.Timestamptz(3)
+  createdByActorId        String
+  createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, revokedAt, createdAt(sort: Desc)])
 }

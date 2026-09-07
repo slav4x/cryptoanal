@@ -97,6 +97,12 @@ import {
   workspaceSwitchSchema,
 } from "@cryptoanal/contracts";
 import {
+  BybitCredentialsRejectedError,
+  BybitPrivateApiUnavailableError,
+  BybitPrivateClient,
+  evaluateBybitPermissions,
+} from "@cryptoanal/exchange-bybit";
+import {
   ActiveDeploymentExistsError,
   ActivityCursorNotFoundError,
   ActivityRepository,
@@ -210,6 +216,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const repository = new DashboardRepository(prisma);
   const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
   const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
+  const bybitPrivateClients = {
+    DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL),
+    LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL),
+  } as const;
   const authRepository = new AuthRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
   const activityRepository = new ActivityRepository(prisma);
@@ -1484,6 +1494,122 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           meta: createMeta(request.id, "fresh"),
         };
       } catch (error) {
+        throwExchangeConnectionApiError(error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/exchange-connections/:connectionId/verify",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        params: exchangeConnectionParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(exchangeConnectionCreatedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      const connection = await exchangeConnectionRepository.findWithCredentials(
+        workspace.id,
+        request.params.connectionId,
+      );
+      if (!connection || !connection.encryptedApiKey || !connection.encryptedApiSecret) {
+        throw new ApiError(404, "EXCHANGE_CONNECTION_NOT_FOUND", "Подключение не найдено");
+      }
+      const credentialContext = exchangeCredentialContext({
+        workspaceId: workspace.id,
+        exchange: connection.exchange,
+        environment: connection.environment,
+        label: connection.label,
+      });
+      let apiKey: string;
+      let apiSecret: string;
+      try {
+        apiKey = credentialCipher.decrypt(connection.encryptedApiKey, credentialContext);
+        apiSecret = credentialCipher.decrypt(connection.encryptedApiSecret, credentialContext);
+      } catch {
+        throw new ApiError(
+          503,
+          "EXCHANGE_CREDENTIALS_UNREADABLE",
+          "Credentials не удалось расшифровать. Замените ключи подключения",
+        );
+      }
+
+      const verifiedAt = new Date();
+      try {
+        if (connection.environment === "DRY_RUN") {
+          throw new Error("DRY_RUN exchange connection violates the database invariant");
+        }
+        const privateClient = bybitPrivateClients[connection.environment];
+        const information = await privateClient.getApiKeyInformation(
+          apiKey,
+          apiSecret,
+          AbortSignal.timeout(config.BYBIT_PRIVATE_REQUEST_TIMEOUT_MS),
+        );
+        const { tradingPermission, withdrawalPermission } = evaluateBybitPermissions(
+          information.permissions,
+        );
+        const persisted = await exchangeConnectionRepository.recordVerification({
+          workspaceId: workspace.id,
+          connectionId: connection.id,
+          actorId: context.actorId,
+          requestId: request.id,
+          status: withdrawalPermission ? "INVALID" : "ACTIVE",
+          code: withdrawalPermission ? "WITHDRAW_PERMISSION_NOT_ALLOWED" : "VERIFIED",
+          message: withdrawalPermission
+            ? "Отключите разрешение Withdraw у API-ключа"
+            : information.readOnly
+              ? "Ключ действителен и работает только на чтение"
+              : tradingPermission
+                ? "Ключ действителен; торговые разрешения доступны"
+                : "Ключ действителен; торговые разрешения отсутствуют",
+          readOnly: information.readOnly,
+          tradingPermission,
+          ipBound: information.ipBound,
+          accountUid: information.accountUid,
+          permissions: information.permissions,
+          verifiedAt,
+        });
+        return {
+          data: { connection: serializeExchangeConnection(persisted) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        if (error instanceof BybitCredentialsRejectedError) {
+          const persisted = await exchangeConnectionRepository.recordVerification({
+            workspaceId: workspace.id,
+            connectionId: connection.id,
+            actorId: context.actorId,
+            requestId: request.id,
+            status: "INVALID",
+            code: `BYBIT_${error.code}`,
+            message: describeBybitCredentialRejection(error.code),
+            readOnly: null,
+            tradingPermission: null,
+            ipBound: null,
+            accountUid: null,
+            permissions: null,
+            verifiedAt,
+          });
+          return {
+            data: { connection: serializeExchangeConnection(persisted) },
+            meta: createMeta(request.id, "fresh"),
+          };
+        }
+        if (error instanceof BybitPrivateApiUnavailableError) {
+          throw new ApiError(
+            503,
+            "EXCHANGE_VERIFICATION_UNAVAILABLE",
+            "Bybit сейчас не подтвердил подключение. Повторите проверку позже",
+          );
+        }
         throwExchangeConnectionApiError(error);
       }
     },
@@ -3328,6 +3454,12 @@ function serializeExchangeConnection(connection: {
   environment: "DRY_RUN" | "DEMO" | "LIVE";
   status: "UNVERIFIED" | "ACTIVE" | "INVALID";
   apiKeyHint: string;
+  readOnly: boolean | null;
+  tradingPermission: boolean | null;
+  ipBound: boolean | null;
+  permissions: unknown;
+  lastVerificationCode: string | null;
+  lastVerificationMessage: string | null;
   lastVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -3339,10 +3471,46 @@ function serializeExchangeConnection(connection: {
     environment: serializeExchangeEnvironment(connection.environment),
     status: exchangeConnectionStatus[connection.status],
     apiKeyHint: connection.apiKeyHint,
+    readOnly: connection.readOnly,
+    tradingPermission: connection.tradingPermission,
+    ipBound: connection.ipBound,
+    permissionGroups: serializePermissionGroups(connection.permissions),
+    lastVerificationCode: connection.lastVerificationCode,
+    lastVerificationMessage: connection.lastVerificationMessage,
     lastVerifiedAt: connection.lastVerifiedAt?.toISOString() ?? null,
     createdAt: connection.createdAt.toISOString(),
     updatedAt: connection.updatedAt.toISOString(),
   };
+}
+
+function serializePermissionGroups(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.entries(value)
+    .filter(
+      (entry): entry is [string, string[]] =>
+        Array.isArray(entry[1]) && entry[1].every((permission) => typeof permission === "string"),
+    )
+    .map(([name, permissions]) => ({ name, permissions }))
+    .filter((group) => group.permissions.length > 0)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function describeBybitCredentialRejection(code: string) {
+  const descriptions: Record<string, string> = {
+    "-2015": "Срок действия API-ключа истёк",
+    "33004": "Срок действия API-ключа истёк",
+    "10003": "API-ключ не существует или не соответствует выбранному контуру",
+    "10004": "API secret не соответствует ключу",
+    "10005": "Bybit отклонил разрешения API-ключа",
+    "10007": "Bybit не подтвердил владельца API-ключа",
+    "10008": "Текущий режим аккаунта не поддерживается",
+    "10009": "Bybit ограничил доступ для текущего региона",
+    "10010": "IP сервера отсутствует в allowlist API-ключа",
+    "10024": "Проверка заблокирована compliance-правилами Bybit",
+    "10027": "Операции для аккаунта заблокированы Bybit",
+    HTTP_401: "Bybit отклонил API-ключ или подпись",
+  };
+  return descriptions[code] ?? "Bybit отклонил API credentials";
 }
 
 function serializeExchangeEnvironment(environment: "DRY_RUN" | "DEMO" | "LIVE") {

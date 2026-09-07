@@ -297,6 +297,7 @@ model ExchangeConnection {
   createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
   workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deployments             Deployment[]
 
   @@index([workspaceId, revokedAt, createdAt(sort: Desc)])
 }
@@ -537,22 +538,25 @@ model ValidationTrade {
 }
 
 model Deployment {
-  id                String             @id @default(uuid())
-  workspaceId       String
-  strategyId        String
-  strategyVersionId String
-  environment       TradingEnvironment
-  exchangeAccountId String
-  status            DeploymentStatus   @default(DRAFT)
-  createdByActorId  String
-  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
-  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  strategy          Strategy           @relation(fields: [strategyId], references: [id], onDelete: Cascade)
-  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
-  executionRuns     ExecutionRun[]
+  id                   String              @id @default(uuid())
+  workspaceId          String
+  strategyId           String
+  strategyVersionId    String
+  exchangeConnectionId String?
+  environment          TradingEnvironment
+  exchangeAccountId    String
+  status               DeploymentStatus    @default(DRAFT)
+  createdByActorId     String
+  createdAt            DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @db.Timestamptz(3)
+  workspace            Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy             Strategy            @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  strategyVersion      StrategyVersion     @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  exchangeConnection   ExchangeConnection? @relation(fields: [exchangeConnectionId], references: [id], onDelete: Restrict)
+  executionRuns        ExecutionRun[]
 
   @@index([workspaceId, status])
+  @@index([workspaceId, exchangeConnectionId, status])
   @@index([exchangeAccountId, status])
 }
 

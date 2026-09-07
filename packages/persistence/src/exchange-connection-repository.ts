@@ -19,9 +19,15 @@ const exchangeConnectionSelect = {
   lastVerifiedAt: true,
   createdAt: true,
   updatedAt: true,
-} as const;
+  _count: {
+    select: {
+      deployments: { where: { status: { in: ["READY", "RUNNING", "PAUSED"] } } },
+    },
+  },
+} satisfies Prisma.ExchangeConnectionSelect;
 
 export class ExchangeConnectionNotFoundError extends Error {}
+export class ExchangeConnectionInUseError extends Error {}
 
 export class ExchangeConnectionRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
@@ -115,11 +121,12 @@ export class ExchangeConnectionRepository {
     apiKeyHint: string;
   }) {
     return this.prisma.$transaction(async (transaction) => {
-      const existing = await transaction.exchangeConnection.findFirst({
-        where: { id: input.connectionId, workspaceId: input.workspaceId, revokedAt: null },
-        select: { id: true },
-      });
-      if (!existing) throw new ExchangeConnectionNotFoundError();
+      const existing = await lockExchangeConnection(
+        transaction,
+        input.workspaceId,
+        input.connectionId,
+      );
+      await assertConnectionNotInUse(transaction, input.workspaceId, existing.id);
       const connection = await transaction.exchangeConnection.update({
         where: { id: existing.id },
         data: {
@@ -169,11 +176,22 @@ export class ExchangeConnectionRepository {
     verifiedAt: Date;
   }) {
     return this.prisma.$transaction(async (transaction) => {
-      const existing = await transaction.exchangeConnection.findFirst({
-        where: { id: input.connectionId, workspaceId: input.workspaceId, revokedAt: null },
-        select: { id: true },
-      });
-      if (!existing) throw new ExchangeConnectionNotFoundError();
+      const existing = await lockExchangeConnection(
+        transaction,
+        input.workspaceId,
+        input.connectionId,
+      );
+      const affectedDeployments =
+        input.status === "INVALID"
+          ? await transaction.deployment.findMany({
+              where: {
+                workspaceId: input.workspaceId,
+                exchangeConnectionId: existing.id,
+                status: { in: ["READY", "RUNNING", "PAUSED"] },
+              },
+              select: { id: true, strategyId: true, status: true },
+            })
+          : [];
       const connection = await transaction.exchangeConnection.update({
         where: { id: existing.id },
         data: {
@@ -189,6 +207,38 @@ export class ExchangeConnectionRepository {
         },
         select: exchangeConnectionSelect,
       });
+      if (input.status === "INVALID" && affectedDeployments.length > 0) {
+        const readyIds = affectedDeployments
+          .filter((deployment) => deployment.status === "READY")
+          .map((deployment) => deployment.id);
+        const runningIds = affectedDeployments
+          .filter((deployment) => deployment.status === "RUNNING")
+          .map((deployment) => deployment.id);
+        if (readyIds.length > 0) {
+          await transaction.deployment.updateMany({
+            where: { workspaceId: input.workspaceId, id: { in: readyIds }, status: "READY" },
+            data: { status: "FAILED" },
+          });
+        }
+        if (runningIds.length > 0) {
+          await transaction.deployment.updateMany({
+            where: { workspaceId: input.workspaceId, id: { in: runningIds }, status: "RUNNING" },
+            data: { status: "PAUSED" },
+          });
+          await transaction.strategy.updateMany({
+            where: {
+              workspaceId: input.workspaceId,
+              id: {
+                in: affectedDeployments
+                  .filter((deployment) => deployment.status === "RUNNING")
+                  .map((deployment) => deployment.strategyId),
+              },
+              status: "DEPLOYED",
+            },
+            data: { status: "PAUSED", updatedByActorId: input.actorId },
+          });
+        }
+      }
       await transaction.auditEvent.create({
         data: {
           workspaceId: input.workspaceId,
@@ -205,10 +255,14 @@ export class ExchangeConnectionRepository {
             tradingPermission: input.tradingPermission,
             ipBound: input.ipBound,
             permissionGroups: input.permissions ? Object.keys(input.permissions) : [],
+            affectedDeploymentIds: affectedDeployments.map((deployment) => deployment.id),
           },
         },
       });
-      return connection;
+      return transaction.exchangeConnection.findUniqueOrThrow({
+        where: { id: connection.id },
+        select: exchangeConnectionSelect,
+      });
     });
   }
 
@@ -219,8 +273,14 @@ export class ExchangeConnectionRepository {
     requestId: string;
   }) {
     return this.prisma.$transaction(async (transaction) => {
+      const existing = await lockExchangeConnection(
+        transaction,
+        input.workspaceId,
+        input.connectionId,
+      );
+      await assertConnectionNotInUse(transaction, input.workspaceId, existing.id);
       const revoked = await transaction.exchangeConnection.updateMany({
-        where: { id: input.connectionId, workspaceId: input.workspaceId, revokedAt: null },
+        where: { id: existing.id, workspaceId: input.workspaceId, revokedAt: null },
         data: {
           revokedAt: new Date(),
           encryptedApiKey: null,
@@ -241,4 +301,36 @@ export class ExchangeConnectionRepository {
       });
     });
   }
+}
+
+async function lockExchangeConnection(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  connectionId: string,
+) {
+  const connections = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "ExchangeConnection"
+    WHERE "id" = ${connectionId} AND "workspaceId" = ${workspaceId} AND "revokedAt" IS NULL
+    FOR UPDATE
+  `);
+  const connection = connections[0];
+  if (!connection) throw new ExchangeConnectionNotFoundError();
+  return connection;
+}
+
+async function assertConnectionNotInUse(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  connectionId: string,
+) {
+  const deployment = await transaction.deployment.findFirst({
+    where: {
+      workspaceId,
+      exchangeConnectionId: connectionId,
+      status: { in: ["READY", "RUNNING", "PAUSED"] },
+    },
+    select: { id: true },
+  });
+  if (deployment) throw new ExchangeConnectionInUseError();
 }

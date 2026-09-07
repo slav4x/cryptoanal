@@ -118,6 +118,8 @@ import {
   DashboardRepository,
   CredentialCipher,
   DeploymentCommandNotAllowedError,
+  DeploymentExchangeConnectionNotFoundError,
+  DeploymentExchangeConnectionNotReadyError,
   DeploymentHasOpenPositionsError,
   DeploymentIdempotencyConflictError,
   DeploymentNotEligibleError,
@@ -128,6 +130,7 @@ import {
   DeploymentValidationRequiredError,
   DeploymentVersionMismatchError,
   ExchangeConnectionNotFoundError,
+  ExchangeConnectionInUseError,
   ExchangeConnectionRepository,
   HealthRepository,
   JournalCursorNotFoundError,
@@ -1457,6 +1460,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           200: apiEnvelopeSchema(exchangeConnectionCreatedSchema),
           403: errorEnvelopeSchema,
           404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
         },
       },
     },
@@ -1509,6 +1513,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           200: apiEnvelopeSchema(exchangeConnectionCreatedSchema),
           403: errorEnvelopeSchema,
           404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
           503: errorEnvelopeSchema,
         },
       },
@@ -1624,6 +1629,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           200: apiEnvelopeSchema(mutationAcceptedSchema),
           403: errorEnvelopeSchema,
           404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
         },
       },
     },
@@ -2656,6 +2662,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           actorId: requireContext(request).actorId,
           requestId: request.id,
           idempotencyKey: request.body.idempotencyKey,
+          exchangeConnectionId: request.body.exchangeConnectionId,
           exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
         });
 
@@ -3463,6 +3470,7 @@ function serializeExchangeConnection(connection: {
   lastVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  _count: { deployments: number };
 }) {
   return {
     id: connection.id,
@@ -3478,6 +3486,7 @@ function serializeExchangeConnection(connection: {
     lastVerificationCode: connection.lastVerificationCode,
     lastVerificationMessage: connection.lastVerificationMessage,
     lastVerifiedAt: connection.lastVerifiedAt?.toISOString() ?? null,
+    activeDeployments: connection._count.deployments,
     createdAt: connection.createdAt.toISOString(),
     updatedAt: connection.updatedAt.toISOString(),
   };
@@ -3527,6 +3536,13 @@ function maskApiKey(apiKey: string) {
 function throwExchangeConnectionApiError(error: unknown): never {
   if (error instanceof ExchangeConnectionNotFoundError) {
     throw new ApiError(404, "EXCHANGE_CONNECTION_NOT_FOUND", "Подключение не найдено");
+  }
+  if (error instanceof ExchangeConnectionInUseError) {
+    throw new ApiError(
+      409,
+      "EXCHANGE_CONNECTION_IN_USE",
+      "Сначала остановите deployment, использующий это подключение",
+    );
   }
   throw error;
 }
@@ -3703,6 +3719,17 @@ type DeploymentSource = {
   id: string;
   environment: keyof typeof tradingEnvironment;
   exchangeAccountId: string;
+  exchangeConnection: {
+    id: string;
+    exchange: string;
+    label: string;
+    environment: "DRY_RUN" | "DEMO" | "LIVE";
+    status: keyof typeof exchangeConnectionStatus;
+    readOnly: boolean | null;
+    tradingPermission: boolean | null;
+    ipBound: boolean | null;
+    lastVerifiedAt: Date | null;
+  } | null;
   status: keyof typeof deploymentStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -3734,6 +3761,9 @@ type DeploymentSource = {
 function serializeDeployment(deployment: DeploymentSource) {
   const status = deploymentStatus[deployment.status];
   const latestExecutionRun = deployment.executionRuns[0] ?? null;
+  const connectionReady =
+    deployment.exchangeConnection?.status === "ACTIVE" &&
+    deployment.exchangeConnection.lastVerifiedAt !== null;
 
   return {
     id: deployment.id,
@@ -3741,10 +3771,20 @@ function serializeDeployment(deployment: DeploymentSource) {
     strategyVersion: deployment.strategyVersion,
     environment: tradingEnvironment[deployment.environment],
     exchangeAccountId: deployment.exchangeAccountId,
+    exchangeConnection: deployment.exchangeConnection
+      ? {
+          ...deployment.exchangeConnection,
+          exchange: "bybit" as const,
+          environment: serializeExchangeEnvironment(deployment.exchangeConnection.environment),
+          status: exchangeConnectionStatus[deployment.exchangeConnection.status],
+          lastVerifiedAt: deployment.exchangeConnection.lastVerifiedAt?.toISOString() ?? null,
+        }
+      : null,
     status,
-    allowedCommands: getDeploymentCommands(status).filter(
-      (command) => command !== "stop" || (latestExecutionRun?._count.positions ?? 0) === 0,
-    ),
+    allowedCommands: getDeploymentCommands(status).filter((command) => {
+      if ((command === "start" || command === "resume") && !connectionReady) return false;
+      return command !== "stop" || (latestExecutionRun?._count.positions ?? 0) === 0;
+    }),
     latestExecutionRun: latestExecutionRun
       ? {
           id: latestExecutionRun.id,
@@ -3805,6 +3845,20 @@ function throwDeploymentApiError(error: unknown): never {
       409,
       "DEPLOYMENT_VALIDATION_REQUIRED",
       "Для этой версии нет успешно завершённой проверки",
+    );
+  }
+  if (error instanceof DeploymentExchangeConnectionNotFoundError) {
+    throw new ApiError(
+      404,
+      "DEPLOYMENT_EXCHANGE_CONNECTION_NOT_FOUND",
+      "Подключение биржи не найдено в текущем workspace",
+    );
+  }
+  if (error instanceof DeploymentExchangeConnectionNotReadyError) {
+    throw new ApiError(
+      409,
+      "DEPLOYMENT_EXCHANGE_CONNECTION_NOT_READY",
+      "Подключение биржи должно быть успешно проверено перед запуском",
     );
   }
   if (error instanceof ActiveDeploymentExistsError) {

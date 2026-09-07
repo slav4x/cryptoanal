@@ -86,7 +86,16 @@ export class RuntimeRepository {
 
   public listActiveTargets(workspaceId: string) {
     return this.prisma.deployment.findMany({
-      where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
+      where: {
+        workspaceId,
+        OR: [
+          {
+            status: "RUNNING",
+            exchangeConnection: { is: { status: "ACTIVE", revokedAt: null } },
+          },
+          { status: "PAUSED" },
+        ],
+      },
       orderBy: { updatedAt: "asc" },
       select: {
         id: true,

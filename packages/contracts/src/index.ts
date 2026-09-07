@@ -146,6 +146,7 @@ export const exchangeConnectionSchema = z.object({
   lastVerificationCode: z.string().nullable(),
   lastVerificationMessage: z.string().nullable(),
   lastVerifiedAt: z.iso.datetime().nullable(),
+  activeDeployments: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -879,6 +880,19 @@ export const deploymentSchema = z.object({
   strategyVersion: z.object({ id: z.string(), version: z.number().int().positive() }),
   environment: z.enum(["dry-run", "demo", "live"]),
   exchangeAccountId: z.string(),
+  exchangeConnection: z
+    .object({
+      id: z.uuid(),
+      exchange: z.literal("bybit"),
+      label: z.string(),
+      environment: exchangeConnectionEnvironmentSchema,
+      status: exchangeConnectionStatusSchema,
+      readOnly: z.boolean().nullable(),
+      tradingPermission: z.boolean().nullable(),
+      ipBound: z.boolean().nullable(),
+      lastVerifiedAt: z.iso.datetime().nullable(),
+    })
+    .nullable(),
   status: deploymentStatusSchema,
   allowedCommands: z.array(deploymentCommandSchema),
   latestExecutionRun: executionRunSummarySchema.nullable(),
@@ -894,6 +908,7 @@ export const deploymentsSchema = z.object({
 
 export const deploymentCreateSchema = z.object({
   strategyVersionId: z.uuid(),
+  exchangeConnectionId: z.uuid(),
   idempotencyKey: z.uuid(),
 });
 

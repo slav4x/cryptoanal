@@ -13,6 +13,7 @@ export type CreateDeploymentInput = {
   actorId: string;
   requestId: string;
   idempotencyKey: string;
+  exchangeConnectionId: string;
   exchangeAccountId: string;
 };
 
@@ -33,6 +34,8 @@ export class DeploymentNotFoundError extends Error {}
 export class DeploymentNotEligibleError extends Error {}
 export class DeploymentVersionMismatchError extends Error {}
 export class DeploymentValidationRequiredError extends Error {}
+export class DeploymentExchangeConnectionNotFoundError extends Error {}
+export class DeploymentExchangeConnectionNotReadyError extends Error {}
 export class ActiveDeploymentExistsError extends Error {}
 export class DeploymentStatusConflictError extends Error {}
 export class DeploymentCommandNotAllowedError extends Error {}
@@ -64,6 +67,11 @@ export class DeploymentRepository {
       );
       if (replayed) return replayed;
 
+      const exchangeConnection = await lockActiveExchangeConnection(
+        transaction,
+        input.workspaceId,
+        input.exchangeConnectionId,
+      );
       await lockAccount(transaction, input.workspaceId, input.exchangeAccountId);
       const strategies = await transaction.$queryRaw<
         Array<{ id: string; status: string; activeVersionId: string | null }>
@@ -122,6 +130,7 @@ export class DeploymentRepository {
           workspaceId: input.workspaceId,
           strategyId: input.strategyId,
           strategyVersionId: input.strategyVersionId,
+          exchangeConnectionId: exchangeConnection.id,
           environment: "DRY_RUN",
           exchangeAccountId: input.exchangeAccountId,
           status: "READY",
@@ -154,6 +163,7 @@ export class DeploymentRepository {
             strategyId: input.strategyId,
             strategyVersionId: input.strategyVersionId,
             validationRunId: passedValidation.id,
+            exchangeConnectionId: exchangeConnection.id,
             exchangeAccountId: input.exchangeAccountId,
           },
         },
@@ -178,17 +188,33 @@ export class DeploymentRepository {
       );
       if (replayed) return replayed;
 
+      const deploymentPreview = await transaction.deployment.findFirst({
+        where: { id: input.deploymentId, workspaceId: input.workspaceId },
+        select: { exchangeConnectionId: true },
+      });
+      if (!deploymentPreview) throw new DeploymentNotFoundError();
+
+      const lockedExchangeConnection =
+        input.command === "START" || input.command === "RESUME"
+          ? await requireActiveExchangeConnection(
+              transaction,
+              input.workspaceId,
+              deploymentPreview.exchangeConnectionId,
+            )
+          : null;
+
       const deployments = await transaction.$queryRaw<
         Array<{
           id: string;
           strategyId: string;
           strategyVersionId: string;
+          exchangeConnectionId: string | null;
           exchangeAccountId: string;
           environment: string;
           status: string;
         }>
       >(Prisma.sql`
-        SELECT "id", "strategyId", "strategyVersionId", "exchangeAccountId", "environment", "status"
+        SELECT "id", "strategyId", "strategyVersionId", "exchangeConnectionId", "exchangeAccountId", "environment", "status"
         FROM "Deployment"
         WHERE "id" = ${input.deploymentId} AND "workspaceId" = ${input.workspaceId}
         FOR UPDATE
@@ -218,6 +244,7 @@ export class DeploymentRepository {
       let executionRunId: string;
 
       if (input.command === "START") {
+        if (!lockedExchangeConnection) throw new DeploymentExchangeConnectionNotReadyError();
         await lockAccount(transaction, input.workspaceId, deployment.exchangeAccountId);
         await assertNoActiveDeployment(
           transaction,
@@ -257,7 +284,7 @@ export class DeploymentRepository {
 
         executionRunId = randomUUID();
         const context = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           workspaceId: input.workspaceId,
           deploymentId: deployment.id,
           executionRunId,
@@ -265,6 +292,13 @@ export class DeploymentRepository {
           strategyVersionId: deployment.strategyVersionId,
           environment: "dry-run",
           exchangeAccountId: deployment.exchangeAccountId,
+          exchangeConnection: {
+            id: lockedExchangeConnection.id,
+            exchange: lockedExchangeConnection.exchange,
+            environment: lockedExchangeConnection.environment.toLowerCase(),
+            accountUid: lockedExchangeConnection.accountUid,
+            verifiedAt: lockedExchangeConnection.lastVerifiedAt.toISOString(),
+          },
           configHash: version.configHash,
           strategyConfig: version.config,
           validation: {
@@ -323,6 +357,7 @@ export class DeploymentRepository {
             data: { status: "PAUSED", updatedByActorId: input.actorId },
           });
         } else if (input.command === "RESUME") {
+          if (!lockedExchangeConnection) throw new DeploymentExchangeConnectionNotReadyError();
           await lockAccount(transaction, input.workspaceId, deployment.exchangeAccountId);
           await assertNoActiveDeployment(
             transaction,
@@ -438,6 +473,47 @@ async function lockAccount(
   `);
 }
 
+async function lockActiveExchangeConnection(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  exchangeConnectionId: string,
+) {
+  const connections = await transaction.$queryRaw<
+    Array<{
+      id: string;
+      exchange: string;
+      environment: "DEMO" | "LIVE";
+      status: string;
+      accountUid: string | null;
+      lastVerifiedAt: Date | null;
+      revokedAt: Date | null;
+    }>
+  >(Prisma.sql`
+    SELECT "id", "exchange", "environment", "status", "accountUid", "lastVerifiedAt", "revokedAt"
+    FROM "ExchangeConnection"
+    WHERE "id" = ${exchangeConnectionId} AND "workspaceId" = ${workspaceId}
+    FOR UPDATE
+  `);
+  const connection = connections[0];
+  if (!connection || connection.revokedAt) throw new DeploymentExchangeConnectionNotFoundError();
+  if (connection.status !== "ACTIVE" || !connection.lastVerifiedAt) {
+    throw new DeploymentExchangeConnectionNotReadyError();
+  }
+  return {
+    ...connection,
+    lastVerifiedAt: connection.lastVerifiedAt,
+  };
+}
+
+async function requireActiveExchangeConnection(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  exchangeConnectionId: string | null,
+) {
+  if (!exchangeConnectionId) throw new DeploymentExchangeConnectionNotReadyError();
+  return lockActiveExchangeConnection(transaction, workspaceId, exchangeConnectionId);
+}
+
 async function lockIdempotencyKey(
   transaction: Prisma.TransactionClient,
   workspaceId: string,
@@ -484,6 +560,19 @@ export const deploymentSelect = {
   id: true,
   environment: true,
   exchangeAccountId: true,
+  exchangeConnection: {
+    select: {
+      id: true,
+      exchange: true,
+      label: true,
+      environment: true,
+      status: true,
+      readOnly: true,
+      tradingPermission: true,
+      ipBound: true,
+      lastVerifiedAt: true,
+    },
+  },
   status: true,
   createdAt: true,
   updatedAt: true,

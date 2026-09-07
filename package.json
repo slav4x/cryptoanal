@@ -22,7 +22,9 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:backup": "node scripts/backup-database.mjs",
+    "db:restore-check": "node scripts/verify-database-restore.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -428,6 +428,16 @@ export function rotateExchangeConnectionCredentials(
   );
 }
 
+export function verifyExchangeConnection(
+  connectionId: string,
+): Promise<ApiEnvelope<{ connection: ExchangeConnectionsDto["items"][number] }>> {
+  return request(
+    `/api/v1/exchange-connections/${encodeURIComponent(connectionId)}/verify`,
+    exchangeConnectionCreatedEnvelopeSchema,
+    { method: "POST" },
+  );
+}
+
 export function revokeExchangeConnection(
   connectionId: string,
 ): Promise<ApiEnvelope<{ accepted: true }>> {

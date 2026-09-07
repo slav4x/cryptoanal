@@ -55,6 +55,7 @@ import {
   rotateExchangeConnectionCredentials,
   updateWorkspaceMemberRole,
   updateWorkspacePreferences,
+  verifyExchangeConnection,
 } from "../../shared/api";
 import { authSessionQueryKey, useAuthSession } from "../auth/auth-context";
 
@@ -577,7 +578,11 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
     mutationFn: revokeExchangeConnection,
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
-  const error = saveMutation.error ?? revokeMutation.error;
+  const verifyMutation = useMutation({
+    mutationFn: verifyExchangeConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+  });
+  const error = saveMutation.error ?? revokeMutation.error ?? verifyMutation.error;
 
   return (
     <Card className="xl:col-span-2">
@@ -606,7 +611,11 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
                 key={connection.id}
                 connection={connection}
                 canManage={canManage}
-                disabled={saveMutation.isPending || revokeMutation.isPending}
+                disabled={
+                  saveMutation.isPending || revokeMutation.isPending || verifyMutation.isPending
+                }
+                verifying={verifyMutation.isPending && verifyMutation.variables === connection.id}
+                onVerify={() => verifyMutation.mutate(connection.id)}
                 onRotate={() => {
                   setEditingId(connection.id);
                   setLabel(connection.label);
@@ -693,7 +702,7 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
             </div>
             <div className="flex items-center justify-between gap-4">
               <p className="text-[10px] text-stale">
-                Сохранение ключей не включает торговлю и не проверяет доступ к бирже.
+                После сохранения запустите проверку. Live-торговля не включается автоматически.
               </p>
               <Button type="submit" disabled={saveMutation.isPending}>
                 {editingId ? <RotateCcw className="size-4" /> : <Plus className="size-4" />}
@@ -712,12 +721,16 @@ function ExchangeConnectionRow({
   connection,
   canManage,
   disabled,
+  verifying,
+  onVerify,
   onRotate,
   onRevoke,
 }: {
   connection: ExchangeConnectionDto;
   canManage: boolean;
   disabled: boolean;
+  verifying: boolean;
+  onVerify: () => void;
   onRotate: () => void;
   onRevoke: () => void;
 }) {
@@ -727,8 +740,8 @@ function ExchangeConnectionRow({
     invalid: { label: "ошибка", variant: "loss" as const },
   }[connection.status];
   return (
-    <div className="flex min-h-14 items-center justify-between gap-4 border-b border-row-border last:border-0">
-      <span className="min-w-0">
+    <div className="flex min-h-16 items-center justify-between gap-5 border-b border-row-border py-3 last:border-0">
+      <span className="min-w-0 space-y-1.5">
         <span className="flex items-center gap-2">
           <span className="truncate text-xs text-secondary-foreground">{connection.label}</span>
           <Badge variant={status.variant}>{status.label}</Badge>
@@ -736,9 +749,51 @@ function ExchangeConnectionRow({
         <span className="mt-0.5 block text-[10px] uppercase tracking-[0.06em] text-stale">
           Bybit · {connection.environment} · {connection.apiKeyHint}
         </span>
+        {connection.lastVerificationMessage ? (
+          <span
+            className={`block text-[11px] ${connection.status === "invalid" ? "text-loss" : "text-muted-foreground"}`}
+          >
+            {connection.lastVerificationMessage}
+          </span>
+        ) : null}
+        {connection.lastVerifiedAt ? (
+          <span className="block text-[10px] text-stale">
+            Проверено {formatDateTime(connection.lastVerifiedAt)}
+          </span>
+        ) : null}
+        {connection.lastVerifiedAt && connection.readOnly !== null ? (
+          <span className="flex flex-wrap gap-1.5">
+            <Badge variant="secondary">
+              {connection.readOnly ? "только чтение" : "чтение и запись"}
+            </Badge>
+            <Badge variant={connection.tradingPermission ? "profit" : "outline"}>
+              {connection.tradingPermission ? "торговля разрешена" : "без торговли"}
+            </Badge>
+            <Badge variant={connection.ipBound ? "profit" : "warning"}>
+              {connection.ipBound ? "IP ограничен" : "без IP allowlist"}
+            </Badge>
+          </span>
+        ) : null}
+        {connection.permissionGroups.length ? (
+          <span className="block text-[10px] text-stale">
+            {connection.permissionGroups
+              .map((group) => `${group.name}: ${group.permissions.join(", ")}`)
+              .join(" · ")}
+          </span>
+        ) : null}
       </span>
       {canManage ? (
         <span className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={disabled}
+            onClick={onVerify}
+          >
+            <ShieldCheck className="size-4" />
+            {verifying ? "Проверка…" : "Проверить"}
+          </Button>
           <Button
             type="button"
             size="icon"
@@ -934,6 +989,15 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "short" }).format(
     new Date(value),
   );
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 const timezones = ["UTC", "Europe/Moscow", "Asia/Novosibirsk", "Asia/Almaty", "Asia/Dubai"];

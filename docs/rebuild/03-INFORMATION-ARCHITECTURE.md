@@ -2,7 +2,8 @@
 
 > Статус: основная карта реализована. Dashboard закрыт auth gate, sidebar показывает
 > реального пользователя и workspace switcher, а `/settings` поддерживает создание
-> workspace. Members/security/exchange connection UI остаются следующими срезами.
+> workspace, участников, приглашения и encrypted exchange connections. Следующий срез —
+> security/session management и проверка биржевых credentials.
 
 ## 1. Общая модель
 
@@ -226,7 +227,9 @@ Backtest и walk-forward — типы одной validation-модели, но �
 - system information;
 - список workspaces и создание нового изолированного workspace.
 
-Следующими добавляются управление участниками, sessions/security и exchange connections.
+Реализованы управление участниками, одноразовые приглашения и подключения Bybit с
+зашифрованными credentials. Следующими добавляются sessions/security и проверка доступа
+к бирже без включения торговли.
 
 ## 5. Глобальная структура страницы
 

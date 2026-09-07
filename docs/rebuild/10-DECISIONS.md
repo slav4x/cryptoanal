@@ -82,6 +82,13 @@ Strategy status и validation verdict не дублируются вручную
 начинается в чистом `development` workspace. Отдельная стратегия при необходимости
 воссоздаётся вручную как draft и проходит новую validation.
 
+### D-016. Exchange credentials шифруются application-level
+
+Bybit API key/secret хранятся только как AES-256-GCM ciphertext с отдельным master key,
+случайным nonce и workspace-bound AAD. API возвращает только metadata и маску ключа.
+Отзыв подключения уничтожает ciphertext. Добавление live credentials не включает live
+trading и не обходит отдельный runtime safety gate.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager
@@ -114,9 +121,11 @@ Prisma можно сохранить: основной долг находитс
 - [x] явное создание workspace владельцем;
 - [x] базовые роли `OWNER`/`MEMBER`;
 - [x] server-side session TTL 7 дней;
-- [ ] permission matrix и multi-member UI;
-- [ ] invitation/recovery и device/session management;
-- [ ] credential encryption/key management;
+- [x] multi-member UI и базовая owner/member policy;
+- [x] invite-only onboarding;
+- [ ] recovery и device/session management;
+- [x] application-level credential encryption;
+- [ ] production key management и master-key rotation;
 - [ ] policies удаления, экспорта и блокировки аккаунта.
 
 ## 4. Решить перед landing

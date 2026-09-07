@@ -1,8 +1,8 @@
 # Данные и API
 
-> Статус: доменная ownership-модель, private API, users/sessions/memberships и workspace
-> resolver реализованы. Разделы P0 ниже фиксируют исходный baseline; актуальная auth-модель
-> описана в `13-AUTH-WORKSPACE-ARCHITECTURE.md`.
+> Статус: доменная ownership-модель, private API, users/sessions/memberships, invitations,
+> encrypted exchange connections и workspace resolver реализованы. Разделы P0 ниже
+> фиксируют исходный baseline; актуальные модели описаны в документах 13 и 14.
 
 ## 1. Основные принципы
 
@@ -429,11 +429,23 @@ POST /api/v1/auth/login
 POST /api/v1/auth/logout
 POST /api/v1/auth/workspace
 POST /api/v1/workspaces
+GET  /api/v1/workspaces/:workspaceId/access
+POST /api/v1/workspaces/:workspaceId/invitations
+DELETE /api/v1/workspaces/:workspaceId/invitations/:invitationId
+PATCH /api/v1/workspaces/:workspaceId/members/:userId
+DELETE /api/v1/workspaces/:workspaceId/members/:userId
+GET  /api/v1/invitations/:token
+POST /api/v1/invitations/:token/accept
+GET  /api/v1/exchange-connections
+POST /api/v1/exchange-connections
+PUT  /api/v1/exchange-connections/:connectionId/credentials
+DELETE /api/v1/exchange-connections/:connectionId
 ```
 
 `RequestContext` строится из session. Все существующие предметные endpoints сохраняют
-contracts, а repository scope проверяется membership resolver. `/api/v1/me`, member
-management и `/api/v1/exchange-connections` ещё не реализованы.
+contracts, а repository scope проверяется membership resolver. Управление участниками и
+credentials доступно только владельцу активного workspace. Публичны только чтение и
+принятие одноразового invitation token; signup/recovery отсутствуют.
 
 ## 11. Public API P2
 

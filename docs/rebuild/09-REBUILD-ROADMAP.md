@@ -1,8 +1,9 @@
 # Этапы пересборки CryptoAnal
 
-> Текущий статус: этапы 1–7 завершены; этап 8 выполняется. Готовы session auth, workspace
-> isolation, создание/переключение workspaces, owner bootstrap и multi-workspace worker.
-> Ближайший незавершённый контур — members/invitations и encrypted exchange connections.
+> Текущий статус: этапы 1–7 завершены; основной контур этапа 8 готов. Реализованы session
+> auth, workspace isolation, invitations/member management, encrypted exchange connections
+> и multi-workspace worker. Остались security и product hardening.
+> Ближайший незавершённый контур — проверка exchange credentials и session/recovery flows.
 
 Порядок обязателен: **dashboard → users/workspaces → landing**. Этапы ниже описывают
 результат, а не календарные сроки. Новый этап начинается после выполнения stop-gate
@@ -139,11 +140,11 @@ fake auth, глобальных user-owned данных и критичных д
 - [x] Заменить development resolver на session-based `RequestContext`.
 - [ ] Реализовать signup/recovery и оставшиеся security flows.
 - [x] Реализовать workspace creation/switching и owner membership.
-- [ ] Реализовать invitations и управление участниками workspace.
+- [x] Реализовать invitations и управление участниками workspace.
 - [x] Закрыть private API membership-based workspace resolver.
 - [x] Перевести runtime/account/watchdog worker с fixed development workspace на multi-workspace scheduling.
 - [ ] Добавить user/workspace settings и audit log.
-- [ ] Добавить exchange connections и encrypted credentials.
+- [x] Добавить exchange connections и encrypted credentials.
 - [x] Мигрировать development workspace к реальному owner.
 - [ ] Удалить development access endpoints/config из клиентского deployment.
 

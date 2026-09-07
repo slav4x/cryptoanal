@@ -1,8 +1,8 @@
 # Продуктовая цель и границы этапов
 
-> Статус: P0 dashboard завершён. Сейчас реализован базовый P1: database users, session
-> auth, membership isolation, создание/переключение workspaces и multi-workspace worker.
-> Остаются invitations/recovery, exchange connections и клиентский hardening.
+> Статус: P0 dashboard завершён. Основной P1 реализован: database users, session auth,
+> membership isolation, invitations/member management, encrypted exchange connections и
+> multi-workspace worker. Остаются recovery, session/credential lifecycle и hardening.
 
 ## 1. Цель CryptoAnal
 
@@ -53,12 +53,14 @@ Dashboard не является демонстрацией. Он должен с
 - персональные стратегии, validation runs, сделки, журнал и настройки;
 - роли владельца и участника на уровне модели;
 - создание/переключение workspace и multi-workspace worker scheduling.
+- invite-only onboarding и управление участниками;
+- workspace-scoped подключения Bybit и безопасное хранение credentials.
 
 Остаётся:
 
-- public signup, recovery и invitations;
-- управление участниками и session/device lifecycle;
-- подключения биржевых аккаунтов и безопасное хранение credentials;
+- public signup и recovery;
+- session/device lifecycle;
+- проверка и ротация lifecycle биржевых подключений;
 - permission matrix для роли участника.
 
 ### P2 — маркетинговый контур

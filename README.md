@@ -24,8 +24,9 @@ semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы �
 
 Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
 работают database users, session auth, CSRF, membership isolation, создание/переключение
-workspaces и multi-workspace worker. Следующие задачи: members/invitations, управление
-sessions и encrypted exchange connections. Landing остаётся последним этапом.
+workspaces, приглашения, управление участниками, encrypted exchange connections и
+multi-workspace worker. Следующие задачи: проверка биржевых credentials, управление
+sessions и recovery. Landing остаётся последним этапом.
 
 ## Требования
 
@@ -76,12 +77,19 @@ pnpm dev
 - `/playbooks` — библиотека сетапов, правил, условий инвалидации и связанных примеров.
 - `/system/logs` — технические события сервисов с фильтрами, cursor pagination и redaction.
 - `/settings` — настройки workspace, runtime safety, состояния интеграций и JSON-экспорт.
+- `/invite/:token` — принятие одноразового приглашения существующим или новым пользователем.
 
 Реализованный private API:
 
 - `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`;
 - `POST /api/v1/auth/workspace` — membership-checked смена активного workspace;
 - `POST /api/v1/workspaces` — создание изолированного workspace и owner membership;
+- `GET /api/v1/workspaces/:workspaceId/access` — участники и ожидающие приглашения;
+- `POST /api/v1/workspaces/:workspaceId/invitations` и `DELETE .../:invitationId`;
+- `PATCH`/`DELETE /api/v1/workspaces/:workspaceId/members/:userId`;
+- `GET /api/v1/invitations/:token` и `POST /api/v1/invitations/:token/accept`;
+- `GET`/`POST /api/v1/exchange-connections`;
+- `PUT /api/v1/exchange-connections/:connectionId/credentials` и `DELETE .../:connectionId`;
 - `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
@@ -247,11 +255,19 @@ Dashboard содержит private account/runtime данные и управл�
 требует server-side session; сырой token хранится только в `HttpOnly` cookie, а в БД — его
 hash. Изменяющие запросы защищены CSRF, login ограничен по частоте, workspace выбирается
 только через membership. Для production необходимо задать случайный `AUTH_SECRET` длиной
-не менее 32 символов и использовать HTTPS.
+не менее 32 символов, отдельный `EXCHANGE_CREDENTIALS_KEY` и использовать HTTPS.
 
-Публичные signup, recovery и invitations пока отсутствуют. Новых пользователей создаёт
-администратор через `pnpm auth:create-user`; пароль передаётся только через
-`CRYPTOANAL_NEW_USER_PASSWORD` и сохраняется как Argon2id hash.
+Публичные signup и recovery пока отсутствуют. Владелец создаёт одноразовую invite-ссылку
+в `/settings`; в БД хранится только SHA-256 токена. Новый пользователь задаёт имя и пароль,
+существующий подтверждает свой пароль. Пароли сохраняются как Argon2id hash. Для bootstrap
+остаётся `pnpm auth:create-user`; пароль передаётся только через
+`CRYPTOANAL_NEW_USER_PASSWORD`.
+
+Приватные Bybit credentials шифруются AES-256-GCM отдельным ключом окружения. API никогда
+не возвращает исходные значения, а после отзыва подключения ciphertext удаляется. До
+реализации проверки через Bybit подключение имеет статус `не проверено` и не включает
+торговлю. Новый production-ключ можно создать командой
+`openssl rand -base64 32` и сохранить как `EXCHANGE_CREDENTIALS_KEY` вне Git.
 
 ## Dry-run account
 

@@ -88,6 +88,10 @@
 - Audited auth session create/revoke and workspace switch events.
 - Membership-driven worker scheduling for isolated account snapshots, runtime targets and watchdog incidents across workspaces.
 - Authenticated workspace creation with owner membership, isolated settings and immediate activation.
+- Owner-controlled workspace invitations with one-time hashed tokens and invite-only onboarding.
+- Workspace member list, role management, last-owner protection and session revocation on removal.
+- Workspace-scoped Bybit connection metadata with AES-256-GCM encrypted API credentials.
+- Owner controls for adding, rotating and revoking exchange connections without returning secrets.
 
 ### Changed
 
@@ -109,3 +113,4 @@
 - Keyboard focus, reduced-motion behavior, tab state and table header semantics are consistent across the dashboard.
 - Shell polling is limited to routes that display runtime state, with opt-in live system logs.
 - Production dashboard bundles are guarded by explicit gzip performance budgets.
+- Revoked exchange connections immediately discard their encrypted credential payloads.

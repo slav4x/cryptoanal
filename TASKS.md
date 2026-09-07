@@ -14,7 +14,7 @@
 - [x] Сверить desktop-примитивы и ключевые страницы с HTML-мокапами `crypto-trade/design`.
 - [x] Собрать dashboard shell, Overview и Markets.
 - [x] Подключить реальный public Bybit market data adapter.
-- [ ] Добавить временный access gate перед первым удалённым deployment.
+- [x] Закрыть dashboard полноценным session-based access gate.
 
 ## Этап 2 — Trading data
 
@@ -85,9 +85,11 @@
 - [x] Membership-based workspace isolation для private API.
 - [x] Login/logout и workspace switcher в dashboard.
 - [x] Создание нового workspace с owner membership и изолированными настройками.
-- [ ] Signup, recovery, invitations и управление sessions.
+- [x] Invite-only onboarding и управление участниками.
+- [ ] Public signup, recovery и управление sessions.
 - [x] Multi-workspace scheduling для runtime/account/watchdog worker.
-- [ ] Exchange connections и encrypted credentials.
+- [x] Workspace-scoped exchange connections и encrypted credentials.
+- [ ] Проверка credentials через Bybit и lifecycle статусов подключения.
 - [x] Миграция development workspace к владельцу.
 
 ## Этап 9 — Landing

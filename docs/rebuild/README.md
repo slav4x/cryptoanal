@@ -1,8 +1,8 @@
 # CryptoAnal: план пересборки
 
-> Текущий статус: dashboard и migration-этапы завершены. Базовый users/workspaces контур
-> реализован; сейчас проект находится на расширении P1 перед exchange connections и
-> landing. Детальный прогресс — в `09-REBUILD-ROADMAP.md` и `TASKS.md`.
+> Текущий статус: dashboard и migration-этапы завершены. Users/workspaces, invite-only
+> onboarding и encrypted exchange connections реализованы; сейчас проект находится на
+> hardening P1 перед landing. Детальный прогресс — в `09-REBUILD-ROADMAP.md` и `TASKS.md`.
 
 Этот каталог — рабочая спецификация нового проекта `CryptoAnal`. Пересборка начинается
 не с лендинга и не с авторизации, а с полноценного рабочего dashboard: торговые пары,
@@ -11,8 +11,10 @@
 ## Зафиксированная последовательность
 
 1. **Dashboard-first — завершён.** Рабочий продуктовый контур собран и стабилизирован.
-2. **Users and workspaces — выполняется.** Авторизация, изоляция, создание workspaces и
-   multi-workspace worker готовы; members/invitations и exchange connections остаются.
+2. **Users and workspaces — основной контур завершён.** Авторизация, изоляция, создание
+   workspaces, invitations, member management, encrypted exchange connections и
+   multi-workspace worker готовы; recovery, session management и credential verification
+   остаются hardening-задачами.
 3. **Landing-last — не начат.** Лендинг, публичная методология, тарифы и санитизированный
    track record строятся только после стабилизации клиентского P1.
 
@@ -23,8 +25,8 @@
 ## Авторизация
 
 Dashboard использует database users, Argon2id password hashes, server-side sessions,
-`HttpOnly` cookie, CSRF и membership-based workspace resolver. Публичные signup/recovery и
-приглашения пока намеренно не реализованы.
+`HttpOnly` cookie, CSRF и membership-based workspace resolver. Онбординг работает только
+по одноразовым приглашениям владельца; публичные signup/recovery пока не реализованы.
 
 ## Что читать
 
@@ -48,6 +50,8 @@ Dashboard использует database users, Argon2id password hashes, server-
     mapping, архив и ограничения переноса старой PostgreSQL.
 13. [13-AUTH-WORKSPACE-ARCHITECTURE.md](13-AUTH-WORKSPACE-ARCHITECTURE.md) — текущая
     session-модель, security boundaries и правила tenant isolation.
+14. [14-EXCHANGE-CONNECTIONS.md](14-EXCHANGE-CONNECTIONS.md) — модель подключения бирж,
+    шифрование credentials, API и ограничения текущего среза.
 
 ## Короткая формула продукта
 

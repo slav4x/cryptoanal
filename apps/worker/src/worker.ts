@@ -32,6 +32,7 @@ import {
   RuntimeStateConflictError,
   ValidationDatasetConflictError,
   ValidationRepository,
+  WorkspaceRepository,
   type ClaimedValidationJob,
   type ValidationDatasetCandlePersistenceInput,
 } from "@cryptoanal/persistence";
@@ -47,24 +48,26 @@ const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
 const validationRepository = new ValidationRepository(prisma);
 const runtimeRepository = new RuntimeRepository(prisma);
 const healthRepository = new HealthRepository(prisma);
+const workspaceRepository = new WorkspaceRepository(prisma);
 const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 
 let stopping = false;
 
 async function writeHeartbeat() {
+  const workspaceIds = await workspaceRepository.listOperationalIds();
   await prisma.workerHeartbeat.upsert({
     where: { workerId },
     update: {
       lastSeenAt: new Date(),
-      metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID },
+      metadata: { workspaceIds },
     },
     create: {
       workerId,
       service: "worker",
       version: "0.1.0",
       lastSeenAt: new Date(),
-      metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID },
+      metadata: { workspaceIds },
     },
   });
 }
@@ -105,9 +108,12 @@ async function candleDataLoop() {
       for (const symbol of symbols) {
         requirements.set(`${symbol}:15`, { symbol, interval: "15", limit: 200 });
       }
-      const runtimeTargets = await runtimeRepository.listActiveTargets(
-        config.DEVELOPMENT_WORKSPACE_ID,
-      );
+      const workspaceIds = await workspaceRepository.listOperationalIds();
+      const runtimeTargets = (
+        await Promise.all(
+          workspaceIds.map((workspaceId) => runtimeRepository.listActiveTargets(workspaceId)),
+        )
+      ).flat();
       for (const target of runtimeTargets) {
         const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
         const interval = bybitIntervals[strategyConfig.universe.timeframe];
@@ -151,18 +157,21 @@ async function candleDataLoop() {
 
 async function accountSnapshotLoop() {
   while (!stopping) {
-    try {
-      const snapshot = await accountSnapshotRepository.captureDryRunSnapshot({
-        workspaceId: config.DEVELOPMENT_WORKSPACE_ID,
-        exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
-        initialBalance: String(config.DRY_RUN_INITIAL_BALANCE),
-      });
-      logger.debug(
-        { equity: snapshot.equity.toFixed(), observedAt: snapshot.observedAt },
-        "Dry-run account snapshot updated",
-      );
-    } catch (error) {
-      logger.error({ err: error }, "Failed to update dry-run account snapshot");
+    const workspaceIds = await listOperationalWorkspaceIds("account snapshot");
+    for (const workspaceId of workspaceIds) {
+      try {
+        const snapshot = await accountSnapshotRepository.captureDryRunSnapshot({
+          workspaceId,
+          exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
+          initialBalance: String(config.DRY_RUN_INITIAL_BALANCE),
+        });
+        logger.debug(
+          { workspaceId, equity: snapshot.equity.toFixed(), observedAt: snapshot.observedAt },
+          "Dry-run account snapshot updated",
+        );
+      } catch (error) {
+        logger.error({ err: error, workspaceId }, "Failed to update dry-run account snapshot");
+      }
     }
 
     await new Promise((resolve) => setTimeout(resolve, config.ACCOUNT_SNAPSHOT_INTERVAL_MS));
@@ -191,13 +200,23 @@ async function validationJobLoop() {
 
 async function runtimeLoop() {
   while (!stopping) {
-    try {
-      const targets = await runtimeRepository.listActiveTargets(config.DEVELOPMENT_WORKSPACE_ID);
-      for (const target of targets) {
-        await processRuntimeTarget(target);
+    const workspaceIds = await listOperationalWorkspaceIds("runtime");
+    for (const workspaceId of workspaceIds) {
+      try {
+        const targets = await runtimeRepository.listActiveTargets(workspaceId);
+        for (const target of targets) {
+          try {
+            await processRuntimeTarget(target);
+          } catch (error) {
+            logger.error(
+              { err: error, workspaceId, deploymentId: target.id },
+              "Runtime target failed",
+            );
+          }
+        }
+      } catch (error) {
+        logger.error({ err: error, workspaceId }, "Runtime workspace cycle failed");
       }
-    } catch (error) {
-      logger.error({ err: error }, "Runtime worker loop failed");
     }
 
     await delay(config.RUNTIME_POLL_INTERVAL_MS);
@@ -207,40 +226,56 @@ async function runtimeLoop() {
 async function watchdogLoop() {
   await delay(1_000);
   while (!stopping) {
+    const now = new Date();
+    const workspaceIds = await listOperationalWorkspaceIds("watchdog");
+    for (const workspaceId of workspaceIds) {
+      try {
+        const signals = await healthRepository.getSignals(workspaceId, now);
+        const health = evaluateHealth({
+          ...signals,
+          now,
+          initialCapital: config.DRY_RUN_INITIAL_BALANCE,
+          thresholds: healthThresholds(),
+          driftCandidates: signals.driftCandidates.map((candidate) => ({
+            ...candidate,
+            environment: tradingEnvironment[candidate.environment],
+          })),
+        });
+        await healthRepository.syncIncidents(workspaceId, health.conditions, now);
+        logger.debug(
+          { workspaceId, status: health.overallStatus, incidents: health.conditions.length },
+          "Watchdog workspace cycle completed",
+        );
+      } catch (error) {
+        logger.error({ err: error, workspaceId }, "Watchdog workspace cycle failed");
+      }
+    }
     try {
-      const now = new Date();
-      const signals = await healthRepository.getSignals(config.DEVELOPMENT_WORKSPACE_ID, now);
-      const health = evaluateHealth({
-        ...signals,
-        now,
-        initialCapital: config.DRY_RUN_INITIAL_BALANCE,
-        thresholds: healthThresholds(),
-        driftCandidates: signals.driftCandidates.map((candidate) => ({
-          ...candidate,
-          environment: tradingEnvironment[candidate.environment],
-        })),
-      });
-      await healthRepository.syncIncidents(config.DEVELOPMENT_WORKSPACE_ID, health.conditions, now);
       await prisma.workerHeartbeat.upsert({
         where: { workerId: watchdogId },
-        update: { lastSeenAt: now, metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID } },
+        update: { lastSeenAt: now, metadata: { workspaceIds } },
         create: {
           workerId: watchdogId,
           service: "watchdog",
           version: "0.1.0",
           lastSeenAt: now,
-          metadata: { workspaceId: config.DEVELOPMENT_WORKSPACE_ID },
+          metadata: { workspaceIds },
         },
       });
-      logger.debug(
-        { status: health.overallStatus, incidents: health.conditions.length },
-        "Watchdog cycle completed",
-      );
     } catch (error) {
-      logger.error({ err: error }, "Watchdog cycle failed");
+      logger.error({ err: error }, "Failed to write watchdog heartbeat");
     }
 
     await delay(config.WATCHDOG_INTERVAL_MS);
+  }
+}
+
+async function listOperationalWorkspaceIds(loop: string) {
+  try {
+    return await workspaceRepository.listOperationalIds();
+  } catch (error) {
+    logger.error({ err: error, loop }, "Failed to list operational workspaces");
+    return [];
   }
 }
 

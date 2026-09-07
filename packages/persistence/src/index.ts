@@ -1,5 +1,6 @@
 export { createPrismaClient, type CryptoAnalPrismaClient } from "./client";
 export { AuthRepository, AuthWorkspaceAccessDeniedError } from "./auth-repository";
+export { WorkspaceRepository } from "./workspace-repository";
 export { AccountSnapshotRepository } from "./account-snapshot-repository";
 export {
   ActivityCursorNotFoundError,

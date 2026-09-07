@@ -311,6 +311,22 @@ equity, drawdown и daily PnL ответ содержит breakdowns по стр
 Версионирование содержимого `PlaybookVersion`, marketplace, social-функции и
 автоматическое применение правил к стратегии не входят в P0.
 
+`GET /api/v1/settings` объединяет изменяемые workspace preferences и read-only
+операционные параметры. `PUT /api/v1/settings/preferences` сохраняет IANA timezone и
+table density с `expectedUpdatedAt` и `AuditEvent`. Runtime safety, market intervals,
+exchange/notification status и system information отражают действующую конфигурацию,
+а не управляют ею через фиктивные toggles.
+
+`GET /api/v1/settings/export` формирует audit-фиксируемый JSON snapshot конфигурации и
+research/trading artifacts текущего workspace. Market candles, system logs и secrets в
+экспорт не включаются.
+
+`GET /api/v1/system/logs` читает отдельный `SystemLog` stream с фильтрами period, level,
+service, correlation id и full-text query. Используется keyset cursor по
+`createdAt + id`; live tail является только явным polling-режимом интерфейса. API
+записывает технические результаты mutation/error запросов без body, headers и cookies.
+Sensitive keys и значения проходят redaction до сохранения и повторно перед ответом.
+
 ## 6. Команды и queries
 
 Чтение и изменение разделяются концептуально, даже без тяжёлого CQRS framework.

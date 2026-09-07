@@ -65,7 +65,7 @@
 
 - [x] Journal и review sessions.
 - [x] Playbooks.
-- [ ] System logs и settings.
+- [x] System logs и settings.
 - [ ] Responsive, accessibility и performance review.
 
 ## Этап 7 — Migration

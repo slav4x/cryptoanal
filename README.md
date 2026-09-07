@@ -65,6 +65,8 @@ pnpm dev
 - `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.
 - `/journal` — исследовательские записи, предметные связи и review sessions.
 - `/playbooks` — библиотека сетапов, правил, условий инвалидации и связанных примеров.
+- `/system/logs` — технические события сервисов с фильтрами, cursor pagination и redaction.
+- `/settings` — настройки workspace, runtime safety, состояния интеграций и JSON-экспорт.
 
 Реализованный private API:
 
@@ -91,6 +93,9 @@ pnpm dev
 - `GET /api/v1/playbooks?status=&strategyId=&tag=&query=`;
 - `POST /api/v1/playbooks`, `PUT /api/v1/playbooks/:playbookId`;
 - `POST /api/v1/playbooks/:playbookId/status`.
+- `GET /api/v1/system/logs?period=&level=&service=&correlationId=&query=&cursor=`;
+- `GET /api/v1/settings` и `PUT /api/v1/settings/preferences`;
+- `GET /api/v1/settings/export`.
 
 Analytics строится на сервере из канонического журнала закрытых сделок. Период, контур,
 стратегия и пара фильтруются до расчёта. Проекция содержит net/gross PnL, win rate,
@@ -125,6 +130,18 @@ Playbook хранит условия рынка, правила входа/вы�
 и не запускает runtime. Редактирование защищено `expectedUpdatedAt`, смена статуса —
 ожидаемым текущим статусом и audit reason. Удаление заменено обратимой архивацией;
 история версий плейбука остаётся задачей после P1.
+
+System Logs хранит отдельный структурированный технический поток. API записывает
+мутации и ошибки без request body, headers и cookies; секретоподобные ключи и значения
+редактируются при записи и повторно при выдаче. Экран поддерживает фильтры, keyset
+pagination, раскрытие metadata/correlation id и вручную включаемый live tail.
+
+Settings сохраняет timezone и плотность таблиц с optimistic conflict protection.
+Остальные секции показывают реально действующие runtime safety limits, интервалы market
+data, состояние public/private exchange connection, notifications и retention без
+фиктивных переключателей. JSON-экспорт содержит настройки, стратегии и версии, сделки,
+journal/reviews и playbooks, но исключает candles, system logs и secrets; экспорт
+фиксируется в audit trail.
 
 Strategy workspace получает рассчитанную сервером lifecycle-модель. Ручной переход
 статуса требует ожидаемый текущий статус и комментарий, записывается вместе с audit

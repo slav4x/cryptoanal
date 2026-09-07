@@ -75,6 +75,10 @@
 - Referential playbook links to strategies and example trades without automatic strategy config changes.
 - Playbook create/edit/archive API with optimistic conflict checks and audit events.
 - Playbook workspace with search, filters, detailed rule view, editor and reversible archive flow.
+- Workspace settings API and dashboard sections for preferences, runtime safety, integrations, retention and system information.
+- Audited JSON workspace export excluding market candles, technical logs and secrets.
+- Persisted structured system log stream for API mutations and failures without request bodies, headers or cookies.
+- System log redaction on write and read, server-side filters, cursor pagination, metadata inspection and opt-in live tail.
 
 ### Changed
 

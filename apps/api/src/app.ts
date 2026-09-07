@@ -27,6 +27,11 @@ import {
   deploymentMutationResultSchema,
   deploymentsSchema,
   errorEnvelopeSchema,
+  exchangeConnectionCreateSchema,
+  exchangeConnectionCreatedSchema,
+  exchangeConnectionCredentialsSchema,
+  exchangeConnectionParamsSchema,
+  exchangeConnectionsSchema,
   healthSchema,
   healthDashboardSchema,
   journalEntryCreateSchema,
@@ -105,6 +110,7 @@ import {
   AuthWorkspaceLimitReachedError,
   type CryptoAnalPrismaClient,
   DashboardRepository,
+  CredentialCipher,
   DeploymentCommandNotAllowedError,
   DeploymentHasOpenPositionsError,
   DeploymentIdempotencyConflictError,
@@ -115,6 +121,8 @@ import {
   DeploymentStrategyNotFoundError,
   DeploymentValidationRequiredError,
   DeploymentVersionMismatchError,
+  ExchangeConnectionNotFoundError,
+  ExchangeConnectionRepository,
   HealthRepository,
   JournalCursorNotFoundError,
   JournalRepository,
@@ -149,6 +157,7 @@ import {
   ValidationRepository,
   ValidationStrategyNotFoundError,
   ValidationVersionMismatchError,
+  exchangeCredentialContext,
 } from "@cryptoanal/persistence";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -199,6 +208,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   }).withTypeProvider<ZodTypeProvider>();
 
   const repository = new DashboardRepository(prisma);
+  const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
+  const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
   const authRepository = new AuthRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
   const activityRepository = new ActivityRepository(prisma);
@@ -1367,6 +1378,147 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   );
 
   app.get(
+    "/api/v1/exchange-connections",
+    {
+      schema: {
+        response: { 200: apiEnvelopeSchema(exchangeConnectionsSchema) },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const connections = await exchangeConnectionRepository.list(workspace.id);
+      return {
+        data: { items: connections.map(serializeExchangeConnection) },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/exchange-connections",
+    {
+      schema: {
+        body: exchangeConnectionCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(exchangeConnectionCreatedSchema),
+          403: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      const label = request.body.label.trim();
+      const environment = persistedExchangeEnvironment[request.body.environment];
+      const credentialContext = exchangeCredentialContext({
+        workspaceId: workspace.id,
+        exchange: request.body.exchange,
+        environment,
+        label,
+      });
+      const connection = await exchangeConnectionRepository.create({
+        workspaceId: workspace.id,
+        actorId: context.actorId,
+        requestId: request.id,
+        exchange: request.body.exchange,
+        label,
+        environment,
+        encryptedApiKey: credentialCipher.encrypt(request.body.apiKey.trim(), credentialContext),
+        encryptedApiSecret: credentialCipher.encrypt(
+          request.body.apiSecret.trim(),
+          credentialContext,
+        ),
+        apiKeyHint: maskApiKey(request.body.apiKey.trim()),
+      });
+      return reply.status(201).send({
+        data: { connection: serializeExchangeConnection(connection) },
+        meta: createMeta(request.id, "fresh"),
+      });
+    },
+  );
+
+  app.put(
+    "/api/v1/exchange-connections/:connectionId/credentials",
+    {
+      schema: {
+        params: exchangeConnectionParamsSchema,
+        body: exchangeConnectionCredentialsSchema,
+        response: {
+          200: apiEnvelopeSchema(exchangeConnectionCreatedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      const current = await exchangeConnectionRepository.find(
+        workspace.id,
+        request.params.connectionId,
+      );
+      if (!current) {
+        throw new ApiError(404, "EXCHANGE_CONNECTION_NOT_FOUND", "Подключение не найдено");
+      }
+      const credentialContext = exchangeCredentialContext({
+        workspaceId: workspace.id,
+        exchange: current.exchange,
+        environment: current.environment,
+        label: current.label,
+      });
+      try {
+        const connection = await exchangeConnectionRepository.rotateCredentials({
+          workspaceId: workspace.id,
+          connectionId: current.id,
+          actorId: context.actorId,
+          requestId: request.id,
+          encryptedApiKey: credentialCipher.encrypt(request.body.apiKey.trim(), credentialContext),
+          encryptedApiSecret: credentialCipher.encrypt(
+            request.body.apiSecret.trim(),
+            credentialContext,
+          ),
+          apiKeyHint: maskApiKey(request.body.apiKey.trim()),
+        });
+        return {
+          data: { connection: serializeExchangeConnection(connection) },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwExchangeConnectionApiError(error);
+      }
+    },
+  );
+
+  app.delete(
+    "/api/v1/exchange-connections/:connectionId",
+    {
+      schema: {
+        params: exchangeConnectionParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(mutationAcceptedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      try {
+        await exchangeConnectionRepository.revoke({
+          workspaceId: workspace.id,
+          connectionId: request.params.connectionId,
+          actorId: context.actorId,
+          requestId: request.id,
+        });
+      } catch (error) {
+        throwExchangeConnectionApiError(error);
+      }
+      return { data: { accepted: true as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.get(
     "/api/v1/settings",
     {
       schema: {
@@ -1378,9 +1530,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
     async (request) => {
       const workspace = requireWorkspace(request);
-      const [preferences, databaseConnected] = await Promise.all([
+      const [preferences, databaseConnected, exchangeConnections] = await Promise.all([
         settingsRepository.get(workspace.id),
         repository.ping(),
+        exchangeConnectionRepository.list(workspace.id),
       ]);
       return {
         data: {
@@ -1400,7 +1553,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           },
           exchange: {
             publicConnectionConfigured: Boolean(config.BYBIT_PUBLIC_BASE_URL),
-            privateConnectionConfigured: false as const,
+            privateConnectionConfigured: exchangeConnections.length > 0,
             accountId: config.DRY_RUN_ACCOUNT_ID,
           },
           notifications: {
@@ -3168,6 +3321,48 @@ function throwMemberApiError(error: unknown): never {
   throw error;
 }
 
+function serializeExchangeConnection(connection: {
+  id: string;
+  exchange: string;
+  label: string;
+  environment: "DRY_RUN" | "DEMO" | "LIVE";
+  status: "UNVERIFIED" | "ACTIVE" | "INVALID";
+  apiKeyHint: string;
+  lastVerifiedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: connection.id,
+    exchange: "bybit" as const,
+    label: connection.label,
+    environment: serializeExchangeEnvironment(connection.environment),
+    status: exchangeConnectionStatus[connection.status],
+    apiKeyHint: connection.apiKeyHint,
+    lastVerifiedAt: connection.lastVerifiedAt?.toISOString() ?? null,
+    createdAt: connection.createdAt.toISOString(),
+    updatedAt: connection.updatedAt.toISOString(),
+  };
+}
+
+function serializeExchangeEnvironment(environment: "DRY_RUN" | "DEMO" | "LIVE") {
+  if (environment === "DRY_RUN") {
+    throw new Error("DRY_RUN is not a valid private exchange connection environment");
+  }
+  return environment === "DEMO" ? ("demo" as const) : ("live" as const);
+}
+
+function maskApiKey(apiKey: string) {
+  return `••••${apiKey.slice(-4)}`;
+}
+
+function throwExchangeConnectionApiError(error: unknown): never {
+  if (error instanceof ExchangeConnectionNotFoundError) {
+    throw new ApiError(404, "EXCHANGE_CONNECTION_NOT_FOUND", "Подключение не найдено");
+  }
+  throw error;
+}
+
 function hasStatusCode(error: unknown, statusCode: number) {
   return (
     typeof error === "object" &&
@@ -3809,4 +4004,15 @@ const persistedDeploymentCommand = {
   pause: "PAUSE",
   resume: "RESUME",
   stop: "STOP",
+} as const;
+
+const persistedExchangeEnvironment = {
+  demo: "DEMO",
+  live: "LIVE",
+} as const;
+
+const exchangeConnectionStatus = {
+  UNVERIFIED: "unverified",
+  ACTIVE: "active",
+  INVALID: "invalid",
 } as const;

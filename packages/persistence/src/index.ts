@@ -1,4 +1,9 @@
 export { createPrismaClient, type CryptoAnalPrismaClient } from "./client";
+export { CredentialCipher, exchangeCredentialContext } from "./credential-cipher";
+export {
+  ExchangeConnectionNotFoundError,
+  ExchangeConnectionRepository,
+} from "./exchange-connection-repository";
 export {
   AuthRepository,
   AuthInvitationInvalidError,

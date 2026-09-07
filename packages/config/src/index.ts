@@ -2,6 +2,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const developmentAuthSecret = "cryptoanal-development-auth-secret-only";
+const developmentExchangeCredentialsKey = "Y3J5cHRvYW5hbC1kZXYtY3JlZGVudGlhbHMta2V5ISE=";
 
 const serverConfigSchema = z
   .object({
@@ -12,6 +13,13 @@ const serverConfigSchema = z
     DASHBOARD_ORIGIN: z.url().default("http://localhost:5173"),
     DEVELOPMENT_WORKSPACE_ID: z.string().min(1).default("development"),
     AUTH_SECRET: z.string().min(32).default(developmentAuthSecret),
+    EXCHANGE_CREDENTIALS_KEY: z
+      .string()
+      .refine((value) => {
+        const decoded = Buffer.from(value, "base64");
+        return decoded.length === 32 && decoded.toString("base64") === value;
+      }, "EXCHANGE_CREDENTIALS_KEY must be a base64-encoded 32-byte key")
+      .default(developmentExchangeCredentialsKey),
     AUTH_SESSION_TTL_HOURS: z.coerce
       .number()
       .int()
@@ -36,6 +44,16 @@ const serverConfigSchema = z
         code: "custom",
         path: ["AUTH_SECRET"],
         message: "AUTH_SECRET must be explicitly configured in production",
+      });
+    }
+    if (
+      config.NODE_ENV === "production" &&
+      config.EXCHANGE_CREDENTIALS_KEY === developmentExchangeCredentialsKey
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["EXCHANGE_CREDENTIALS_KEY"],
+        message: "EXCHANGE_CREDENTIALS_KEY must be explicitly configured in production",
       });
     }
   });

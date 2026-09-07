@@ -163,41 +163,48 @@ enum WorkspaceRole {
   MEMBER
 }
 
+enum ExchangeConnectionStatus {
+  UNVERIFIED
+  ACTIVE
+  INVALID
+}
+
 model Workspace {
-  id                String                @id @default(uuid())
-  slug              String                @unique
-  name              String
-  createdAt         DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime              @updatedAt @db.Timestamptz(3)
-  settings          WorkspaceSettings?
-  watchlistItems    WatchlistItem[]
-  strategies        Strategy[]
-  strategyVersions  StrategyVersion[]
-  validationRuns    ValidationRun[]
-  validationTrades  ValidationTrade[]
-  datasetSnapshots  DatasetSnapshot[]
-  deployments       Deployment[]
-  executionRuns     ExecutionRun[]
-  runtimeCursors    RuntimeCursor[]
-  positions         Position[]
-  orders            Order[]
-  fills             Fill[]
-  trades            Trade[]
-  decisions         Decision[]
-  jobs              Job[]
-  auditEvents       AuditEvent[]
-  commandReceipts   CommandReceipt[]
-  outboxEvents      OutboxEvent[]
-  accountSnapshots  AccountSnapshot[]
-  watchdogIncidents WatchdogIncident[]
-  journalEntries    JournalEntry[]
-  journalLinks      JournalLink[]
-  reviewSessions    ReviewSession[]
-  playbooks         Playbook[]
-  systemLogs        SystemLog[]
-  memberships       WorkspaceMembership[]
-  activeSessions    Session[]
-  invitations       WorkspaceInvitation[]
+  id                  String                @id @default(uuid())
+  slug                String                @unique
+  name                String
+  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
+  settings            WorkspaceSettings?
+  watchlistItems      WatchlistItem[]
+  strategies          Strategy[]
+  strategyVersions    StrategyVersion[]
+  validationRuns      ValidationRun[]
+  validationTrades    ValidationTrade[]
+  datasetSnapshots    DatasetSnapshot[]
+  deployments         Deployment[]
+  executionRuns       ExecutionRun[]
+  runtimeCursors      RuntimeCursor[]
+  positions           Position[]
+  orders              Order[]
+  fills               Fill[]
+  trades              Trade[]
+  decisions           Decision[]
+  jobs                Job[]
+  auditEvents         AuditEvent[]
+  commandReceipts     CommandReceipt[]
+  outboxEvents        OutboxEvent[]
+  accountSnapshots    AccountSnapshot[]
+  watchdogIncidents   WatchdogIncident[]
+  journalEntries      JournalEntry[]
+  journalLinks        JournalLink[]
+  reviewSessions      ReviewSession[]
+  playbooks           Playbook[]
+  systemLogs          SystemLog[]
+  memberships         WorkspaceMembership[]
+  activeSessions      Session[]
+  invitations         WorkspaceInvitation[]
+  exchangeConnections ExchangeConnection[]
 }
 
 model User {
@@ -264,6 +271,27 @@ model WorkspaceInvitation {
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([email, expiresAt])
+}
+
+model ExchangeConnection {
+  id                   String                   @id @default(uuid())
+  workspaceId          String
+  exchange             String                   @default("bybit") @db.VarChar(40)
+  label                String                   @db.VarChar(80)
+  environment          TradingEnvironment
+  status               ExchangeConnectionStatus @default(UNVERIFIED)
+  encryptedApiKey      Bytes?
+  encryptedApiSecret   Bytes?
+  apiKeyHint           String                   @db.VarChar(16)
+  encryptionKeyVersion Int                      @default(1)
+  lastVerifiedAt       DateTime?                @db.Timestamptz(3)
+  revokedAt            DateTime?                @db.Timestamptz(3)
+  createdByActorId     String
+  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
+  workspace            Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, revokedAt, createdAt(sort: Desc)])
 }
 
 model WorkspaceSettings {

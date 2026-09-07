@@ -114,6 +114,38 @@ export const invitationDetailsSchema = z.object({
 });
 export const mutationAcceptedSchema = z.object({ accepted: z.literal(true) });
 
+export const exchangeConnectionEnvironmentSchema = z.enum(["demo", "live"]);
+export const exchangeConnectionStatusSchema = z.enum(["unverified", "active", "invalid"]);
+export const exchangeConnectionCreateSchema = z.object({
+  exchange: z.literal("bybit").default("bybit"),
+  label: z.string().trim().min(2).max(80),
+  environment: exchangeConnectionEnvironmentSchema,
+  apiKey: z.string().trim().min(8).max(256),
+  apiSecret: z.string().trim().min(16).max(512),
+});
+export const exchangeConnectionCredentialsSchema = exchangeConnectionCreateSchema.pick({
+  apiKey: true,
+  apiSecret: true,
+});
+export const exchangeConnectionParamsSchema = z.object({ connectionId: z.uuid() });
+export const exchangeConnectionSchema = z.object({
+  id: z.uuid(),
+  exchange: z.literal("bybit"),
+  label: z.string(),
+  environment: exchangeConnectionEnvironmentSchema,
+  status: exchangeConnectionStatusSchema,
+  apiKeyHint: z.string(),
+  lastVerifiedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export const exchangeConnectionsSchema = z.object({
+  items: z.array(exchangeConnectionSchema),
+});
+export const exchangeConnectionCreatedSchema = z.object({
+  connection: exchangeConnectionSchema,
+});
+
 export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
 export const overviewQuerySchema = z.object({
   period: overviewPeriodSchema.default("7d"),
@@ -1270,7 +1302,7 @@ export const settingsSchema = z.object({
   }),
   exchange: z.object({
     publicConnectionConfigured: z.boolean(),
-    privateConnectionConfigured: z.literal(false),
+    privateConnectionConfigured: z.boolean(),
     accountId: z.string(),
   }),
   notifications: z.object({
@@ -1369,6 +1401,11 @@ export type WorkspaceInvitationCreatedDto = z.infer<typeof workspaceInvitationCr
 export type WorkspaceMemberRoleUpdateDto = z.infer<typeof workspaceMemberRoleUpdateSchema>;
 export type InvitationAcceptDto = z.infer<typeof invitationAcceptSchema>;
 export type InvitationDetailsDto = z.infer<typeof invitationDetailsSchema>;
+export type ExchangeConnectionEnvironment = z.infer<typeof exchangeConnectionEnvironmentSchema>;
+export type ExchangeConnectionCreateDto = z.infer<typeof exchangeConnectionCreateSchema>;
+export type ExchangeConnectionCredentialsDto = z.infer<typeof exchangeConnectionCredentialsSchema>;
+export type ExchangeConnectionDto = z.infer<typeof exchangeConnectionSchema>;
+export type ExchangeConnectionsDto = z.infer<typeof exchangeConnectionsSchema>;
 export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
 export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
 export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;

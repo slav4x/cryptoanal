@@ -197,18 +197,21 @@ model Workspace {
   systemLogs        SystemLog[]
   memberships       WorkspaceMembership[]
   activeSessions    Session[]
+  invitations       WorkspaceInvitation[]
 }
 
 model User {
-  id           String                @id @default(uuid())
-  email        String                @unique @db.VarChar(320)
-  passwordHash String
-  displayName  String                @db.VarChar(120)
-  disabledAt   DateTime?             @db.Timestamptz(3)
-  createdAt    DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime              @updatedAt @db.Timestamptz(3)
-  memberships  WorkspaceMembership[]
-  sessions     Session[]
+  id                  String                @id @default(uuid())
+  email               String                @unique @db.VarChar(320)
+  passwordHash        String
+  displayName         String                @db.VarChar(120)
+  disabledAt          DateTime?             @db.Timestamptz(3)
+  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
+  memberships         WorkspaceMembership[]
+  sessions            Session[]
+  sentInvitations     WorkspaceInvitation[] @relation("InvitationInviter")
+  acceptedInvitations WorkspaceInvitation[] @relation("InvitationAcceptor")
 }
 
 model WorkspaceMembership {
@@ -241,6 +244,26 @@ model Session {
 
   @@index([userId, expiresAt])
   @@index([activeWorkspaceId])
+}
+
+model WorkspaceInvitation {
+  id               String        @id @default(uuid())
+  workspaceId      String
+  email            String        @db.VarChar(320)
+  role             WorkspaceRole @default(MEMBER)
+  tokenHash        String        @unique @db.Char(64)
+  invitedByUserId  String
+  acceptedByUserId String?
+  expiresAt        DateTime      @db.Timestamptz(3)
+  acceptedAt       DateTime?     @db.Timestamptz(3)
+  revokedAt        DateTime?     @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  workspace        Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy        User          @relation("InvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+  acceptedBy       User?         @relation("InvitationAcceptor", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([email, expiresAt])
 }
 
 model WorkspaceSettings {

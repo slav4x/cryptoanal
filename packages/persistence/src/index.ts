@@ -1,6 +1,10 @@
 export { createPrismaClient, type CryptoAnalPrismaClient } from "./client";
 export {
   AuthRepository,
+  AuthInvitationInvalidError,
+  AuthInvitationMembershipExistsError,
+  AuthLastOwnerError,
+  AuthMemberNotFoundError,
   AuthWorkspaceAccessDeniedError,
   AuthWorkspaceLimitReachedError,
 } from "./auth-repository";

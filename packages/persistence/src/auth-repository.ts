@@ -2,6 +2,10 @@ import type { CryptoAnalPrismaClient } from "./client";
 
 export class AuthWorkspaceAccessDeniedError extends Error {}
 export class AuthWorkspaceLimitReachedError extends Error {}
+export class AuthInvitationInvalidError extends Error {}
+export class AuthInvitationMembershipExistsError extends Error {}
+export class AuthMemberNotFoundError extends Error {}
+export class AuthLastOwnerError extends Error {}
 
 export class AuthRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
@@ -206,6 +210,278 @@ export class AuthRepository {
         },
       });
       return workspace;
+    });
+  }
+
+  public async getWorkspaceAccess(workspaceId: string) {
+    const [members, invitations] = await Promise.all([
+      this.prisma.workspaceMembership.findMany({
+        where: { workspaceId },
+        orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+        select: {
+          role: true,
+          createdAt: true,
+          user: { select: { id: true, email: true, displayName: true, disabledAt: true } },
+        },
+      }),
+      this.prisma.workspaceInvitation.findMany({
+        where: { workspaceId, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+      }),
+    ]);
+    return { members, invitations };
+  }
+
+  public async createInvitation(input: {
+    workspaceId: string;
+    email: string;
+    role: "OWNER" | "MEMBER";
+    tokenHash: string;
+    invitedByUserId: string;
+    expiresAt: Date;
+    requestId: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const existingUser = await transaction.user.findUnique({
+        where: { email: input.email },
+        select: {
+          memberships: {
+            where: { workspaceId: input.workspaceId },
+            select: { id: true },
+          },
+        },
+      });
+      if (existingUser?.memberships.length) throw new AuthInvitationMembershipExistsError();
+      await transaction.workspaceInvitation.updateMany({
+        where: {
+          workspaceId: input.workspaceId,
+          email: input.email,
+          acceptedAt: null,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+      const invitation = await transaction.workspaceInvitation.create({
+        data: {
+          workspaceId: input.workspaceId,
+          email: input.email,
+          role: input.role,
+          tokenHash: input.tokenHash,
+          invitedByUserId: input.invitedByUserId,
+          expiresAt: input.expiresAt,
+        },
+        select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.invitedByUserId,
+          action: "workspace.invitation.create",
+          resourceType: "workspace-invitation",
+          resourceId: invitation.id,
+          outcome: "COMPLETED",
+          requestId: input.requestId,
+          metadata: { email: input.email, role: input.role },
+        },
+      });
+      return invitation;
+    });
+  }
+
+  public findPendingInvitation(tokenHash: string, now = new Date()) {
+    return this.prisma.workspaceInvitation.findFirst({
+      where: { tokenHash, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        tokenHash: true,
+        expiresAt: true,
+        workspace: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  public async acceptInvitation(input: {
+    invitationId: string;
+    tokenHash: string;
+    existingUserId: string | null;
+    newUser: { email: string; displayName: string; passwordHash: string } | null;
+    sessionTokenHash: string;
+    sessionExpiresAt: Date;
+    userAgent: string | null;
+    ipAddress: string | null;
+    requestId: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const invitation = await transaction.workspaceInvitation.findFirst({
+        where: {
+          id: input.invitationId,
+          tokenHash: input.tokenHash,
+          acceptedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true, email: true, role: true, workspaceId: true },
+      });
+      if (!invitation) throw new AuthInvitationInvalidError();
+
+      const user = input.existingUserId
+        ? await transaction.user.findUnique({
+            where: { id: input.existingUserId, disabledAt: null },
+            select: { id: true, email: true },
+          })
+        : input.newUser
+          ? await transaction.user.create({
+              data: input.newUser,
+              select: { id: true, email: true },
+            })
+          : null;
+      if (!user || user.email !== invitation.email) throw new AuthInvitationInvalidError();
+
+      const currentMembership = await transaction.workspaceMembership.findUnique({
+        where: { workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id } },
+        select: { role: true },
+      });
+      await transaction.workspaceMembership.upsert({
+        where: { workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id } },
+        update: currentMembership?.role === "OWNER" ? {} : { role: invitation.role },
+        create: { workspaceId: invitation.workspaceId, userId: user.id, role: invitation.role },
+      });
+      const accepted = await transaction.workspaceInvitation.updateMany({
+        where: { id: invitation.id, acceptedAt: null, revokedAt: null },
+        data: { acceptedAt: new Date(), acceptedByUserId: user.id },
+      });
+      if (accepted.count !== 1) throw new AuthInvitationInvalidError();
+
+      const session = await transaction.session.create({
+        data: {
+          tokenHash: input.sessionTokenHash,
+          userId: user.id,
+          activeWorkspaceId: invitation.workspaceId,
+          expiresAt: input.sessionExpiresAt,
+          userAgent: input.userAgent,
+          ipAddress: input.ipAddress,
+        },
+        select: { id: true },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: invitation.workspaceId,
+          actorId: user.id,
+          action: "workspace.invitation.accept",
+          resourceType: "workspace-invitation",
+          resourceId: invitation.id,
+          outcome: "COMPLETED",
+          requestId: input.requestId,
+          metadata: { role: invitation.role },
+        },
+      });
+      return session;
+    });
+  }
+
+  public async revokeInvitation(input: {
+    workspaceId: string;
+    invitationId: string;
+    actorId: string;
+    requestId: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const revoked = await transaction.workspaceInvitation.updateMany({
+        where: {
+          id: input.invitationId,
+          workspaceId: input.workspaceId,
+          acceptedAt: null,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+      if (revoked.count !== 1) throw new AuthInvitationInvalidError();
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          action: "workspace.invitation.revoke",
+          resourceType: "workspace-invitation",
+          resourceId: input.invitationId,
+          outcome: "COMPLETED",
+          requestId: input.requestId,
+        },
+      });
+    });
+  }
+
+  public async updateMemberRole(input: {
+    workspaceId: string;
+    userId: string;
+    role: "OWNER" | "MEMBER";
+    actorId: string;
+    requestId: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const membership = await transaction.workspaceMembership.findUnique({
+        where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } },
+        select: { role: true },
+      });
+      if (!membership) throw new AuthMemberNotFoundError();
+      if (membership.role === "OWNER" && input.role === "MEMBER") {
+        const ownerCount = await transaction.workspaceMembership.count({
+          where: { workspaceId: input.workspaceId, role: "OWNER" },
+        });
+        if (ownerCount <= 1) throw new AuthLastOwnerError();
+      }
+      await transaction.workspaceMembership.update({
+        where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } },
+        data: { role: input.role },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          action: "workspace.member.role.update",
+          resourceType: "user",
+          resourceId: input.userId,
+          outcome: "COMPLETED",
+          requestId: input.requestId,
+          metadata: { role: input.role },
+        },
+      });
+    });
+  }
+
+  public async removeMember(input: {
+    workspaceId: string;
+    userId: string;
+    actorId: string;
+    requestId: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const membership = await transaction.workspaceMembership.findUnique({
+        where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } },
+        select: { role: true },
+      });
+      if (!membership) throw new AuthMemberNotFoundError();
+      if (membership.role === "OWNER") throw new AuthLastOwnerError();
+      await transaction.workspaceMembership.delete({
+        where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } },
+      });
+      await transaction.session.updateMany({
+        where: { userId: input.userId, activeWorkspaceId: input.workspaceId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          action: "workspace.member.remove",
+          resourceType: "user",
+          resourceId: input.userId,
+          outcome: "COMPLETED",
+          requestId: input.requestId,
+        },
+      });
     });
   }
 }

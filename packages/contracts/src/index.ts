@@ -60,6 +60,60 @@ export const workspaceCreateSchema = z.object({
   name: z.string().trim().min(2).max(80),
 });
 
+export const workspaceRoleSchema = z.enum(["owner", "member"]);
+export const workspaceIdParamsSchema = z.object({ workspaceId: z.string().min(1) });
+export const workspaceMemberParamsSchema = workspaceIdParamsSchema.extend({
+  userId: z.string().min(1),
+});
+export const workspaceInvitationParamsSchema = workspaceIdParamsSchema.extend({
+  invitationId: z.string().min(1),
+});
+export const invitationTokenParamsSchema = z.object({
+  token: z.string().regex(/^[A-Za-z0-9_-]{40,128}$/),
+});
+export const workspaceInvitationCreateSchema = z.object({
+  email: z.email().max(320),
+  role: workspaceRoleSchema.default("member"),
+});
+export const workspaceMemberRoleUpdateSchema = z.object({ role: workspaceRoleSchema });
+export const invitationAcceptSchema = z.object({
+  displayName: z.string().trim().min(2).max(120).optional(),
+  password: z.string().min(12).max(256),
+});
+export const workspaceAccessSchema = z.object({
+  members: z.array(
+    z.object({
+      id: z.string(),
+      email: z.email(),
+      displayName: z.string(),
+      role: workspaceRoleSchema,
+      disabled: z.boolean(),
+      joinedAt: z.iso.datetime(),
+    }),
+  ),
+  invitations: z.array(
+    z.object({
+      id: z.string(),
+      email: z.email(),
+      role: workspaceRoleSchema,
+      expiresAt: z.iso.datetime(),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
+});
+export const workspaceInvitationCreatedSchema = z.object({
+  invitation: workspaceAccessSchema.shape.invitations.element,
+  token: z.string(),
+});
+export const invitationDetailsSchema = z.object({
+  email: z.email(),
+  role: workspaceRoleSchema,
+  workspace: z.object({ id: z.string(), name: z.string() }),
+  expiresAt: z.iso.datetime(),
+  existingUser: z.boolean(),
+});
+export const mutationAcceptedSchema = z.object({ accepted: z.literal(true) });
+
 export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
 export const overviewQuerySchema = z.object({
   period: overviewPeriodSchema.default("7d"),
@@ -1309,6 +1363,12 @@ export type AuthSessionDto = z.infer<typeof authSessionSchema>;
 export type AuthWorkspaceDto = z.infer<typeof authWorkspaceSchema>;
 export type WorkspaceSwitchDto = z.infer<typeof workspaceSwitchSchema>;
 export type WorkspaceCreateDto = z.infer<typeof workspaceCreateSchema>;
+export type WorkspaceAccessDto = z.infer<typeof workspaceAccessSchema>;
+export type WorkspaceInvitationCreateDto = z.infer<typeof workspaceInvitationCreateSchema>;
+export type WorkspaceInvitationCreatedDto = z.infer<typeof workspaceInvitationCreatedSchema>;
+export type WorkspaceMemberRoleUpdateDto = z.infer<typeof workspaceMemberRoleUpdateSchema>;
+export type InvitationAcceptDto = z.infer<typeof invitationAcceptSchema>;
+export type InvitationDetailsDto = z.infer<typeof invitationDetailsSchema>;
 export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
 export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
 export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;

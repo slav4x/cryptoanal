@@ -14,6 +14,9 @@ import {
   apiEnvelopeSchema,
   authLoginSchema,
   authSessionSchema,
+  invitationAcceptSchema,
+  invitationDetailsSchema,
+  invitationTokenParamsSchema,
   analyticsQuerySchema,
   analyticsSchema,
   activityQuerySchema,
@@ -78,6 +81,14 @@ import {
   validationsSchema,
   watchlistStateSchema,
   workspaceCreateSchema,
+  workspaceAccessSchema,
+  workspaceIdParamsSchema,
+  workspaceInvitationCreateSchema,
+  workspaceInvitationCreatedSchema,
+  workspaceInvitationParamsSchema,
+  workspaceMemberParamsSchema,
+  workspaceMemberRoleUpdateSchema,
+  mutationAcceptedSchema,
   workspaceSwitchSchema,
 } from "@cryptoanal/contracts";
 import {
@@ -86,6 +97,10 @@ import {
   ActivityRepository,
   AnalyticsRepository,
   AuthRepository,
+  AuthInvitationInvalidError,
+  AuthInvitationMembershipExistsError,
+  AuthLastOwnerError,
+  AuthMemberNotFoundError,
   AuthWorkspaceAccessDeniedError,
   AuthWorkspaceLimitReachedError,
   type CryptoAnalPrismaClient,
@@ -212,9 +227,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const requestContexts = new WeakMap<FastifyRequest, AuthenticatedContext>();
   const invalidPasswordHash = await hash(randomBytes(32), { type: argon2id });
 
-  async function resolveSession(request: FastifyRequest) {
-    const rawToken = request.cookies[sessionCookieName];
-    if (!rawToken) return null;
+  async function resolveSessionToken(rawToken: string) {
     const session = await authRepository.findActiveSession(hashSessionToken(rawToken));
     if (!session) return null;
     if (Date.now() - session.lastSeenAt.getTime() > 5 * 60_000) {
@@ -233,6 +246,11 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       csrfToken: createCsrfToken(config.AUTH_SECRET, rawToken),
       expiresAt: session.expiresAt,
     } satisfies AuthenticatedContext;
+  }
+
+  async function resolveSession(request: FastifyRequest) {
+    const rawToken = request.cookies[sessionCookieName];
+    return rawToken ? resolveSessionToken(rawToken) : null;
   }
 
   app.addHook("onRequest", async (request) => {
@@ -324,6 +342,22 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   function requireWorkspace(request: FastifyRequest) {
     return requireContext(request).workspace;
+  }
+
+  function requireActiveWorkspace(request: FastifyRequest, workspaceId: string) {
+    const context = requireContext(request);
+    if (context.workspace.id !== workspaceId) {
+      throw new ApiError(403, "WORKSPACE_ACCESS_DENIED", "Сначала переключитесь в этот workspace");
+    }
+    return context;
+  }
+
+  function requireWorkspaceOwner(request: FastifyRequest, workspaceId: string) {
+    const context = requireActiveWorkspace(request, workspaceId);
+    if (context.workspace.role !== "owner") {
+      throw new ApiError(403, "WORKSPACE_OWNER_REQUIRED", "Действие доступно только владельцу");
+    }
+    return context;
   }
 
   app.get(
@@ -513,6 +547,264 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       return reply
         .status(201)
         .send({ data: serializeAuthSession(refreshed), meta: createMeta(request.id, "fresh") });
+    },
+  );
+
+  app.get(
+    "/api/v1/workspaces/:workspaceId/access",
+    {
+      schema: {
+        params: workspaceIdParamsSchema,
+        response: { 200: apiEnvelopeSchema(workspaceAccessSchema), 403: errorEnvelopeSchema },
+      },
+    },
+    async (request) => {
+      const context = requireActiveWorkspace(request, request.params.workspaceId);
+      const access = await authRepository.getWorkspaceAccess(context.workspace.id);
+      return {
+        data: {
+          members: access.members.map((membership) => ({
+            id: membership.user.id,
+            email: membership.user.email,
+            displayName: membership.user.displayName,
+            role: serializeWorkspaceRole(membership.role),
+            disabled: Boolean(membership.user.disabledAt),
+            joinedAt: membership.createdAt.toISOString(),
+          })),
+          invitations: access.invitations.map(serializeInvitation),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/workspaces/:workspaceId/invitations",
+    {
+      schema: {
+        params: workspaceIdParamsSchema,
+        body: workspaceInvitationCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(workspaceInvitationCreatedSchema),
+          403: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const context = requireWorkspaceOwner(request, request.params.workspaceId);
+      const rawToken = randomBytes(32).toString("base64url");
+      try {
+        const invitation = await authRepository.createInvitation({
+          workspaceId: context.workspace.id,
+          email: request.body.email.trim().toLowerCase(),
+          role: persistedWorkspaceRole(request.body.role),
+          tokenHash: hashSessionToken(rawToken),
+          invitedByUserId: context.user.id,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+          requestId: request.id,
+        });
+        return reply.status(201).send({
+          data: { invitation: serializeInvitation(invitation), token: rawToken },
+          meta: createMeta(request.id, "fresh"),
+        });
+      } catch (error) {
+        if (error instanceof AuthInvitationMembershipExistsError) {
+          throw new ApiError(409, "MEMBERSHIP_EXISTS", "Пользователь уже состоит в workspace");
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.delete(
+    "/api/v1/workspaces/:workspaceId/invitations/:invitationId",
+    {
+      schema: {
+        params: workspaceInvitationParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(mutationAcceptedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const context = requireWorkspaceOwner(request, request.params.workspaceId);
+      try {
+        await authRepository.revokeInvitation({
+          workspaceId: context.workspace.id,
+          invitationId: request.params.invitationId,
+          actorId: context.actorId,
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (error instanceof AuthInvitationInvalidError) {
+          throw new ApiError(404, "INVITATION_NOT_FOUND", "Приглашение не найдено");
+        }
+        throw error;
+      }
+      return { data: { accepted: true as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.patch(
+    "/api/v1/workspaces/:workspaceId/members/:userId",
+    {
+      schema: {
+        params: workspaceMemberParamsSchema,
+        body: workspaceMemberRoleUpdateSchema,
+        response: {
+          200: apiEnvelopeSchema(mutationAcceptedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const context = requireWorkspaceOwner(request, request.params.workspaceId);
+      try {
+        await authRepository.updateMemberRole({
+          workspaceId: context.workspace.id,
+          userId: request.params.userId,
+          role: persistedWorkspaceRole(request.body.role),
+          actorId: context.actorId,
+          requestId: request.id,
+        });
+      } catch (error) {
+        throwMemberApiError(error);
+      }
+      return { data: { accepted: true as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.delete(
+    "/api/v1/workspaces/:workspaceId/members/:userId",
+    {
+      schema: {
+        params: workspaceMemberParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(mutationAcceptedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const context = requireWorkspaceOwner(request, request.params.workspaceId);
+      if (context.user.id === request.params.userId) {
+        throw new ApiError(
+          409,
+          "MEMBER_SELF_REMOVE_BLOCKED",
+          "Нельзя удалить себя из текущего workspace",
+        );
+      }
+      try {
+        await authRepository.removeMember({
+          workspaceId: context.workspace.id,
+          userId: request.params.userId,
+          actorId: context.actorId,
+          requestId: request.id,
+        });
+      } catch (error) {
+        throwMemberApiError(error);
+      }
+      return { data: { accepted: true as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.get(
+    "/api/v1/invitations/:token",
+    {
+      schema: {
+        params: invitationTokenParamsSchema,
+        response: { 200: apiEnvelopeSchema(invitationDetailsSchema), 404: errorEnvelopeSchema },
+      },
+    },
+    async (request) => {
+      const invitation = await authRepository.findPendingInvitation(
+        hashSessionToken(request.params.token),
+      );
+      if (!invitation)
+        throw new ApiError(404, "INVITATION_INVALID", "Приглашение недействительно или истекло");
+      const existingUser = await authRepository.findUserForLogin(invitation.email);
+      return {
+        data: {
+          email: invitation.email,
+          role: serializeWorkspaceRole(invitation.role),
+          workspace: invitation.workspace,
+          expiresAt: invitation.expiresAt.toISOString(),
+          existingUser: Boolean(existingUser),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/invitations/:token/accept",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      schema: {
+        params: invitationTokenParamsSchema,
+        body: invitationAcceptSchema,
+        response: {
+          200: apiEnvelopeSchema(authSessionSchema),
+          400: errorEnvelopeSchema,
+          401: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          429: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const invitationTokenHash = hashSessionToken(request.params.token);
+      const invitation = await authRepository.findPendingInvitation(invitationTokenHash);
+      if (!invitation)
+        throw new ApiError(404, "INVITATION_INVALID", "Приглашение недействительно или истекло");
+
+      const existingUser = await authRepository.findUserForLogin(invitation.email);
+      if (existingUser) {
+        const passwordMatches = await verify(existingUser.passwordHash, request.body.password);
+        if (!passwordMatches || existingUser.disabledAt) {
+          throw new ApiError(401, "AUTH_INVALID_CREDENTIALS", "Неверный пароль");
+        }
+      } else if (!request.body.displayName) {
+        throw new ApiError(400, "DISPLAY_NAME_REQUIRED", "Укажите имя нового пользователя");
+      }
+
+      const rawSessionToken = randomBytes(32).toString("base64url");
+      const expiresAt = new Date(Date.now() + config.AUTH_SESSION_TTL_HOURS * 60 * 60_000);
+      try {
+        await authRepository.acceptInvitation({
+          invitationId: invitation.id,
+          tokenHash: invitationTokenHash,
+          existingUserId: existingUser?.id ?? null,
+          newUser: existingUser
+            ? null
+            : {
+                email: invitation.email,
+                displayName: request.body.displayName!,
+                passwordHash: await hash(request.body.password, { type: argon2id }),
+              },
+          sessionTokenHash: hashSessionToken(rawSessionToken),
+          sessionExpiresAt: expiresAt,
+          userAgent: normalizeHeader(request.headers["user-agent"]),
+          ipAddress: request.ip,
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (error instanceof AuthInvitationInvalidError) {
+          throw new ApiError(404, "INVITATION_INVALID", "Приглашение недействительно или истекло");
+        }
+        throw error;
+      }
+      reply.setCookie(sessionCookieName, rawSessionToken, sessionCookieOptions(config));
+      const context = await resolveSessionToken(rawSessionToken);
+      if (!context) throw new ApiError(500, "AUTH_SESSION_FAILED", "Не удалось создать сессию");
+      return { data: serializeAuthSession(context), meta: createMeta(request.id, "fresh") };
     },
   );
 
@@ -2818,7 +3110,12 @@ function isMutatingMethod(method: string) {
 
 function isPublicRoute(url: string) {
   const path = url.split("?", 1)[0];
-  return path === "/health" || path === "/api/v1/auth/login" || path === "/api/v1/auth/session";
+  return (
+    path === "/health" ||
+    path === "/api/v1/auth/login" ||
+    path === "/api/v1/auth/session" ||
+    (path ? /^\/api\/v1\/invitations\/[A-Za-z0-9_-]{40,128}(?:\/accept)?$/.test(path) : false)
+  );
 }
 
 function normalizeHeader(value: string | string[] | undefined) {
@@ -2835,6 +3132,40 @@ function createWorkspaceSlug(name: string) {
     .replace(/^-|-$/g, "")
     .slice(0, 48);
   return `${base || "workspace"}-${randomBytes(4).toString("hex")}`;
+}
+
+function serializeWorkspaceRole(role: "OWNER" | "MEMBER") {
+  return role === "OWNER" ? ("owner" as const) : ("member" as const);
+}
+
+function persistedWorkspaceRole(role: "owner" | "member") {
+  return role === "owner" ? ("OWNER" as const) : ("MEMBER" as const);
+}
+
+function serializeInvitation(invitation: {
+  id: string;
+  email: string;
+  role: "OWNER" | "MEMBER";
+  expiresAt: Date;
+  createdAt: Date;
+}) {
+  return {
+    id: invitation.id,
+    email: invitation.email,
+    role: serializeWorkspaceRole(invitation.role),
+    expiresAt: invitation.expiresAt.toISOString(),
+    createdAt: invitation.createdAt.toISOString(),
+  };
+}
+
+function throwMemberApiError(error: unknown): never {
+  if (error instanceof AuthMemberNotFoundError) {
+    throw new ApiError(404, "MEMBER_NOT_FOUND", "Участник не найден");
+  }
+  if (error instanceof AuthLastOwnerError) {
+    throw new ApiError(409, "WORKSPACE_OWNER_REQUIRED", "В workspace должен остаться владелец");
+  }
+  throw error;
 }
 
 function hasStatusCode(error: unknown, statusCode: number) {

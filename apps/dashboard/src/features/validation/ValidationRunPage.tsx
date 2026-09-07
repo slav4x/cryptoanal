@@ -254,9 +254,15 @@ function SymbolBreakdown({
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                <th className="px-[18px] py-3 font-medium">Пара</th>
-                <th className="px-3 py-3 text-right font-medium">Сделки</th>
-                <th className="px-[18px] py-3 text-right font-medium">Net PnL</th>
+                <th scope="col" className="px-[18px] py-3 font-medium">
+                  Пара
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Сделки
+                </th>
+                <th scope="col" className="px-[18px] py-3 text-right font-medium">
+                  Net PnL
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -313,13 +319,27 @@ function ValidationTrades({
             <table className="w-full min-w-[880px] border-collapse text-xs">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                  <th className="px-[18px] py-3 font-medium">Пара</th>
-                  <th className="px-3 py-3 font-medium">Сторона</th>
-                  <th className="px-3 py-3 font-medium">Открыта</th>
-                  <th className="px-3 py-3 text-right font-medium">Вход</th>
-                  <th className="px-3 py-3 text-right font-medium">Выход</th>
-                  <th className="px-3 py-3 font-medium">Причина</th>
-                  <th className="px-[18px] py-3 text-right font-medium">Net PnL</th>
+                  <th scope="col" className="px-[18px] py-3 font-medium">
+                    Пара
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Сторона
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Открыта
+                  </th>
+                  <th scope="col" className="px-3 py-3 text-right font-medium">
+                    Вход
+                  </th>
+                  <th scope="col" className="px-3 py-3 text-right font-medium">
+                    Выход
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Причина
+                  </th>
+                  <th scope="col" className="px-[18px] py-3 text-right font-medium">
+                    Net PnL
+                  </th>
                 </tr>
               </thead>
               <tbody>

@@ -306,10 +306,18 @@ function BreakdownCard({ title, items }: { title: string; items: AnalyticsBreakd
             <table className="w-full min-w-[400px] border-collapse text-[12px]">
               <thead>
                 <tr className="text-left text-[9px] uppercase tracking-[0.08em] text-stale">
-                  <th className="px-4 py-2.5 font-medium">Группа</th>
-                  <th className="px-2 py-2.5 text-right font-medium">Сделки</th>
-                  <th className="px-2 py-2.5 text-right font-medium">WR</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Net PnL</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Группа
+                  </th>
+                  <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                    Сделки
+                  </th>
+                  <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                    WR
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                    Net PnL
+                  </th>
                 </tr>
               </thead>
               <tbody>

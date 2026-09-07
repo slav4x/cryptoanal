@@ -352,12 +352,24 @@ function RunsTable({ runs }: { runs: ValidationRunDto[] }) {
             <table className="w-full min-w-[920px] border-collapse text-xs">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                  <th className="px-[18px] py-3 font-medium">Стратегия</th>
-                  <th className="px-3 py-3 font-medium">Тип</th>
-                  <th className="px-3 py-3 font-medium">Период</th>
-                  <th className="px-3 py-3 font-medium">Статус</th>
-                  <th className="px-3 py-3 font-medium">Результат</th>
-                  <th className="px-[18px] py-3 text-right font-medium">Создан</th>
+                  <th scope="col" className="px-[18px] py-3 font-medium">
+                    Стратегия
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Тип
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Период
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Статус
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-medium">
+                    Результат
+                  </th>
+                  <th scope="col" className="px-[18px] py-3 text-right font-medium">
+                    Создан
+                  </th>
                 </tr>
               </thead>
               <tbody>

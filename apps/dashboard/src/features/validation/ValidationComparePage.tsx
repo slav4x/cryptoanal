@@ -175,9 +175,11 @@ function ComparisonTable({
         <table className="w-full min-w-[820px] border-collapse text-xs">
           <thead>
             <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-              <th className="w-44 px-[18px] py-3 font-medium">Показатель</th>
+              <th scope="col" className="w-44 px-[18px] py-3 font-medium">
+                Показатель
+              </th>
               {runs.map((run) => (
-                <th key={run.id} className="min-w-44 px-3 py-3 font-medium">
+                <th scope="col" key={run.id} className="min-w-44 px-3 py-3 font-medium">
                   <Link to={`/validation/${run.id}`} className="text-foreground hover:underline">
                     {run.strategy.name} · v{run.strategyVersion.version}
                   </Link>

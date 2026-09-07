@@ -880,19 +880,20 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           },
           notifications: {
             configured: false as const,
-            reason: "Канал доставки будет добавлен после users/workspaces и авторизации.",
+            reason:
+              "Канал доставки будет добавлен после авторизации и разделения рабочих пространств.",
           },
           retention: {
             automaticCleanupEnabled: false as const,
             exportFormat: "json" as const,
             exportIncludes: [
-              "настройки workspace",
+              "настройки рабочего пространства",
               "стратегии и версии",
               "закрытые сделки",
-              "journal и review sessions",
-              "playbooks и связи",
+              "журнал и разборы периода",
+              "плейбуки и связи",
             ],
-            exportExcludes: ["market candles", "system logs", "secrets"],
+            exportExcludes: ["рыночные свечи", "системные логи", "секреты"],
           },
           system: {
             applicationVersion,

@@ -92,7 +92,11 @@ export default function TradesPage() {
 
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-base font-medium">Позиции и история</h2>
-        <div className="flex rounded-full border border-input bg-card p-0.5">
+        <div
+          className="flex rounded-full border border-input bg-card p-0.5"
+          role="group"
+          aria-label="Раздел сделок"
+        >
           <ViewButton active={view === "open"} onClick={() => selectView("open")}>
             Открытые {data.positions.length}
           </ViewButton>
@@ -247,15 +251,33 @@ function PositionsTable({
           <table className="w-full min-w-[980px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                <th className="px-4 py-3 font-medium">Открыта</th>
-                <th className="px-3 py-3 font-medium">Пара</th>
-                <th className="px-3 py-3 font-medium">Сторона</th>
-                <th className="px-3 py-3 text-right font-medium">Количество</th>
-                <th className="px-3 py-3 text-right font-medium">Вход</th>
-                <th className="px-3 py-3 text-right font-medium">Mark</th>
-                <th className="px-3 py-3 text-right font-medium">PnL</th>
-                <th className="px-4 py-3 font-medium">Стратегия</th>
-                <th className="px-4 py-3 text-right font-medium">Действие</th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Открыта
+                </th>
+                <th scope="col" className="px-3 py-3 font-medium">
+                  Пара
+                </th>
+                <th scope="col" className="px-3 py-3 font-medium">
+                  Сторона
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Количество
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Вход
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Mark
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  PnL
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Стратегия
+                </th>
+                <th scope="col" className="px-4 py-3 text-right font-medium">
+                  Действие
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -353,14 +375,30 @@ function TradesTable({
           <table className="w-full min-w-[980px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                <th className="px-4 py-3 font-medium">Закрыта</th>
-                <th className="px-3 py-3 font-medium">Пара</th>
-                <th className="px-3 py-3 font-medium">Сторона</th>
-                <th className="px-3 py-3 text-right font-medium">Вход</th>
-                <th className="px-3 py-3 text-right font-medium">Выход</th>
-                <th className="px-3 py-3 text-right font-medium">Net PnL</th>
-                <th className="px-3 py-3 font-medium">Причина</th>
-                <th className="px-4 py-3 font-medium">Стратегия</th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Закрыта
+                </th>
+                <th scope="col" className="px-3 py-3 font-medium">
+                  Пара
+                </th>
+                <th scope="col" className="px-3 py-3 font-medium">
+                  Сторона
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Вход
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Выход
+                </th>
+                <th scope="col" className="px-3 py-3 text-right font-medium">
+                  Net PnL
+                </th>
+                <th scope="col" className="px-3 py-3 font-medium">
+                  Причина
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Стратегия
+                </th>
               </tr>
             </thead>
             <tbody>

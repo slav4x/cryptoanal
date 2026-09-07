@@ -143,12 +143,24 @@ export default function StrategiesPage() {
               <table className="w-full min-w-[980px] border-collapse text-[13px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                    <th className="px-[18px] py-3 font-medium">Название</th>
-                    <th className="px-3 py-3 font-medium">Статус</th>
-                    <th className="px-3 py-3 font-medium">Версия</th>
-                    <th className="px-3 py-3 font-medium">Валидация</th>
-                    <th className="px-3 py-3 font-medium">Deployment</th>
-                    <th className="px-[18px] py-3 text-right font-medium">Обновлена</th>
+                    <th scope="col" className="px-[18px] py-3 font-medium">
+                      Название
+                    </th>
+                    <th scope="col" className="px-3 py-3 font-medium">
+                      Статус
+                    </th>
+                    <th scope="col" className="px-3 py-3 font-medium">
+                      Версия
+                    </th>
+                    <th scope="col" className="px-3 py-3 font-medium">
+                      Валидация
+                    </th>
+                    <th scope="col" className="px-3 py-3 font-medium">
+                      Deployment
+                    </th>
+                    <th scope="col" className="px-[18px] py-3 text-right font-medium">
+                      Обновлена
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

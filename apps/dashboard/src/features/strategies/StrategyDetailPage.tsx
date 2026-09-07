@@ -81,7 +81,7 @@ export default function StrategyDetailPage() {
           </Link>
         </Button>
         <PageHeader
-          eyebrow="Strategy workspace"
+          eyebrow="Стратегия"
           title={strategy.name}
           description={strategy.description ?? "Описание не добавлено"}
           actions={
@@ -105,11 +105,17 @@ export default function StrategyDetailPage() {
         />
       </div>
 
-      <div className="flex items-center gap-1 overflow-x-auto rounded-[10px] border bg-card p-1">
+      <div
+        className="flex items-center gap-1 overflow-x-auto rounded-[10px] border bg-card p-1"
+        role="tablist"
+        aria-label="Разделы стратегии"
+      >
         {tabs.map((item) => (
           <Button
             key={item.value}
             type="button"
+            role="tab"
+            aria-selected={tab === item.value}
             size="sm"
             variant="ghost"
             className={cn(
@@ -484,9 +490,15 @@ function VersionsTab({ strategy }: { strategy: StrategyDetailDto }) {
               <table className="w-full min-w-[640px] border-collapse text-xs">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                    <th className="px-[18px] py-3 font-medium">Параметр</th>
-                    <th className="px-3 py-3 font-medium">Было</th>
-                    <th className="px-[18px] py-3 font-medium">Стало</th>
+                    <th scope="col" className="px-[18px] py-3 font-medium">
+                      Параметр
+                    </th>
+                    <th scope="col" className="px-3 py-3 font-medium">
+                      Было
+                    </th>
+                    <th scope="col" className="px-[18px] py-3 font-medium">
+                      Стало
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

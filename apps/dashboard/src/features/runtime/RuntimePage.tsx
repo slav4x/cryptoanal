@@ -159,10 +159,18 @@ function DeploymentTable({
         <table className="w-full min-w-[560px] border-collapse text-[13px]">
           <thead>
             <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-              <th className="px-[18px] py-3 font-medium">Стратегия</th>
-              <th className="px-3 py-3 font-medium">Статус</th>
-              <th className="px-3 py-3 font-medium">Среда</th>
-              <th className="px-[18px] py-3 text-right font-medium">Обновлён</th>
+              <th scope="col" className="px-[18px] py-3 font-medium">
+                Стратегия
+              </th>
+              <th scope="col" className="px-3 py-3 font-medium">
+                Статус
+              </th>
+              <th scope="col" className="px-3 py-3 font-medium">
+                Среда
+              </th>
+              <th scope="col" className="px-[18px] py-3 text-right font-medium">
+                Обновлён
+              </th>
             </tr>
           </thead>
           <tbody>

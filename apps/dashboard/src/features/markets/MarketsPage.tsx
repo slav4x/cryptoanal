@@ -122,12 +122,24 @@ export default function MarketsPage() {
               <table className="w-full min-w-[760px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                    <th className="h-10 px-5 font-medium">Пара</th>
-                    <th className="h-10 px-4 text-right font-medium">Цена</th>
-                    <th className="h-10 px-4 text-right font-medium">24 часа</th>
-                    <th className="h-10 px-4 text-right font-medium">Объём</th>
-                    <th className="h-10 px-4 font-medium">Режим</th>
-                    <th className="h-10 px-5 text-right font-medium">Данные</th>
+                    <th scope="col" className="h-10 px-5 font-medium">
+                      Пара
+                    </th>
+                    <th scope="col" className="h-10 px-4 text-right font-medium">
+                      Цена
+                    </th>
+                    <th scope="col" className="h-10 px-4 text-right font-medium">
+                      24 часа
+                    </th>
+                    <th scope="col" className="h-10 px-4 text-right font-medium">
+                      Объём
+                    </th>
+                    <th scope="col" className="h-10 px-4 font-medium">
+                      Режим
+                    </th>
+                    <th scope="col" className="h-10 px-5 text-right font-medium">
+                      Данные
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

@@ -8,9 +8,11 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FieldLabel,
   Input,
   MetricCard,
   PageHeader,
+  Select,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -63,7 +65,7 @@ export default function PlaybooksPage() {
   return (
     <div className="space-y-[18px]">
       <PageHeader
-        eyebrow="Research workflow"
+        eyebrow="Исследования"
         title="Плейбуки"
         description="Повторяемые сетапы, критерии входа и условия отмены — отдельно от конфигурации стратегий."
         actions={
@@ -114,7 +116,7 @@ export default function PlaybooksPage() {
       <Card>
         <CardContent className="grid gap-3 pt-4 xl:grid-cols-[1.4fr_repeat(3,minmax(180px,0.65fr))]">
           <label className="space-y-1.5">
-            <span className={fieldLabelClass}>Поиск</span>
+            <FieldLabel>Поиск</FieldLabel>
             <span className="relative block">
               <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-stale" />
               <Input
@@ -470,18 +472,14 @@ function FilterSelect({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className={fieldLabelClass}>{label}</span>
-      <select
-        value={value}
-        className={selectClass}
-        onChange={(event) => onChange(event.target.value)}
-      >
+      <FieldLabel>{label}</FieldLabel>
+      <Select value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -522,7 +520,3 @@ function formatDateTime(value: string) {
     timeStyle: "short",
   }).format(new Date(value));
 }
-
-const fieldLabelClass = "block text-[10px] uppercase tracking-[0.1em] text-stale";
-const selectClass =
-  "h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring";

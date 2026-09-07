@@ -13,9 +13,11 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FieldLabel,
   Input,
   MetricCard,
   PageHeader,
+  Select,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -63,17 +65,18 @@ export default function SystemLogsPage() {
   return (
     <div className="space-y-[18px]">
       <PageHeader
-        eyebrow="System"
+        eyebrow="Система"
         title="Системные логи"
-        description="Структурированные события сервисов. Activity и бизнес-аудит остаются отдельными потоками."
+        description="Структурированные события сервисов. Активность и бизнес-аудит остаются отдельными потоками."
         actions={
           <div className="flex items-center gap-2">
             <Button
               variant={live ? "secondary" : "ghost"}
+              aria-pressed={live}
               onClick={() => setLive((value) => !value)}
             >
               <Radio className={cn("size-4", live && "text-profit")} />
-              {live ? "Live: включён" : "Live tail"}
+              {live ? "Автообновление: вкл." : "Автообновление"}
             </Button>
             <Button variant="secondary" onClick={() => void query.refetch()}>
               <RefreshCw className={cn("size-4", query.isRefetching && "animate-spin")} />
@@ -90,15 +93,15 @@ export default function SystemLogsPage() {
           hint={periodLabels[filters.period]}
         />
         <MetricCard
-          label="Warnings"
+          label="Предупреждения"
           value={String(summary.warnings)}
           hint="Требуют внимания"
           tone={summary.warnings > 0 ? "warning" : "neutral"}
         />
         <MetricCard
-          label="Errors"
+          label="Ошибки"
           value={String(summary.errors)}
-          hint="Error + critical"
+          hint="Ошибки и критические"
           tone={summary.errors > 0 ? "loss" : "neutral"}
         />
         <MetricCard
@@ -111,7 +114,7 @@ export default function SystemLogsPage() {
       <Card>
         <CardContent className="grid gap-3 pt-4 xl:grid-cols-[1.2fr_repeat(3,minmax(160px,0.6fr))]">
           <label className="space-y-1.5">
-            <span className={fieldLabelClass}>Поиск</span>
+            <FieldLabel>Поиск</FieldLabel>
             <span className="relative block">
               <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-stale" />
               <Input
@@ -173,12 +176,12 @@ export default function SystemLogsPage() {
           <div>
             <CardTitle>Поток событий</CardTitle>
             <CardDescription>
-              Обновлено {formatDateTime(firstPage.meta.generatedAt)} · body, headers и cookies не
-              сохраняются
+              Обновлено {formatDateTime(firstPage.meta.generatedAt)} · тело запроса, заголовки и
+              cookies не сохраняются
             </CardDescription>
           </div>
           {live ? (
-            <Badge variant="profit">live · 5 сек</Badge>
+            <Badge variant="profit">каждые 5 сек</Badge>
           ) : (
             <Badge variant="outline">вручную</Badge>
           )}
@@ -237,6 +240,8 @@ function LogRow({
   return (
     <div>
       <button
+        type="button"
+        aria-expanded={expanded}
         className="grid w-full grid-cols-[18px_82px_76px_minmax(180px,0.65fr)_minmax(260px,1.35fr)_180px] items-center gap-3 px-4 py-3 text-left text-xs transition-colors hover:bg-row-hover"
         onClick={() => setExpanded((value) => !value)}
       >
@@ -260,15 +265,16 @@ function LogRow({
       {expanded ? (
         <div className="grid gap-4 border-t border-row-border bg-background/45 px-10 py-3.5 xl:grid-cols-[minmax(0,1fr)_300px]">
           <div>
-            <p className={fieldLabelClass}>Metadata</p>
+            <FieldLabel>Метаданные</FieldLabel>
             <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-row-border bg-background p-3 font-mono text-[11px] leading-5 text-muted-foreground">
               {log.metadata ? JSON.stringify(log.metadata, null, 2) : "Метаданные отсутствуют"}
             </pre>
           </div>
           <div>
-            <p className={fieldLabelClass}>Correlation id</p>
+            <FieldLabel>Correlation ID</FieldLabel>
             {log.correlationId ? (
               <button
+                type="button"
                 className="mt-2 break-all text-left font-mono text-[11px] text-info hover:underline"
                 onClick={() => onCorrelation(log.correlationId!)}
               >
@@ -312,18 +318,14 @@ function FilterSelect({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className={fieldLabelClass}>{label}</span>
-      <select
-        value={value}
-        className={selectClass}
-        onChange={(event) => onChange(event.target.value)}
-      >
+      <FieldLabel>{label}</FieldLabel>
+      <Select value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -369,7 +371,3 @@ const levelLabels: Record<SystemLogLevel, string> = {
   error: "error",
   critical: "critical",
 };
-
-const fieldLabelClass = "text-[10px] uppercase tracking-[0.1em] text-stale";
-const selectClass =
-  "h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring";

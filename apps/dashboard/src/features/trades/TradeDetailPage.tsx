@@ -189,10 +189,18 @@ export default function TradeDetailPage() {
                       <table className="w-full min-w-[620px] border-collapse text-xs">
                         <thead>
                           <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                            <th className="px-3 py-2 font-medium">Исполнено</th>
-                            <th className="px-3 py-2 text-right font-medium">Количество</th>
-                            <th className="px-3 py-2 text-right font-medium">Цена</th>
-                            <th className="px-3 py-2 text-right font-medium">Комиссия</th>
+                            <th scope="col" className="px-3 py-2 font-medium">
+                              Исполнено
+                            </th>
+                            <th scope="col" className="px-3 py-2 text-right font-medium">
+                              Количество
+                            </th>
+                            <th scope="col" className="px-3 py-2 text-right font-medium">
+                              Цена
+                            </th>
+                            <th scope="col" className="px-3 py-2 text-right font-medium">
+                              Комиссия
+                            </th>
                           </tr>
                         </thead>
                         <tbody>

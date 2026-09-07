@@ -19,11 +19,12 @@ import {
   ScrollText,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { fetchOverview, fetchRequestContext, fetchSettings } from "../shared/api";
 
-const navigation = [
+const workspaceNavigation = [
   { label: "Главная", href: "/", icon: LayoutDashboard, end: true },
   { label: "Рынки", href: "/markets", icon: Activity, end: false },
   { label: "Сделки", href: "/trades", icon: ArrowLeftRight, end: false },
@@ -31,16 +32,34 @@ const navigation = [
   { label: "Валидация", href: "/validation", icon: FlaskConical, end: false },
   { label: "Запуск", href: "/runtime", icon: RadioTower, end: false },
   { label: "Аналитика", href: "/analytics", icon: ChartNoAxesCombined, end: true },
-  { label: "Здоровье", href: "/analytics/health", icon: HeartPulse, end: false },
+] satisfies NavigationItem[];
+
+const researchNavigation = [
   { label: "Активность", href: "/activity", icon: ListTree, end: false },
   { label: "Разбор", href: "/journal", icon: BookOpenText, end: false },
   { label: "Плейбуки", href: "/playbooks", icon: BookMarked, end: false },
+] satisfies NavigationItem[];
+
+const systemNavigation = [
+  { label: "Состояние", href: "/analytics/health", icon: HeartPulse, end: false },
   { label: "Системные логи", href: "/system/logs", icon: ScrollText, end: false },
   { label: "Настройки", href: "/settings", icon: Settings, end: false },
-] as const;
+] satisfies NavigationItem[];
+
+type NavigationItem = {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+  end: boolean;
+};
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
+  const runtimePollingEnabled =
+    location.pathname === "/" ||
+    location.pathname.startsWith("/runtime") ||
+    location.pathname.startsWith("/trades");
   const contextQuery = useQuery({
     queryKey: ["context"],
     queryFn: fetchRequestContext,
@@ -49,7 +68,7 @@ export function AppShell() {
   const overviewQuery = useQuery({
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
-    refetchInterval: 15_000,
+    refetchInterval: runtimePollingEnabled ? 15_000 : false,
     refetchIntervalInBackground: false,
   });
   const settingsQuery = useQuery({
@@ -68,6 +87,12 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen bg-background lg:flex lg:gap-[22px] lg:p-[18px_22px]">
+      <a
+        href="#main-content"
+        className="sr-only fixed left-4 top-4 z-[100] rounded-[8px] bg-primary px-3 py-2 text-sm text-primary-foreground focus:not-sr-only"
+      >
+        Перейти к содержанию
+      </a>
       <aside className="sticky top-[18px] hidden h-[calc(100vh-36px)] w-(--sidebar-width) shrink-0 lg:flex lg:flex-col">
         <SidebarContent
           workspaceName={workspaceName}
@@ -118,7 +143,7 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="w-full p-4 sm:p-6 lg:p-0">
+        <main id="main-content" tabIndex={-1} className="w-full p-4 sm:p-6 lg:p-0">
           <Outlet />
         </main>
       </div>
@@ -162,31 +187,25 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
         <ChevronsUpDown className="size-[15px] shrink-0 text-muted-foreground" aria-hidden="true" />
       </div>
 
-      <nav className="mt-4 flex flex-col gap-0.5" aria-label="Основная навигация">
-        {navigation.map(({ label, href, icon: Icon, end }) => (
-          <NavLink
-            key={href}
-            to={href}
-            end={end}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                "flex h-10 items-center gap-[11px] rounded-[9px] px-[11px] text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground",
-                isActive && "bg-sidebar-accent text-sidebar-foreground",
-              )
-            }
-          >
-            <Icon className="size-[17px]" aria-hidden="true" />
-            {label}
-          </NavLink>
-        ))}
+      <nav
+        className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1"
+        aria-label="Основная навигация"
+      >
+        <NavigationGroup
+          label="Рабочая область"
+          items={workspaceNavigation}
+          onNavigate={onNavigate}
+        />
+        <NavigationGroup label="Исследования" items={researchNavigation} onNavigate={onNavigate} />
+        <NavigationGroup label="Система" items={systemNavigation} onNavigate={onNavigate} />
       </nav>
 
-      <div className="mt-auto space-y-2.5">
-        <div className="flex items-center justify-between px-0.5">
+      <div className="mt-3">
+        <div className="flex items-center justify-between px-0.5" aria-live="polite">
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span
               className={cn("size-1.5 rounded-full", runtimeIsHealthy ? "bg-profit" : "bg-loss")}
+              aria-hidden="true"
             />
             {runtimeLabels[runtimeState]}
           </span>
@@ -194,16 +213,42 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
             dry-run
           </span>
         </div>
-        <div className="flex items-center gap-2.5 rounded-[12px] border border-input bg-card p-2.5">
-          <span className="grid size-8 place-items-center rounded-full bg-avatar text-[13px] font-medium text-avatar-foreground">
-            D
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[13px] font-medium">Development</span>
-            <span className="block truncate text-[11px] text-stale">локальный workspace</span>
-          </span>
-        </div>
       </div>
     </>
+  );
+}
+
+function NavigationGroup({
+  label,
+  items,
+  onNavigate,
+}: {
+  label: string;
+  items: NavigationItem[];
+  onNavigate: () => void;
+}) {
+  return (
+    <div>
+      <p className="mb-0.5 px-[11px] text-[9px] uppercase tracking-[0.14em] text-stale">{label}</p>
+      <div className="space-y-0.5">
+        {items.map(({ label: itemLabel, href, icon: Icon, end }) => (
+          <NavLink
+            key={href}
+            to={href}
+            end={end}
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              cn(
+                "flex h-8 items-center gap-[10px] rounded-[8px] px-[11px] text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                isActive && "bg-sidebar-accent text-sidebar-foreground",
+              )
+            }
+          >
+            <Icon className="size-4" aria-hidden="true" />
+            {itemLabel}
+          </NavLink>
+        ))}
+      </div>
+    </div>
   );
 }

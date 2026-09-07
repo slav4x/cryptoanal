@@ -10,6 +10,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  FieldLabel,
   Input,
   Textarea,
   cn,
@@ -248,7 +249,7 @@ function OptionGrid({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
+      <FieldLabel>{label}</FieldLabel>
       {children}
     </label>
   );

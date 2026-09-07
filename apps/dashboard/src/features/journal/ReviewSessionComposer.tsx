@@ -1,5 +1,14 @@
 import { reviewSessionCreateSchema } from "@cryptoanal/contracts";
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Textarea } from "@cryptoanal/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FieldLabel,
+  Input,
+  Textarea,
+} from "@cryptoanal/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { createReviewSession } from "../../shared/api";
@@ -127,7 +136,7 @@ export function ReviewSessionComposer({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
+      <FieldLabel>{label}</FieldLabel>
       {children}
     </label>
   );

@@ -4,7 +4,17 @@ import {
   type JournalEntryKind,
   type JournalLinkType,
 } from "@cryptoanal/contracts";
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Textarea } from "@cryptoanal/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FieldLabel,
+  Input,
+  Select,
+  Textarea,
+} from "@cryptoanal/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { createJournalEntry } from "../../shared/api";
@@ -46,9 +56,8 @@ export function JournalEntryComposer({
       <CardContent className="space-y-4 pt-4">
         <div className="grid gap-3 xl:grid-cols-[180px_1fr_220px]">
           <Field label="Тип">
-            <select
+            <Select
               value={kind}
-              className={selectClass}
               onChange={(event) => setKind(event.target.value as JournalEntryKind)}
             >
               {Object.entries(kindLabels).map(([value, label]) => (
@@ -56,7 +65,7 @@ export function JournalEntryComposer({
                   {label}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Заголовок">
             <Input
@@ -91,9 +100,8 @@ export function JournalEntryComposer({
             />
           </Field>
           <Field label="Тип связи">
-            <select
+            <Select
               value={linkType}
-              className={selectClass}
               onChange={(event) => {
                 setLinkType(event.target.value as JournalLinkType | "");
                 setTargetId("");
@@ -105,12 +113,11 @@ export function JournalEntryComposer({
                   {label}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Связанный объект">
-            <select
+            <Select
               value={targetId}
-              className={selectClass}
               disabled={!linkType}
               onChange={(event) => setTargetId(event.target.value)}
             >
@@ -120,7 +127,7 @@ export function JournalEntryComposer({
                   {option.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         </div>
         {formError || mutation.error ? (
@@ -159,7 +166,7 @@ export function JournalEntryComposer({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
+      <FieldLabel>{label}</FieldLabel>
       {children}
     </label>
   );
@@ -187,9 +194,6 @@ function toLocalDateTime(date: Date) {
   const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return shifted.toISOString().slice(0, 16);
 }
-
-const selectClass =
-  "h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring disabled:opacity-50";
 
 const kindLabels: Record<JournalEntryKind, string> = {
   hypothesis: "Гипотеза",

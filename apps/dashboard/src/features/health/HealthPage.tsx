@@ -131,13 +131,27 @@ export default function HealthPage() {
               <table className="w-full min-w-[900px] border-collapse text-[12px]">
                 <thead>
                   <tr className="text-left text-[9px] uppercase tracking-[0.08em] text-stale">
-                    <th className="px-4 py-2.5 font-medium">Стратегия</th>
-                    <th className="px-3 py-2.5 font-medium">Статус</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Сделки</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Win rate</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Expectancy</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Profit factor</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Max DD</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">
+                      Стратегия
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 font-medium">
+                      Статус
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Сделки
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Win rate
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Expectancy
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Profit factor
+                    </th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                      Max DD
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

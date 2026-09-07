@@ -13,8 +13,10 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FieldLabel,
   MetricCard,
   PageHeader,
+  Select,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -64,7 +66,7 @@ export default function JournalPage() {
   return (
     <div className="space-y-[18px]">
       <PageHeader
-        eyebrow="Research workflow"
+        eyebrow="Исследования"
         title="Разбор"
         description="Гипотезы, наблюдения и решения с привязкой к фактическим результатам."
         actions={
@@ -181,12 +183,16 @@ export default function JournalPage() {
         />
       </div>
 
-      <div className="flex gap-1 border-b border-row-border">
+      <div
+        className="flex gap-1 border-b border-row-border"
+        role="tablist"
+        aria-label="Разделы журнала"
+      >
         <Tab active={view === "entries"} onClick={() => setView("entries")}>
           Записи
         </Tab>
         <Tab active={view === "reviews"} onClick={() => setView("reviews")}>
-          Review sessions
+          Разборы периода
         </Tab>
       </div>
 
@@ -385,6 +391,8 @@ function Tab({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       className={cn(
         "border-b-2 px-3 py-2.5 text-xs",
         active
@@ -417,18 +425,14 @@ function FilterSelect<T extends string>({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
-      <select
-        value={value}
-        className="h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring"
-        onChange={(event) => onChange(event.target.value as T)}
-      >
+      <FieldLabel>{label}</FieldLabel>
+      <Select value={value} onChange={(event) => onChange(event.target.value as T)}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }

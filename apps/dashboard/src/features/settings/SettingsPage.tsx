@@ -8,7 +8,9 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FieldLabel,
   PageHeader,
+  Select,
   Skeleton,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,7 +30,7 @@ export default function SettingsPage() {
   if (query.isError)
     return (
       <div className="space-y-[18px]">
-        <PageHeader title="Настройки" description="Параметры development workspace." />
+        <PageHeader title="Настройки" description="Параметры рабочего пространства разработки." />
         <ErrorState
           description={query.error.message}
           requestId={query.error instanceof ApiClientError ? query.error.requestId : undefined}
@@ -41,9 +43,9 @@ export default function SettingsPage() {
   return (
     <div className="space-y-[18px]">
       <PageHeader
-        eyebrow="System"
+        eyebrow="Система"
         title="Настройки"
-        description="Рабочие параметры текущего workspace и прозрачное состояние инфраструктуры."
+        description="Рабочие параметры текущего пространства и прозрачное состояние инфраструктуры."
       />
       <div className="grid items-start gap-[18px] xl:grid-cols-2">
         <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
@@ -81,39 +83,34 @@ function PreferencesCard({ preferences }: { preferences: WorkspacePreferencesDto
         <CardIcon icon={Globe2} />
         <div>
           <CardTitle>Интерфейс и время</CardTitle>
-          <CardDescription>Сохраняются на уровне текущего workspace.</CardDescription>
+          <CardDescription>Сохраняются на уровне текущего рабочего пространства.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4 pt-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Timezone">
-            <select
-              value={timezone}
-              className={selectClass}
-              onChange={(event) => setTimezone(event.target.value)}
-            >
+            <Select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
               {timezones.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Плотность таблиц">
-            <select
+            <Select
               value={tableDensity}
-              className={selectClass}
               onChange={(event) => setTableDensity(event.target.value as TableDensity)}
             >
               <option value="compact">Компактная</option>
               <option value="comfortable">Комфортная</option>
-            </select>
+            </Select>
           </Field>
         </div>
         <SettingRow
           label="Валюта отчётности"
           value={preferences.currency}
-          hint="Фиксирована для текущего dry-run ledger"
+          hint="Фиксирована для текущего журнала dry-run"
         />
         {mutation.error ? <p className="text-xs text-loss">{mutation.error.message}</p> : null}
         <div className="flex justify-end border-t border-row-border pt-4">
@@ -134,21 +131,21 @@ function RuntimeSafetyCard({ settings }: { settings: SettingsDto }) {
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={ShieldCheck} />
         <div>
-          <CardTitle>Runtime safety</CardTitle>
+          <CardTitle>Безопасность запуска</CardTitle>
           <CardDescription>Защитные ограничения применяются сервером.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="pt-2">
         <SettingRow label="Контур" value={safety.tradingEnvironment} tone="profit" />
         <SettingRow
-          label="Live trading"
-          value={safety.liveTradingEnabled ? "включён" : "отключён"}
+          label="Реальная торговля"
+          value={safety.liveTradingEnabled ? "включена" : "отключена"}
         />
         <SettingRow
           label="Подтверждения команд"
           value={safety.confirmationsRequired ? "обязательны" : "отключены"}
         />
-        <SettingRow label="Активных deployment" value={`не более ${safety.maxActiveDeployments}`} />
+        <SettingRow label="Активных запусков" value={`не более ${safety.maxActiveDeployments}`} />
       </CardContent>
     </Card>
   );
@@ -160,8 +157,8 @@ function MarketDataCard({ settings }: { settings: SettingsDto }) {
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={Gauge} />
         <div>
-          <CardTitle>Market data и exchange</CardTitle>
-          <CardDescription>Secrets и private credentials не выводятся.</CardDescription>
+          <CardTitle>Рыночные данные и биржа</CardTitle>
+          <CardDescription>Секреты и приватные ключи не выводятся.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="pt-2">
@@ -175,18 +172,18 @@ function MarketDataCard({ settings }: { settings: SettingsDto }) {
           value={formatInterval(settings.marketData.candlePollIntervalMs)}
         />
         <SettingRow
-          label="Account snapshot"
+          label="Снимок счёта"
           value={formatInterval(settings.marketData.accountSnapshotIntervalMs)}
         />
         <SettingRow
-          label="Public connection"
+          label="Публичное подключение"
           value={settings.exchange.publicConnectionConfigured ? "настроен" : "не настроен"}
           tone={settings.exchange.publicConnectionConfigured ? "profit" : undefined}
         />
         <SettingRow
-          label="Private connection"
+          label="Приватное подключение"
           value="не настроен"
-          hint="Добавляется после users/workspaces"
+          hint="Добавляется после авторизации и разделения workspace"
         />
       </CardContent>
     </Card>
@@ -207,7 +204,7 @@ function NotificationsCard({ settings }: { settings: SettingsDto }) {
         <Badge variant="outline">не настроены</Badge>
         <p className="text-sm leading-6 text-muted-foreground">{settings.notifications.reason}</p>
         <p className="text-xs text-stale">
-          Watchdog продолжает фиксировать инциденты внутри dashboard независимо от внешних
+          Watchdog продолжает фиксировать инциденты внутри дашборда независимо от внешних
           уведомлений.
         </p>
       </CardContent>
@@ -236,8 +233,8 @@ function RetentionCard({ settings }: { settings: SettingsDto }) {
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={Download} />
         <div>
-          <CardTitle>Retention и экспорт</CardTitle>
-          <CardDescription>Ручной переносимый snapshot без secrets.</CardDescription>
+          <CardTitle>Хранение и экспорт</CardTitle>
+          <CardDescription>Ручной переносимый снимок без секретов.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4 pt-4">
@@ -246,13 +243,13 @@ function RetentionCard({ settings }: { settings: SettingsDto }) {
           value={settings.retention.automaticCleanupEnabled ? "включена" : "отключена"}
         />
         <div>
-          <p className={fieldLabelClass}>Включается</p>
+          <FieldLabel>Включается</FieldLabel>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {settings.retention.exportIncludes.join(" · ")}
           </p>
         </div>
         <div>
-          <p className={fieldLabelClass}>Не включается</p>
+          <FieldLabel>Не включается</FieldLabel>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {settings.retention.exportExcludes.join(" · ")}
           </p>
@@ -275,7 +272,7 @@ function SystemCard({ settings }: { settings: SettingsDto }) {
         <div>
           <CardTitle>Система</CardTitle>
           <CardDescription>
-            Диагностическая информация без конфигурационных secrets.
+            Диагностическая информация без конфигурационных секретов.
           </CardDescription>
         </div>
       </CardHeader>
@@ -334,7 +331,7 @@ function CardIcon({ icon: Icon }: { icon: LucideIcon }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="space-y-1.5">
-      <span className={fieldLabelClass}>{label}</span>
+      <FieldLabel>{label}</FieldLabel>
       {children}
     </label>
   );
@@ -359,6 +356,3 @@ function formatInterval(value: number) {
 }
 
 const timezones = ["UTC", "Europe/Moscow", "Asia/Novosibirsk", "Asia/Almaty", "Asia/Dubai"];
-const fieldLabelClass = "text-[10px] uppercase tracking-[0.1em] text-stale";
-const selectClass =
-  "h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring";

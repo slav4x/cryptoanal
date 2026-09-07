@@ -128,12 +128,24 @@ export default function OverviewPage() {
               <table className="w-full min-w-[680px] border-collapse text-[13px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                    <th className="px-4 py-2.5 font-medium">Пара</th>
-                    <th className="px-3 py-2.5 font-medium">Режим</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Цена</th>
-                    <th className="px-3 py-2.5 text-right font-medium">24ч</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Позиции</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Данные</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">
+                      Пара
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 font-medium">
+                      Режим
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Цена
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      24ч
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Позиции
+                    </th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                      Данные
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

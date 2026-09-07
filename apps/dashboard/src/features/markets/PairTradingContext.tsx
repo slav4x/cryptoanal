@@ -79,10 +79,18 @@ export function PairTradingContext({
               <table className="w-full min-w-[520px] border-collapse text-[12px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
-                    <th className="px-4 py-2.5 font-medium">Время</th>
-                    <th className="px-3 py-2.5 font-medium">Сторона</th>
-                    <th className="px-3 py-2.5 text-right font-medium">Выход</th>
-                    <th className="px-4 py-2.5 text-right font-medium">PnL</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">
+                      Время
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 font-medium">
+                      Сторона
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Выход
+                    </th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                      PnL
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

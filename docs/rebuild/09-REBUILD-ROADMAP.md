@@ -136,10 +136,10 @@ fake auth, глобальных user-owned данных и критичных д
 - [ ] Реализовать signup/login/logout/recovery и security flows.
 - [ ] Реализовать workspace creation/switching/membership по подтверждённому scope.
 - [x] Закрыть private API membership-based workspace resolver.
-- [ ] Перевести runtime/account/watchdog worker с fixed development workspace на multi-workspace scheduling.
+- [x] Перевести runtime/account/watchdog worker с fixed development workspace на multi-workspace scheduling.
 - [ ] Добавить user/workspace settings и audit log.
 - [ ] Добавить exchange connections и encrypted credentials.
-- [ ] Мигрировать development workspace к реальному owner.
+- [x] Мигрировать development workspace к реальному owner.
 - [ ] Удалить development access endpoints/config из клиентского deployment.
 
 **Готово, когда:** у каждого клиента свой кабинет, стратегии, проверки, deployments,

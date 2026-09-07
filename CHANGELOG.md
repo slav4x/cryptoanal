@@ -86,6 +86,7 @@
 - HttpOnly auth cookie, CSRF validation, login rate limiting and API security headers.
 - Dashboard login, real user identity and active workspace switcher.
 - Audited auth session create/revoke and workspace switch events.
+- Membership-driven worker scheduling for isolated account snapshots, runtime targets and watchdog incidents across workspaces.
 
 ### Changed
 

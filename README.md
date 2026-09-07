@@ -247,13 +247,14 @@ hash. Изменяющие запросы защищены CSRF, login огра�
 
 ## Dry-run account
 
-Worker сохраняет account snapshots для development workspace. Капитал рассчитывается как
-`DRY_RUN_INITIAL_BALANCE + realized PnL + unrealized PnL`; доступный баланс остаётся
-неопределённым до появления risk/margin model или private exchange adapter.
+Worker сохраняет отдельные account snapshots для каждого workspace с membership активного
+пользователя. Капитал рассчитывается как `DRY_RUN_INITIAL_BALANCE + realized PnL +
+unrealized PnL`; доступный баланс остаётся неопределённым до появления risk/margin model
+или private exchange adapter.
 
 Настройки:
 
-- `DRY_RUN_ACCOUNT_ID` — стабильный идентификатор development-счёта;
+- `DRY_RUN_ACCOUNT_ID` — стабильный идентификатор dry-run счёта внутри каждого workspace;
 - `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
 - `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут;
 - `RUNTIME_POLL_INTERVAL_MS` — частота поиска новых завершённых свечей, по умолчанию 5 секунд.

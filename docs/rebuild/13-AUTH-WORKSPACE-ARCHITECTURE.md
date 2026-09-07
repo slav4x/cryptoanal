@@ -88,14 +88,16 @@ CRYPTOANAL_NEW_USER_PASSWORD='use-a-long-local-password' \
 - глобальные market instruments/candles являются общими справочными данными, но watchlist,
   стратегии, validations, runtime, сделки, журнал, playbooks и settings изолированы.
 
-Worker пока обслуживает runtime/account/watchdog для `DEVELOPMENT_WORKSPACE_ID`. Это не
-нарушает чтение чужих данных, но перед подключением второго рабочего клиента worker нужно
-перевести на обход активных workspaces и workspace-specific exchange connections.
+Worker получает список operational workspaces через memberships активных пользователей и
+изолированно обрабатывает для каждого account snapshots, runtime targets и watchdog
+incidents. Ошибка одного workspace не прерывает цикл остальных. Рыночные snapshots и
+candles остаются общими справочными данными. До реальной торговли каждому workspace всё
+ещё потребуется собственный encrypted exchange connection.
 
 ## 7. Следующие auth-срезы
 
 1. Workspace creation и owner-controlled invitations.
 2. Recovery, email verification, password rotation и список устройств/session.
 3. Permission matrix для `MEMBER` и дополнительных ролей при реальной необходимости.
-4. Encrypted exchange connections на workspace и multi-workspace worker scheduling.
+4. Encrypted exchange connections на workspace.
 5. Signup/onboarding только после решения self-service против invite-only.

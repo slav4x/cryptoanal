@@ -77,6 +77,7 @@ import {
   validationRunQueuedSchema,
   validationsSchema,
   watchlistStateSchema,
+  workspaceCreateSchema,
   workspaceSwitchSchema,
 } from "@cryptoanal/contracts";
 import {
@@ -86,6 +87,7 @@ import {
   AnalyticsRepository,
   AuthRepository,
   AuthWorkspaceAccessDeniedError,
+  AuthWorkspaceLimitReachedError,
   type CryptoAnalPrismaClient,
   DashboardRepository,
   DeploymentCommandNotAllowedError,
@@ -473,6 +475,44 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       if (!refreshed) throw new ApiError(401, "AUTH_REQUIRED", "Необходим вход в систему");
       requestContexts.set(request, refreshed);
       return { data: serializeAuthSession(refreshed), meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.post(
+    "/api/v1/workspaces",
+    {
+      schema: {
+        body: workspaceCreateSchema,
+        response: {
+          201: apiEnvelopeSchema(authSessionSchema),
+          401: errorEnvelopeSchema,
+          403: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const context = requireContext(request);
+      try {
+        await authRepository.createWorkspace({
+          sessionId: context.sessionId,
+          userId: context.user.id,
+          name: request.body.name,
+          slug: createWorkspaceSlug(request.body.name),
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (error instanceof AuthWorkspaceLimitReachedError) {
+          throw new ApiError(409, "WORKSPACE_LIMIT_REACHED", "Достигнут лимит рабочих пространств");
+        }
+        throw error;
+      }
+      const refreshed = await resolveSession(request);
+      if (!refreshed) throw new ApiError(401, "AUTH_REQUIRED", "Необходим вход в систему");
+      requestContexts.set(request, refreshed);
+      return reply
+        .status(201)
+        .send({ data: serializeAuthSession(refreshed), meta: createMeta(request.id, "fresh") });
     },
   );
 
@@ -2784,6 +2824,17 @@ function isPublicRoute(url: string) {
 function normalizeHeader(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value.join(", ").slice(0, 500);
   return value?.slice(0, 500) ?? null;
+}
+
+function createWorkspaceSlug(name: string) {
+  const base = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+  return `${base || "workspace"}-${randomBytes(4).toString("hex")}`;
 }
 
 function hasStatusCode(error: unknown, statusCode: number) {

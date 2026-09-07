@@ -56,6 +56,10 @@ export const workspaceSwitchSchema = z.object({
   workspaceId: z.string().min(1),
 });
 
+export const workspaceCreateSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+});
+
 export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
 export const overviewQuerySchema = z.object({
   period: overviewPeriodSchema.default("7d"),
@@ -1304,6 +1308,7 @@ export type AuthLoginDto = z.infer<typeof authLoginSchema>;
 export type AuthSessionDto = z.infer<typeof authSessionSchema>;
 export type AuthWorkspaceDto = z.infer<typeof authWorkspaceSchema>;
 export type WorkspaceSwitchDto = z.infer<typeof workspaceSwitchSchema>;
+export type WorkspaceCreateDto = z.infer<typeof workspaceCreateSchema>;
 export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
 export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
 export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;

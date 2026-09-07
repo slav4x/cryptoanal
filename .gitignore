@@ -11,6 +11,7 @@ coverage/
 packages/persistence/src/generated/
 
 .DS_Store
+.DB_Store
 *.log
 pnpm-debug.log*
 

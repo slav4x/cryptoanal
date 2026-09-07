@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "pnpm --parallel --filter @cryptoanal/api --filter @cryptoanal/dashboard --filter @cryptoanal/worker run dev",
     "build": "pnpm -r --if-present run build",
+    "check:budgets": "node scripts/check-dashboard-budgets.mjs",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

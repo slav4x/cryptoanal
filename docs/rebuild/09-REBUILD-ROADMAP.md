@@ -118,12 +118,12 @@ fake auth, глобальных user-owned данных и критичных д
 Можно выполнять частями раньше, но завершать после стабилизации схемы dashboard.
 
 - [x] Зафиксировать mapping старой БД в baseline schema.
-- [ ] Импортировать только данные с понятным provenance.
-- [ ] Привязать импорт к `development` workspace.
+- [x] Провести import eligibility: подходящих записей нет, operational import равен нулю.
+- [x] Сохранить один чистый `development` workspace без создания legacy workspace.
 - [x] Архивировать invalid/ambiguous business data отдельно с manifest и SHA-256.
-- [ ] Пересчитать projections и сверить расхождения.
-- [ ] Проверить backup/restore.
-- [ ] Перевести старый проект в read-only reference.
+- [x] Зафиксировать отсутствие imported projections; legacy-метрики остаются в архиве.
+- [x] Проверить backup/restore в изолированном одноразовом PostgreSQL.
+- [x] Перевести старый проект в логический read-only reference без runtime dependency.
 
 **Готово, когда:** новый dashboard не зависит от старой schema/runtime для ежедневной
 работы, а история либо перенесена, либо явно архивирована.

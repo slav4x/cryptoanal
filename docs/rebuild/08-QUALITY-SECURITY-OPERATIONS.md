@@ -203,13 +203,31 @@ Validation jobs можно выполнять тем же worker с отдель
 
 ## 10. Backup и recovery
 
-- scheduled database backup;
-- encrypted storage и retention;
-- периодическая проверка restore, а не только наличия файла;
+Локальный development backup:
+
+```bash
+pnpm db:backup
+pnpm db:restore-check
+```
+
+`db:backup` создаёт PostgreSQL custom dump и manifest с SHA-256 в закрытом от Git
+`var/backups`. Если Compose-сервис остановлен, используется временный контейнер без
+публикации порта. `db:restore-check` проверяет checksum, восстанавливает dump в отдельный
+одноразовый volume, сравнивает набор таблиц и проверяет Prisma migrations, затем удаляет
+контейнер и volume. Исходная БД к restore-check не подключается.
+
+Контрольная проверка 7 сентября 2026 года восстановила 36 таблиц и 13 миграций; failed
+migrations — 0. Dump SHA-256:
+
+`9645152b3fa0318123130818557fec6547223d9c5aedfecae0fdeea26d5da1ed`
+
+До production остаются обязательными:
+
+- scheduled backup;
+- внешнее encrypted storage и retention;
+- периодический автоматический restore-check;
 - documented RPO/RTO;
-- strategy versions и validation artifacts входят в backup;
-- exchange secrets имеют отдельную recovery/rotation policy;
-- старый проект остаётся read-only до подтверждённого импорта.
+- отдельная recovery/rotation policy для exchange secrets.
 
 ## 11. Source of truth
 

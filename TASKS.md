@@ -73,9 +73,9 @@
 
 - [x] Inventory и mapping старой БД.
 - [x] Read-only gzip-архив legacy business data с manifest и SHA-256.
-- [ ] Импорт проверенных данных в development workspace.
-- [ ] Решить: оставить legacy только архивом или вручную преобразовать одну стратегию.
-- [ ] Backup/restore check.
+- [x] Зафиксировать archive-only policy: eligible для автоимпорта 0 записей.
+- [x] Сохранить чистый development workspace без legacy-сущностей.
+- [x] Backup/restore check в изолированном PostgreSQL.
 
 ## Этап 8 — Users и workspaces
 

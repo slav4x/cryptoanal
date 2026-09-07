@@ -70,6 +70,13 @@ whitelist projections, а не раскрывают private runtime DTO.
 Strategy status и validation verdict не дублируются вручную между README/catalog/template.
 Документы описывают правила, а фактический статус идёт из versioned data.
 
+### D-015. Legacy-история остаётся архивом
+
+Автоматический импорт из `crypto-trade` не выполняется: старые стратегии, validation,
+решения и сделки не удовлетворяют текущим config/provenance contracts. Новая история
+начинается в чистом `development` workspace. Отдельная стратегия при необходимости
+воссоздаётся вручную как draft и проходит новую validation.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager

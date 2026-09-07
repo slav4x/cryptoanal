@@ -219,6 +219,16 @@ pnpm migration:audit -- --source-env ../crypto-trade/bot/.env
 игнорируемом `var/legacy-migration`; подробный mapping описан в
 [`docs/rebuild/12-LEGACY-DATA-MIGRATION.md`](docs/rebuild/12-LEGACY-DATA-MIGRATION.md).
 
+Локальный backup и изолированная проверка восстановления:
+
+```bash
+pnpm db:backup
+pnpm db:restore-check
+```
+
+Артефакты сохраняются с правами `0600` в игнорируемом `var/backups`. Restore-check
+использует отдельные временные Docker container/volume и не изменяет рабочую базу.
+
 ## Безопасность development-этапа
 
 Dashboard содержит private account/runtime данные и управляющие действия. Пока нет

@@ -92,6 +92,9 @@
 - Workspace member list, role management, last-owner protection and session revocation on removal.
 - Workspace-scoped Bybit connection metadata with AES-256-GCM encrypted API credentials.
 - Owner controls for adding, rotating and revoking exchange connections without returning secrets.
+- Signed Bybit V5 credential verification for demo and live connections.
+- Exchange permission inspection with withdrawal rejection, trading capability and IP allowlist state.
+- Manual connection verification with persisted `ACTIVE`/`INVALID` status and safe failure details.
 
 ### Changed
 

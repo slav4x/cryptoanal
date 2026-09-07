@@ -24,9 +24,9 @@ semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы �
 
 Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
 работают database users, session auth, CSRF, membership isolation, создание/переключение
-workspaces, приглашения, управление участниками, encrypted exchange connections и
-multi-workspace worker. Следующие задачи: проверка биржевых credentials, управление
-sessions и recovery. Landing остаётся последним этапом.
+workspaces, приглашения, управление участниками, encrypted exchange connections, проверка
+Bybit credentials и multi-workspace worker. Следующие задачи: привязка проверенного
+connection к deployment, управление sessions и recovery. Landing остаётся последним этапом.
 
 ## Требования
 
@@ -90,6 +90,7 @@ pnpm dev
 - `GET /api/v1/invitations/:token` и `POST /api/v1/invitations/:token/accept`;
 - `GET`/`POST /api/v1/exchange-connections`;
 - `PUT /api/v1/exchange-connections/:connectionId/credentials` и `DELETE .../:connectionId`;
+- `POST /api/v1/exchange-connections/:connectionId/verify` — проверка ключа и permissions;
 - `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
@@ -265,9 +266,15 @@ hash. Изменяющие запросы защищены CSRF, login огра�
 
 Приватные Bybit credentials шифруются AES-256-GCM отдельным ключом окружения. API никогда
 не возвращает исходные значения, а после отзыва подключения ciphertext удаляется. До
-реализации проверки через Bybit подключение имеет статус `не проверено` и не включает
-торговлю. Новый production-ключ можно создать командой
+ручной проверки через Bybit подключение имеет статус `не проверено`. Проверка использует
+подписанный `GET /v5/user/query-api`, сохраняет только безопасную сводку permissions и
+отклоняет ключи с разрешением `Withdraw`. Даже статус `ACTIVE` не включает торговлю.
+Новый production-ключ можно создать командой
 `openssl rand -base64 32` и сохранить как `EXCHANGE_CREDENTIALS_KEY` вне Git.
+
+Private Bybit verification использует `BYBIT_DEMO_BASE_URL` для demo,
+`BYBIT_LIVE_BASE_URL` для live и timeout `BYBIT_PRIVATE_REQUEST_TIMEOUT_MS`. Региональный
+mainnet-домен при необходимости задаётся через server environment, без изменений frontend.
 
 ## Dry-run account
 

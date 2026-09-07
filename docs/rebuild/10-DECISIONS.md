@@ -89,6 +89,10 @@ Bybit API key/secret хранятся только как AES-256-GCM ciphertext
 Отзыв подключения уничтожает ciphertext. Добавление live credentials не включает live
 trading и не обходит отдельный runtime safety gate.
 
+Проверка выполняется только явной owner-командой через read-only API-key-info endpoint.
+Разрешение `Withdraw` всегда переводит connection в `INVALID`; сетевые и rate-limit ошибки
+не изменяют сохранённый статус.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager

@@ -147,9 +147,9 @@ P0 dashboard содержит управляющие действия, account d
 - удаление/экспорт данных по документированной policy.
 
 Реализованы opaque sessions, Argon2id, membership resolver, CSRF, rate limiting, secure
-headers, auth audit events и AES-256-GCM storage для exchange credentials. Остаются
-credential verification/master-key rotation, recovery/device flows, permission matrix и
-формализованная export/delete policy. Временный dev gate не используется.
+headers, auth audit events, AES-256-GCM storage и Bybit verification для exchange
+credentials. Остаются master-key rotation, recovery/device flows, расширенная permission
+matrix и формализованная export/delete policy. Временный dev gate не используется.
 
 ## 7. Public security P2
 

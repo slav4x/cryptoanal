@@ -89,7 +89,8 @@
 - [ ] Public signup, recovery и управление sessions.
 - [x] Multi-workspace scheduling для runtime/account/watchdog worker.
 - [x] Workspace-scoped exchange connections и encrypted credentials.
-- [ ] Проверка credentials через Bybit и lifecycle статусов подключения.
+- [x] Проверка credentials через Bybit, permission policy и lifecycle статусов.
+- [ ] Привязка deployment к проверенному exchange connection.
 - [x] Миграция development workspace к владельцу.
 
 ## Этап 9 — Landing

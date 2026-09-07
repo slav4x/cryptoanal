@@ -439,6 +439,7 @@ POST /api/v1/invitations/:token/accept
 GET  /api/v1/exchange-connections
 POST /api/v1/exchange-connections
 PUT  /api/v1/exchange-connections/:connectionId/credentials
+POST /api/v1/exchange-connections/:connectionId/verify
 DELETE /api/v1/exchange-connections/:connectionId
 ```
 

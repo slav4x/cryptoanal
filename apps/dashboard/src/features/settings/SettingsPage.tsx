@@ -1,4 +1,9 @@
-import type { SettingsDto, TableDensity, WorkspacePreferencesDto } from "@cryptoanal/contracts";
+import type {
+  SettingsDto,
+  TableDensity,
+  WorkspaceAccessDto,
+  WorkspacePreferencesDto,
+} from "@cryptoanal/contracts";
 import {
   Badge,
   Button,
@@ -18,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BellOff,
   Building2,
+  Copy,
   Download,
   Gauge,
   Globe2,
@@ -25,15 +31,23 @@ import {
   Save,
   ServerCog,
   ShieldCheck,
+  Trash2,
+  UserPlus,
+  Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import {
   ApiClientError,
+  createWorkspaceInvitation,
   createWorkspace,
   exportWorkspace,
   fetchSettings,
+  fetchWorkspaceAccess,
+  removeWorkspaceMember,
+  revokeWorkspaceInvitation,
   updateWorkspacePreferences,
+  updateWorkspaceMemberRole,
 } from "../../shared/api";
 import { authSessionQueryKey, useAuthSession } from "../auth/auth-context";
 
@@ -63,6 +77,7 @@ export default function SettingsPage() {
       />
       <div className="grid items-start gap-[18px] xl:grid-cols-2">
         <WorkspaceCard session={session} />
+        <WorkspaceAccessCard session={session} />
         <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
         <RuntimeSafetyCard settings={settings} />
         <MarketDataCard settings={settings} />
@@ -70,6 +85,244 @@ export default function SettingsPage() {
         <RetentionCard settings={settings} />
         <SystemCard settings={settings} />
       </div>
+    </div>
+  );
+}
+
+function WorkspaceAccessCard({ session }: { session: ReturnType<typeof useAuthSession> }) {
+  const workspaceId = session.activeWorkspace.id;
+  const canManage = session.activeWorkspace.role === "owner";
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"owner" | "member">("member");
+  const [invitationLink, setInvitationLink] = useState<string | null>(null);
+  const queryKey = ["workspace-access", workspaceId] as const;
+  const accessQuery = useQuery({
+    queryKey,
+    queryFn: () => fetchWorkspaceAccess(workspaceId),
+  });
+  const refresh = () => queryClient.invalidateQueries({ queryKey });
+  const invitationMutation = useMutation({
+    mutationFn: () => createWorkspaceInvitation(workspaceId, { email, role }),
+    onSuccess: async ({ data }) => {
+      setInvitationLink(`${window.location.origin}/invite/${data.token}`);
+      setEmail("");
+      await refresh();
+    },
+  });
+  const roleMutation = useMutation({
+    mutationFn: ({ userId, nextRole }: { userId: string; nextRole: "owner" | "member" }) =>
+      updateWorkspaceMemberRole(workspaceId, userId, { role: nextRole }),
+    onSuccess: async () => {
+      await Promise.all([
+        refresh(),
+        queryClient.invalidateQueries({ queryKey: authSessionQueryKey }),
+      ]);
+    },
+  });
+  const removeMutation = useMutation({
+    mutationFn: (userId: string) => removeWorkspaceMember(workspaceId, userId),
+    onSuccess: refresh,
+  });
+  const revokeMutation = useMutation({
+    mutationFn: (invitationId: string) => revokeWorkspaceInvitation(workspaceId, invitationId),
+    onSuccess: refresh,
+  });
+  const mutationError =
+    invitationMutation.error ?? roleMutation.error ?? removeMutation.error ?? revokeMutation.error;
+
+  return (
+    <Card className="xl:col-span-2">
+      <CardHeader className="flex-row items-start gap-3 border-b">
+        <CardIcon icon={Users} />
+        <div>
+          <CardTitle>Участники и доступ</CardTitle>
+          <CardDescription>
+            Роли и приглашения изолированы внутри текущего рабочего пространства.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 pt-4">
+        {accessQuery.isPending ? (
+          <Skeleton className="h-28 w-full" />
+        ) : accessQuery.isError ? (
+          <ErrorState
+            description={accessQuery.error.message}
+            requestId={
+              accessQuery.error instanceof ApiClientError ? accessQuery.error.requestId : undefined
+            }
+            onRetry={() => void accessQuery.refetch()}
+          />
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div>
+              <FieldLabel>Участники</FieldLabel>
+              <div className="mt-2">
+                {accessQuery.data.data.members.map((member) => (
+                  <MemberRow
+                    key={member.id}
+                    member={member}
+                    currentUserId={session.user.id}
+                    canManage={canManage}
+                    disabled={roleMutation.isPending || removeMutation.isPending}
+                    onRoleChange={(nextRole) =>
+                      roleMutation.mutate({ userId: member.id, nextRole })
+                    }
+                    onRemove={() => {
+                      if (window.confirm(`Удалить ${member.email} из workspace?`)) {
+                        removeMutation.mutate(member.id);
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <FieldLabel>Активные приглашения</FieldLabel>
+              <div className="mt-2">
+                {accessQuery.data.data.invitations.length ? (
+                  accessQuery.data.data.invitations.map((invitation) => (
+                    <div
+                      key={invitation.id}
+                      className="flex min-h-12 items-center justify-between gap-4 border-b border-row-border last:border-0"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs text-secondary-foreground">
+                          {invitation.email}
+                        </span>
+                        <span className="block text-[10px] text-stale">
+                          {invitation.role === "owner" ? "владелец" : "участник"} · до{" "}
+                          {formatDate(invitation.expiresAt)}
+                        </span>
+                      </span>
+                      {canManage ? (
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          aria-label="Отозвать приглашение"
+                          disabled={revokeMutation.isPending}
+                          onClick={() => revokeMutation.mutate(invitation.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))
+                ) : (
+                  <p className="py-4 text-xs text-stale">Нет ожидающих приглашений.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {canManage ? (
+          <form
+            className="grid gap-3 border-t border-row-border pt-4 md:grid-cols-[minmax(0,1fr)_160px_auto] md:items-end"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setInvitationLink(null);
+              invitationMutation.mutate();
+            }}
+          >
+            <Field label="Email для приглашения">
+              <Input
+                type="email"
+                value={email}
+                maxLength={320}
+                placeholder="user@example.com"
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Роль">
+              <Select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+                <option value="member">Участник</option>
+                <option value="owner">Владелец</option>
+              </Select>
+            </Field>
+            <Button type="submit" disabled={invitationMutation.isPending}>
+              <UserPlus className="size-4" />
+              {invitationMutation.isPending ? "Создание…" : "Пригласить"}
+            </Button>
+          </form>
+        ) : null}
+
+        {invitationLink ? (
+          <div className="flex items-center gap-3 rounded-[8px] border border-profit/30 bg-profit/5 p-3">
+            <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-secondary-foreground">
+              {invitationLink}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => void navigator.clipboard.writeText(invitationLink)}
+            >
+              <Copy className="size-4" />
+              Копировать
+            </Button>
+          </div>
+        ) : null}
+        {mutationError ? <p className="text-xs text-loss">{mutationError.message}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MemberRow({
+  member,
+  currentUserId,
+  canManage,
+  disabled,
+  onRoleChange,
+  onRemove,
+}: {
+  member: WorkspaceAccessDto["members"][number];
+  currentUserId: string;
+  canManage: boolean;
+  disabled: boolean;
+  onRoleChange: (role: "owner" | "member") => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex min-h-12 items-center justify-between gap-4 border-b border-row-border last:border-0">
+      <span className="min-w-0">
+        <span className="block truncate text-xs text-secondary-foreground">
+          {member.displayName}
+          {member.id === currentUserId ? " · вы" : ""}
+        </span>
+        <span className="block truncate text-[10px] text-stale">{member.email}</span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1">
+        {canManage ? (
+          <Select
+            className="h-8 w-[116px] text-[11px]"
+            value={member.role}
+            disabled={disabled}
+            aria-label={`Роль ${member.email}`}
+            onChange={(event) => onRoleChange(event.target.value as "owner" | "member")}
+          >
+            <option value="member">Участник</option>
+            <option value="owner">Владелец</option>
+          </Select>
+        ) : (
+          <Badge variant="outline">{member.role === "owner" ? "владелец" : "участник"}</Badge>
+        )}
+        {canManage && member.id !== currentUserId ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={`Удалить ${member.email}`}
+            disabled={disabled || member.role === "owner"}
+            onClick={onRemove}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -440,6 +693,12 @@ function SettingsSkeleton() {
 function formatInterval(value: number) {
   if (value % 60_000 === 0) return `${value / 60_000} мин`;
   return `${value / 1_000} сек`;
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "short" }).format(
+    new Date(value),
+  );
 }
 
 const timezones = ["UTC", "Europe/Moscow", "Asia/Novosibirsk", "Asia/Almaty", "Asia/Dubai"];

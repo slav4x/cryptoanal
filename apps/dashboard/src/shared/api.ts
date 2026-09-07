@@ -8,8 +8,10 @@ import {
   healthDashboardSchema,
   journalEntryCreatedSchema,
   journalSchema,
+  invitationDetailsSchema,
   marketDetailSchema,
   marketsSchema,
+  mutationAcceptedSchema,
   overviewSchema,
   playbookMutationSchema,
   playbooksSchema,
@@ -31,6 +33,8 @@ import {
   validationRunDetailSchema,
   validationsSchema,
   watchlistStateSchema,
+  workspaceAccessSchema,
+  workspaceInvitationCreatedSchema,
   type AuthLoginDto,
   type AuthSessionDto,
   type MarketsDto,
@@ -48,6 +52,8 @@ import {
   type JournalEntryCreateDto,
   type JournalEntryCreatedDto,
   type JournalQueryDto,
+  type InvitationAcceptDto,
+  type InvitationDetailsDto,
   type OverviewPeriod,
   type OverviewDto,
   type PlaybookCreateDto,
@@ -82,7 +88,11 @@ import {
   type ValidationRunQueuedDto,
   type ValidationsDto,
   type WatchlistStateDto,
+  type WorkspaceAccessDto,
   type WorkspaceCreateDto,
+  type WorkspaceInvitationCreateDto,
+  type WorkspaceInvitationCreatedDto,
+  type WorkspaceMemberRoleUpdateDto,
 } from "@cryptoanal/contracts";
 import type { z } from "zod";
 
@@ -133,7 +143,11 @@ async function request<T>(
     const errorPayload = payload as {
       error?: { code?: string; message?: string; requestId?: string };
     };
-    if (response.status === 401 && path !== "/api/v1/auth/login") {
+    if (
+      response.status === 401 &&
+      path !== "/api/v1/auth/login" &&
+      !path.startsWith("/api/v1/invitations/")
+    ) {
       csrfToken = null;
       window.dispatchEvent(new Event("cryptoanal:auth-required"));
     }
@@ -178,6 +192,12 @@ const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailS
 const deploymentsEnvelopeSchema = apiEnvelopeSchema(deploymentsSchema);
 const deploymentMutationResultEnvelopeSchema = apiEnvelopeSchema(deploymentMutationResultSchema);
 const positionCloseResultEnvelopeSchema = apiEnvelopeSchema(positionCloseResultSchema);
+const workspaceAccessEnvelopeSchema = apiEnvelopeSchema(workspaceAccessSchema);
+const workspaceInvitationCreatedEnvelopeSchema = apiEnvelopeSchema(
+  workspaceInvitationCreatedSchema,
+);
+const invitationDetailsEnvelopeSchema = apiEnvelopeSchema(invitationDetailsSchema);
+const mutationAcceptedEnvelopeSchema = apiEnvelopeSchema(mutationAcceptedSchema);
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
@@ -222,6 +242,80 @@ export async function createWorkspace(
     method: "POST",
     body: JSON.stringify(input),
   });
+  csrfToken = response.data.authenticated ? response.data.csrfToken : null;
+  return response;
+}
+
+export function fetchWorkspaceAccess(
+  workspaceId: string,
+): Promise<ApiEnvelope<WorkspaceAccessDto>> {
+  return request(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/access`,
+    workspaceAccessEnvelopeSchema,
+  );
+}
+
+export function createWorkspaceInvitation(
+  workspaceId: string,
+  input: WorkspaceInvitationCreateDto,
+): Promise<ApiEnvelope<WorkspaceInvitationCreatedDto>> {
+  return request(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+    workspaceInvitationCreatedEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function revokeWorkspaceInvitation(
+  workspaceId: string,
+  invitationId: string,
+): Promise<ApiEnvelope<{ accepted: true }>> {
+  return request(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}`,
+    mutationAcceptedEnvelopeSchema,
+    { method: "DELETE" },
+  );
+}
+
+export function updateWorkspaceMemberRole(
+  workspaceId: string,
+  userId: string,
+  input: WorkspaceMemberRoleUpdateDto,
+): Promise<ApiEnvelope<{ accepted: true }>> {
+  return request(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+    mutationAcceptedEnvelopeSchema,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function removeWorkspaceMember(
+  workspaceId: string,
+  userId: string,
+): Promise<ApiEnvelope<{ accepted: true }>> {
+  return request(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+    mutationAcceptedEnvelopeSchema,
+    { method: "DELETE" },
+  );
+}
+
+export function fetchInvitation(token: string): Promise<ApiEnvelope<InvitationDetailsDto>> {
+  return request(
+    `/api/v1/invitations/${encodeURIComponent(token)}`,
+    invitationDetailsEnvelopeSchema,
+  );
+}
+
+export async function acceptInvitation(
+  token: string,
+  input: InvitationAcceptDto,
+): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request(
+    `/api/v1/invitations/${encodeURIComponent(token)}/accept`,
+    authSessionEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
   csrfToken = response.data.authenticated ? response.data.csrfToken : null;
   return response;
 }

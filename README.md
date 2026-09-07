@@ -25,8 +25,9 @@ semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы �
 Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
 работают database users, session auth, CSRF, membership isolation, создание/переключение
 workspaces, приглашения, управление участниками, encrypted exchange connections, проверка
-Bybit credentials и multi-workspace worker. Следующие задачи: привязка проверенного
-connection к deployment, управление sessions и recovery. Landing остаётся последним этапом.
+Bybit credentials, deployment binding и multi-workspace worker. Следующие задачи:
+периодическая перепроверка connections, управление sessions и recovery. Landing остаётся
+последним этапом.
 
 ## Требования
 
@@ -198,10 +199,12 @@ per-symbol breakdown и provenance загружаются отдельным det
 Dry-run deployment создаётся только для активной approved-версии, имеющей завершённую
 passed-валидацию с тем же config hash. На один `DRY_RUN_ACCOUNT_ID` допускается один
 deployment в состоянии ready/running/paused. Start создаёт новый immutable
-`ExecutionRun.context` с version/config/validation provenance и SHA-256 context hash;
+`ExecutionRun.context` с version/config/validation provenance, безопасным snapshot
+выбранного `ACTIVE` Bybit connection и SHA-256 context hash;
 pause/resume продолжают тот же run, stop завершает его. Каждая команда требует
 `expectedStatus`, reason и idempotency key, а результат и audit event записываются в той
-же транзакции.
+же транзакции. Runtime остаётся `dry-run`: привязка не отправляет приватные ордера. Start
+и resume повторно проверяют connection; rotate/revoke блокируются до остановки deployment.
 
 Worker обрабатывает только завершённые свечи и фиксирует не более одного решения на
 пару и свечу. Сигнал переносится на открытие следующей свечи, после чего dry-run

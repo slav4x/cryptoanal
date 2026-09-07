@@ -93,6 +93,17 @@ trading и не обходит отдельный runtime safety gate.
 Разрешение `Withdraw` всегда переводит connection в `INVALID`; сетевые и rate-limit ошибки
 не изменяют сохранённый статус.
 
+### D-017. Exchange connection привязывается до dry-run старта
+
+Новый deployment обязан ссылаться на проверенный connection своего workspace. Start/resume
+повторно проверяют связь, а execution context фиксирует безопасный snapshot connection.
+Привязка не меняет среду исполнения: приватные ордера остаются запрещены до отдельного
+подтверждаемого demo/live gate.
+
+При окончательной инвалидности connection ready deployment переходит в `FAILED`, running —
+в `PAUSED`. Paused runtime сопровождает уже открытые dry-run позиции, но не открывает новые.
+Rotate/revoke credentials блокируются до остановки связанного deployment.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager

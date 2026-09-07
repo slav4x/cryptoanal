@@ -142,6 +142,8 @@ P0 dashboard содержит управляющие действия, account d
 - exchange credentials шифруются отдельным key management layer;
 - secret rotation/revocation;
 - audit login, credential, deployment и manual trade actions;
+- блокировать rotate/revoke credentials при ready/running/paused deployment;
+- при окончательной ошибке connection переводить running deployment в paused, ready — в failed;
 - rate limits, CSRF, secure headers;
 - workspace isolation integration tests;
 - удаление/экспорт данных по документированной policy.

@@ -1,8 +1,9 @@
 # Продуктовая цель и границы этапов
 
 > Статус: P0 dashboard завершён. Основной P1 реализован: database users, session auth,
-> membership isolation, invitations/member management, encrypted exchange connections и
-> multi-workspace worker. Остаются recovery, session/credential lifecycle и hardening.
+> membership isolation, invitations/member management, encrypted exchange connections,
+> deployment binding и multi-workspace worker. Остаются recovery, periodic credential
+> verification, session lifecycle и hardening.
 
 ## 1. Цель CryptoAnal
 

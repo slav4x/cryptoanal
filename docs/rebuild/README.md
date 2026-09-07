@@ -13,8 +13,8 @@
 1. **Dashboard-first — завершён.** Рабочий продуктовый контур собран и стабилизирован.
 2. **Users and workspaces — основной контур завершён.** Авторизация, изоляция, создание
    workspaces, invitations, member management, encrypted exchange connections и
-   multi-workspace worker готовы; deployment binding, recovery и session management
-   остаются hardening-задачами.
+   multi-workspace worker готовы; periodic credential verification, recovery и session
+   management остаются hardening-задачами.
 3. **Landing-last — не начат.** Лендинг, публичная методология, тарифы и санитизированный
    track record строятся только после стабилизации клиентского P1.
 
@@ -51,7 +51,7 @@ Dashboard использует database users, Argon2id password hashes, server-
 13. [13-AUTH-WORKSPACE-ARCHITECTURE.md](13-AUTH-WORKSPACE-ARCHITECTURE.md) — текущая
     session-модель, security boundaries и правила tenant isolation.
 14. [14-EXCHANGE-CONNECTIONS.md](14-EXCHANGE-CONNECTIONS.md) — модель подключения бирж,
-    шифрование credentials, API и ограничения текущего среза.
+    шифрование credentials, проверка, deployment binding и ограничения runtime.
 
 ## Короткая формула продукта
 

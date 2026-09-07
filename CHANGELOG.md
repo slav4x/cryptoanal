@@ -95,6 +95,7 @@
 - Signed Bybit V5 credential verification for demo and live connections.
 - Exchange permission inspection with withdrawal rejection, trading capability and IP allowlist state.
 - Manual connection verification with persisted `ACTIVE`/`INVALID` status and safe failure details.
+- Deployment binding to a verified Bybit connection with immutable execution provenance.
 
 ### Changed
 
@@ -117,3 +118,5 @@
 - Shell polling is limited to routes that display runtime state, with opt-in live system logs.
 - Production dashboard bundles are guarded by explicit gzip performance budgets.
 - Revoked exchange connections immediately discard their encrypted credential payloads.
+- Deployment start/resume requires an active connection; confirmed invalid credentials pause running deployments and fail ready deployments.
+- Credential rotation and revocation are blocked while the connection is used by an active deployment.

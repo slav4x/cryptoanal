@@ -248,6 +248,11 @@ Pause/resume сохраняют исходный execution run, stop атома�
 стратегию в approved. Каждая успешная команда создаёт `AuditEvent` с причиной и
 переходом состояния.
 
+Создание deployment требует конкретный `ExchangeConnection` текущего workspace в статусе
+`ACTIVE`. Start/resume повторяют проверку связи под row lock, а `ExecutionRun.context`
+schema v2 фиксирует безопасный snapshot connection. Исполнение остаётся `DRY_RUN` и не
+использует credentials для отправки ордеров.
+
 `GET /api/v1/health` строит текущую проекцию API/database/worker/market/account/queue/
 execution/outbox health и возвращает историю `WatchdogIncident`. Worker выполняет
 edge-triggered watchdog-цикл: открывает инциденты для stale data, queue/outbox lag,

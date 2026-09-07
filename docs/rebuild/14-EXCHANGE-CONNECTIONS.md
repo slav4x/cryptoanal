@@ -1,7 +1,7 @@
 # Подключения бирж и шифрование credentials
 
-> Статус: workspace-scoped хранение, API, ручная проверка Bybit V5 и управление в
-> dashboard реализованы. Использование credentials в runtime намеренно не включено.
+> Статус: workspace-scoped хранение, API, ручная проверка Bybit V5, управление и binding
+> к dry-run deployment реализованы. Приватные биржевые операции намеренно не включены.
 
 ## 1. Граница текущей реализации
 
@@ -86,9 +86,20 @@ rate limit возвращает `503` и не меняет прежний ста
 [Get API Key Information](https://bybit-exchange.github.io/docs/v5/user/apikey-info) и
 [официальные error codes](https://bybit-exchange.github.io/docs/v5/error).
 
-## 5. Следующий срез
+## 5. Deployment binding
 
-1. Привязка deployment к конкретному `ACTIVE` connection вместо строкового account id.
+- создание deployment принимает обязательный `exchangeConnectionId`;
+- connection должен принадлежать workspace, быть не отозван и иметь статус `ACTIVE`;
+- start/resume повторяют проверку под row lock;
+- immutable execution context schema v2 фиксирует id, exchange, demo/live environment,
+  account UID и `lastVerifiedAt`, но не credentials, permissions или IP-адреса;
+- runtime остаётся `DRY_RUN` и использует публичные market data;
+- rotate/revoke блокируются для connection с ready/running/paused deployment;
+- окончательная инвалидность переводит ready deployment в failed, running — в paused;
+  paused execution продолжает безопасно сопровождать открытые dry-run позиции.
+
+## 6. Следующий срез
+
+1. Периодическая перепроверка статуса и уведомления об expiry/invalid credentials.
 2. Отдельный подтверждаемый gate для demo, затем для live; live не включать автоматически.
-3. Периодическая перепроверка статуса и уведомления об expiry/invalid credentials.
-4. Версионированная master-key rotation и runbook восстановления.
+3. Версионированная master-key rotation и runbook восстановления.

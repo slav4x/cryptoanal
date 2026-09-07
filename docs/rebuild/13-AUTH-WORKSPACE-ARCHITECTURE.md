@@ -17,6 +17,7 @@
 - точный CORS origin, security headers и rate limit на login;
 - audit events для создания/отзыва session и переключения workspace;
 - login/logout UI, реальный пользователь и workspace switcher.
+- создание отдельного workspace с owner membership, настройками и немедленным переключением.
 
 Не входят в этот срез: public signup, email verification, recovery, invitations, device
 management, SSO, billing и exchange credentials. Они добавляются отдельными flows после
@@ -58,6 +59,7 @@ GET  /api/v1/auth/session
 POST /api/v1/auth/login
 POST /api/v1/auth/logout
 POST /api/v1/auth/workspace
+POST /api/v1/workspaces
 GET  /api/v1/context
 ```
 
@@ -96,7 +98,7 @@ candles остаются общими справочными данными. Д�
 
 ## 7. Следующие auth-срезы
 
-1. Workspace creation и owner-controlled invitations.
+1. Owner-controlled invitations и управление участниками.
 2. Recovery, email verification, password rotation и список устройств/session.
 3. Permission matrix для `MEMBER` и дополнительных ролей при реальной необходимости.
 4. Encrypted exchange connections на workspace.

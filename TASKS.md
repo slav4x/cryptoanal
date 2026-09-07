@@ -84,6 +84,7 @@
 - [x] Session-based `RequestContext`.
 - [x] Membership-based workspace isolation для private API.
 - [x] Login/logout и workspace switcher в dashboard.
+- [x] Создание нового workspace с owner membership и изолированными настройками.
 - [ ] Signup, recovery, invitations и управление sessions.
 - [x] Multi-workspace scheduling для runtime/account/watchdog worker.
 - [ ] Exchange connections и encrypted credentials.

@@ -133,8 +133,9 @@ fake auth, глобальных user-owned данных и критичных д
 - [x] Выбрать auth approach/provider отдельным ADR.
 - [x] Добавить `User`, `Session`, `WorkspaceMembership`.
 - [x] Заменить development resolver на session-based `RequestContext`.
-- [ ] Реализовать signup/login/logout/recovery и security flows.
-- [ ] Реализовать workspace creation/switching/membership по подтверждённому scope.
+- [ ] Реализовать signup/recovery и оставшиеся security flows.
+- [x] Реализовать workspace creation/switching и owner membership.
+- [ ] Реализовать invitations и управление участниками workspace.
 - [x] Закрыть private API membership-based workspace resolver.
 - [x] Перевести runtime/account/watchdog worker с fixed development workspace на multi-workspace scheduling.
 - [ ] Добавить user/workspace settings и audit log.

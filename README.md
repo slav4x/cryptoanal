@@ -74,6 +74,7 @@ pnpm dev
 
 - `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`;
 - `POST /api/v1/auth/workspace` — membership-checked смена активного workspace;
+- `POST /api/v1/workspaces` — создание изолированного workspace и owner membership;
 - `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;

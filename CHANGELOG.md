@@ -87,6 +87,7 @@
 - Dashboard login, real user identity and active workspace switcher.
 - Audited auth session create/revoke and workspace switch events.
 - Membership-driven worker scheduling for isolated account snapshots, runtime targets and watchdog incidents across workspaces.
+- Authenticated workspace creation with owner membership, isolated settings and immediate activation.
 
 ### Changed
 

@@ -13,3 +13,5 @@ packages/persistence/src/generated/
 .DS_Store
 *.log
 pnpm-debug.log*
+
+var/

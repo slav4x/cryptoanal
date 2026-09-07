@@ -5,6 +5,8 @@ import {
   activitySchema,
   deploymentMutationResultSchema,
   deploymentsSchema,
+  exchangeConnectionCreatedSchema,
+  exchangeConnectionsSchema,
   healthDashboardSchema,
   journalEntryCreatedSchema,
   journalSchema,
@@ -47,6 +49,9 @@ import {
   type DeploymentCreateDto,
   type DeploymentMutationResultDto,
   type DeploymentsDto,
+  type ExchangeConnectionCreateDto,
+  type ExchangeConnectionCredentialsDto,
+  type ExchangeConnectionsDto,
   type HealthDashboardDto,
   type JournalDto,
   type JournalEntryCreateDto,
@@ -191,6 +196,8 @@ const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedS
 const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailSchema);
 const deploymentsEnvelopeSchema = apiEnvelopeSchema(deploymentsSchema);
 const deploymentMutationResultEnvelopeSchema = apiEnvelopeSchema(deploymentMutationResultSchema);
+const exchangeConnectionsEnvelopeSchema = apiEnvelopeSchema(exchangeConnectionsSchema);
+const exchangeConnectionCreatedEnvelopeSchema = apiEnvelopeSchema(exchangeConnectionCreatedSchema);
 const positionCloseResultEnvelopeSchema = apiEnvelopeSchema(positionCloseResultSchema);
 const workspaceAccessEnvelopeSchema = apiEnvelopeSchema(workspaceAccessSchema);
 const workspaceInvitationCreatedEnvelopeSchema = apiEnvelopeSchema(
@@ -395,6 +402,40 @@ export function changePlaybookStatus(
 
 export function fetchSettings(): Promise<ApiEnvelope<SettingsDto>> {
   return request("/api/v1/settings", settingsEnvelopeSchema);
+}
+
+export function fetchExchangeConnections(): Promise<ApiEnvelope<ExchangeConnectionsDto>> {
+  return request("/api/v1/exchange-connections", exchangeConnectionsEnvelopeSchema);
+}
+
+export function createExchangeConnection(
+  input: ExchangeConnectionCreateDto,
+): Promise<ApiEnvelope<{ connection: ExchangeConnectionsDto["items"][number] }>> {
+  return request("/api/v1/exchange-connections", exchangeConnectionCreatedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function rotateExchangeConnectionCredentials(
+  connectionId: string,
+  input: ExchangeConnectionCredentialsDto,
+): Promise<ApiEnvelope<{ connection: ExchangeConnectionsDto["items"][number] }>> {
+  return request(
+    `/api/v1/exchange-connections/${encodeURIComponent(connectionId)}/credentials`,
+    exchangeConnectionCreatedEnvelopeSchema,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
+}
+
+export function revokeExchangeConnection(
+  connectionId: string,
+): Promise<ApiEnvelope<{ accepted: true }>> {
+  return request(
+    `/api/v1/exchange-connections/${encodeURIComponent(connectionId)}`,
+    mutationAcceptedEnvelopeSchema,
+    { method: "DELETE" },
+  );
 }
 
 export function updateWorkspacePreferences(

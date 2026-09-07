@@ -1,4 +1,5 @@
 import type {
+  ExchangeConnectionDto,
   SettingsDto,
   TableDensity,
   WorkspaceAccessDto,
@@ -27,7 +28,9 @@ import {
   Download,
   Gauge,
   Globe2,
+  KeyRound,
   Plus,
+  RotateCcw,
   Save,
   ServerCog,
   ShieldCheck,
@@ -39,15 +42,19 @@ import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import {
   ApiClientError,
-  createWorkspaceInvitation,
+  createExchangeConnection,
   createWorkspace,
+  createWorkspaceInvitation,
   exportWorkspace,
+  fetchExchangeConnections,
   fetchSettings,
   fetchWorkspaceAccess,
   removeWorkspaceMember,
+  revokeExchangeConnection,
   revokeWorkspaceInvitation,
-  updateWorkspacePreferences,
+  rotateExchangeConnectionCredentials,
   updateWorkspaceMemberRole,
+  updateWorkspacePreferences,
 } from "../../shared/api";
 import { authSessionQueryKey, useAuthSession } from "../auth/auth-context";
 
@@ -81,6 +88,7 @@ export default function SettingsPage() {
         <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
         <RuntimeSafetyCard settings={settings} />
         <MarketDataCard settings={settings} />
+        <ExchangeConnectionsCard session={session} />
         <NotificationsCard settings={settings} />
         <RetentionCard settings={settings} />
         <SystemCard settings={settings} />
@@ -522,11 +530,238 @@ function MarketDataCard({ settings }: { settings: SettingsDto }) {
         />
         <SettingRow
           label="Приватное подключение"
-          value="не настроен"
-          hint="Добавляется после авторизации и разделения workspace"
+          value={settings.exchange.privateConnectionConfigured ? "настроен" : "не настроен"}
+          hint="Ключи изолированы на уровне workspace"
+          tone={settings.exchange.privateConnectionConfigured ? "profit" : undefined}
         />
       </CardContent>
     </Card>
+  );
+}
+
+function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAuthSession> }) {
+  const canManage = session.activeWorkspace.role === "owner";
+  const queryClient = useQueryClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [environment, setEnvironment] = useState<"demo" | "live">("demo");
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const queryKey = ["exchange-connections", session.activeWorkspace.id] as const;
+  const query = useQuery({ queryKey, queryFn: fetchExchangeConnections });
+
+  const resetForm = () => {
+    setEditingId(null);
+    setLabel("");
+    setEnvironment("demo");
+    setApiKey("");
+    setApiSecret("");
+  };
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      editingId
+        ? rotateExchangeConnectionCredentials(editingId, { apiKey, apiSecret })
+        : createExchangeConnection({
+            exchange: "bybit",
+            label,
+            environment,
+            apiKey,
+            apiSecret,
+          }),
+    onSuccess: async () => {
+      resetForm();
+      await queryClient.invalidateQueries({ queryKey });
+    },
+  });
+  const revokeMutation = useMutation({
+    mutationFn: revokeExchangeConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+  });
+  const error = saveMutation.error ?? revokeMutation.error;
+
+  return (
+    <Card className="xl:col-span-2">
+      <CardHeader className="flex-row items-start gap-3 border-b">
+        <CardIcon icon={KeyRound} />
+        <div>
+          <CardTitle>Подключения бирж</CardTitle>
+          <CardDescription>
+            API-ключи зашифрованы; интерфейс показывает только последние четыре символа.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 pt-4">
+        {query.isPending ? (
+          <Skeleton className="h-24 w-full" />
+        ) : query.isError ? (
+          <ErrorState
+            description={query.error.message}
+            requestId={query.error instanceof ApiClientError ? query.error.requestId : undefined}
+            onRetry={() => void query.refetch()}
+          />
+        ) : query.data.data.items.length ? (
+          <div>
+            {query.data.data.items.map((connection) => (
+              <ExchangeConnectionRow
+                key={connection.id}
+                connection={connection}
+                canManage={canManage}
+                disabled={saveMutation.isPending || revokeMutation.isPending}
+                onRotate={() => {
+                  setEditingId(connection.id);
+                  setLabel(connection.label);
+                  setEnvironment(connection.environment);
+                  setApiKey("");
+                  setApiSecret("");
+                }}
+                onRevoke={() => {
+                  if (window.confirm(`Отозвать подключение «${connection.label}»?`)) {
+                    revokeMutation.mutate(connection.id);
+                  }
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-stale">Приватные подключения ещё не добавлены.</p>
+        )}
+
+        {canManage ? (
+          <form
+            className="space-y-3 border-t border-row-border pt-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveMutation.mutate();
+            }}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <FieldLabel>
+                {editingId ? "Замена ключей подключения" : "Новое подключение"}
+              </FieldLabel>
+              {editingId ? (
+                <Button type="button" size="sm" variant="ghost" onClick={resetForm}>
+                  Отмена
+                </Button>
+              ) : null}
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {!editingId ? (
+                <>
+                  <Field label="Название">
+                    <Input
+                      value={label}
+                      minLength={2}
+                      maxLength={80}
+                      placeholder="Bybit основной"
+                      onChange={(event) => setLabel(event.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="Контур">
+                    <Select
+                      value={environment}
+                      onChange={(event) => setEnvironment(event.target.value as "demo" | "live")}
+                    >
+                      <option value="demo">Demo</option>
+                      <option value="live">Live</option>
+                    </Select>
+                  </Field>
+                </>
+              ) : null}
+              <Field label="API key">
+                <Input
+                  type="password"
+                  value={apiKey}
+                  minLength={8}
+                  maxLength={256}
+                  autoComplete="off"
+                  onChange={(event) => setApiKey(event.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="API secret">
+                <Input
+                  type="password"
+                  value={apiSecret}
+                  minLength={16}
+                  maxLength={512}
+                  autoComplete="off"
+                  onChange={(event) => setApiSecret(event.target.value)}
+                  required
+                />
+              </Field>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-[10px] text-stale">
+                Сохранение ключей не включает торговлю и не проверяет доступ к бирже.
+              </p>
+              <Button type="submit" disabled={saveMutation.isPending}>
+                {editingId ? <RotateCcw className="size-4" /> : <Plus className="size-4" />}
+                {saveMutation.isPending ? "Сохранение…" : editingId ? "Заменить ключи" : "Добавить"}
+              </Button>
+            </div>
+          </form>
+        ) : null}
+        {error ? <p className="text-xs text-loss">{error.message}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ExchangeConnectionRow({
+  connection,
+  canManage,
+  disabled,
+  onRotate,
+  onRevoke,
+}: {
+  connection: ExchangeConnectionDto;
+  canManage: boolean;
+  disabled: boolean;
+  onRotate: () => void;
+  onRevoke: () => void;
+}) {
+  const status = {
+    unverified: { label: "не проверено", variant: "outline" as const },
+    active: { label: "активно", variant: "profit" as const },
+    invalid: { label: "ошибка", variant: "loss" as const },
+  }[connection.status];
+  return (
+    <div className="flex min-h-14 items-center justify-between gap-4 border-b border-row-border last:border-0">
+      <span className="min-w-0">
+        <span className="flex items-center gap-2">
+          <span className="truncate text-xs text-secondary-foreground">{connection.label}</span>
+          <Badge variant={status.variant}>{status.label}</Badge>
+        </span>
+        <span className="mt-0.5 block text-[10px] uppercase tracking-[0.06em] text-stale">
+          Bybit · {connection.environment} · {connection.apiKeyHint}
+        </span>
+      </span>
+      {canManage ? (
+        <span className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={`Заменить ключи ${connection.label}`}
+            disabled={disabled}
+            onClick={onRotate}
+          >
+            <RotateCcw className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={`Отозвать ${connection.label}`}
+            disabled={disabled}
+            onClick={onRevoke}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </span>
+      ) : null}
+    </div>
   );
 }
 

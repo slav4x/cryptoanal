@@ -1,12 +1,16 @@
 # Целевая техническая архитектура
 
+> Статус: monorepo, dashboard/API/worker boundaries, contracts, Prisma ownership и auth
+> resolver реализованы. Перечни ниже сохраняют также целевые пакеты поздних этапов;
+> отсутствие такого пакета в текущем дереве не означает незавершённость базового P1.
+
 ## 1. Подход
 
 Новый проект остаётся TypeScript monorepo, но границы определяются приложениями и
 предметными пакетами. Dashboard-first не означает frontend-only: данные, contracts и
 ownership должны быть правильными с первого этапа, иначе auth потребует второго rebuild.
 
-Рекомендуемый стек для первого этапа:
+Фактический стек:
 
 - React + Vite для dashboard;
 - React Router для маршрутов;
@@ -15,8 +19,8 @@ ownership должны быть правильными с первого эта�
 - Fastify для HTTP API;
 - PostgreSQL + Prisma для persistence;
 - отдельный worker/runtime для торговли и validation jobs;
-- Zod/JSON Schema + OpenAPI для контрактов;
-- Lightweight Charts для market charts.
+- Zod schemas и общие DTO для контрактов;
+- собственные tokenized SVG charts в dashboard.
 
 Не менять dashboard на Next.js только ради будущего лендинга. Marketing app можно позже
 добавить отдельно на подходящем SSR/SSG framework.
@@ -239,12 +243,12 @@ workspace, environment, period, strategy version и data revision.
 - environment и trading mode — разные понятия;
 - invalid production/live combination останавливает запуск.
 
-Development gate — самостоятельный adapter перед dashboard/API. Он не должен создавать
-`User` в базе или менять ownership данных.
+Временный development gate не используется. API работает с database users, opaque
+server-side sessions, membership resolver и CSRF; подробности — в
+`13-AUTH-WORKSPACE-ARCHITECTURE.md`.
 
-## 10. Что не строить в P0
+## 10. Что не строить без отдельного продуктового решения
 
-- `User`, `Session`, `WorkspaceMember`, invitation flows;
 - generic RBAC engine;
 - billing abstraction;
 - Kubernetes/microservices ради масштаба;

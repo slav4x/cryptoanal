@@ -1,18 +1,22 @@
 # Этапы пересборки CryptoAnal
 
+> Текущий статус: этапы 1–7 завершены; этап 8 выполняется. Готовы session auth, workspace
+> isolation, создание/переключение workspaces, owner bootstrap и multi-workspace worker.
+> Ближайший незавершённый контур — members/invitations и encrypted exchange connections.
+
 Порядок обязателен: **dashboard → users/workspaces → landing**. Этапы ниже описывают
 результат, а не календарные сроки. Новый этап начинается после выполнения stop-gate
 предыдущего.
 
 ## Этап 0. Зафиксировать знания и scope
 
-- [ ] Заморозить старый репозиторий как reference.
-- [ ] Составить inventory use cases/API/data/UI.
-- [ ] Зафиксировать доменные инварианты и regression cases.
+- [x] Заморозить старый репозиторий как reference.
+- [x] Составить inventory use cases/API/data/UI.
+- [x] Зафиксировать доменные инварианты и regression cases.
 - [ ] Выделить golden datasets и формулы метрик.
 - [ ] Разрешить конфликт по funding branch: invalid/disabled до новой валидации.
-- [ ] Утвердить имя `CryptoAnal` и dashboard-first scope.
-- [ ] Назначить один active source of truth по strategy status.
+- [x] Утвердить имя `CryptoAnal` и dashboard-first scope.
+- [x] Назначить один active source of truth по strategy status.
 
 **Готово, когда:** старый код не нужен как неявная документация для ключевых правил.
 
@@ -20,17 +24,17 @@
 
 - [x] Создать monorepo skeleton: dashboard, API, worker, packages.
 - [x] Настроить typed config и environment validation.
-- [x] Создать `RequestContext` с fixed development workspace.
+- [x] Создать `RequestContext` seam (сначала fixed, теперь session-based).
 - [x] Поднять baseline PostgreSQL schema с ownership полями.
 - [x] Настроить contracts/schema-first API skeleton.
 - [x] Подключить shadcn/ui и перенести primitives в `packages/ui`.
 - [x] Описать semantic design tokens, dark theme, typography и density.
 - [x] Собрать AppShell, navigation, error/loading/empty/stale patterns.
 - [x] Настроить route lazy loading и TanStack Query providers.
-- [ ] Если стенд удалённый — поставить proxy/dev access gate.
+- [x] Закрыть private API полноценной session-based авторизацией.
 
-**Готово, когда:** пустой, но целостный CryptoAnal shell использует токены и fixed
-workspace context; private API нельзя случайно открыть без защиты.
+**Готово:** целостный CryptoAnal shell использует токены и session-based workspace
+context; private API закрыт auth и CSRF.
 
 ## Этап 2. Markets, overview и trading data
 

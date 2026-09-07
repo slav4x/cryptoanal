@@ -1,5 +1,9 @@
 # UI и дизайн-система CryptoAnal
 
+> Статус: semantic tokens, shadcn-compatible primitives и desktop dashboard реализованы в
+> `packages/ui` и `apps/dashboard`. Mobile-specific polish, light theme и расширение
+> библиотеки компонентов остаются вне текущего scope.
+
 ## 1. Основа
 
 Использовать shadcn/ui как набор контролируемых исходников компонентов, а не как готовую
@@ -17,28 +21,32 @@
 - единые состояния данных и действий;
 - dark theme сначала, light theme — простой override позднее.
 
-## 2. Структура UI package
+## 2. Текущая структура UI package
 
 ```text
 packages/ui/src/
   styles/
-    tokens.css          # primitive + semantic variables
-    theme-dark.css
-    theme-light.css     # добавить, когда понадобится
-    globals.css
+    globals.css         # primitive и semantic variables, dark theme, density
   components/
-    ui/                 # адаптированные shadcn primitives
-    data-display/
-    feedback/
-    charts/
-    trading/
+    badge.tsx
+    button.tsx
+    card.tsx
+    empty-state.tsx
+    error-state.tsx
+    field-label.tsx
+    input.tsx
+    metric-card.tsx
+    page-header.tsx
+    select.tsx
+    skeleton.tsx
+    textarea.tsx
   lib/
     cn.ts
-    formatters.ts
 ```
 
 Feature-level compositions остаются в `apps/dashboard`, универсальные primitives и
-устоявшиеся domain widgets — в `packages/ui`.
+устоявшиеся domain widgets — в `packages/ui`. Light theme при необходимости добавляется
+как override текущих semantic variables, без изменения feature-кода.
 
 ## 3. Token model
 

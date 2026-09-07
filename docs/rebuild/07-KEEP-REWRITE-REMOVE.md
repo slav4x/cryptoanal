@@ -1,5 +1,9 @@
 # Что сохранить, переписать, переместить и убрать
 
+> Статус: историческая матрица решений по переносу из `crypto-trade`. Основной rebuild и
+> archive-only legacy migration выполнены; документ сохраняется как объяснение того, почему
+> отдельные части не попали в новый production path.
+
 ## 1. Правило переноса
 
 Старый проект используется как reference implementation и набор проверенных сценариев.
@@ -153,7 +157,8 @@ contracts и полезный UX, затем реализация пишется
 - роли без реальных policy;
 - login UI, который не обеспечивает data isolation.
 
-В P0 использовать fixed workspace context и, при необходимости, независимый env gate.
+Это ограничение относилось к P0. Текущий проект использует database users, session context
+и membership isolation; env gate удалён из целевой архитектуры.
 
 ## 7. API и persistence
 

@@ -1,5 +1,9 @@
 # Данные и API
 
+> Статус: доменная ownership-модель, private API, users/sessions/memberships и workspace
+> resolver реализованы. Разделы P0 ниже фиксируют исходный baseline; актуальная auth-модель
+> описана в `13-AUTH-WORKSPACE-ARCHITECTURE.md`.
+
 ## 1. Основные принципы
 
 1. Любая пользовательская сущность принадлежит `workspaceId` уже в P0.
@@ -11,12 +15,13 @@
 7. Секреты и внутренние exchange payload не попадают в обычные DTO.
 8. У каждой метрики есть provenance и freshness.
 
-## 2. Модель P0
+## 2. Базовая доменная модель
 
 ### Workspace seam
 
-`Workspace` можно создать одной seed-записью `development`. Это не пользовательская фича,
-но реальный foreign key для ownership.
+Seed создаёт исходный `development`, а authenticated owner может создавать дополнительные
+workspaces через dashboard. `Workspace` является реальным foreign key для ownership;
+доступ определяется `WorkspaceMembership`.
 
 Все перечисленные сущности обязаны иметь `workspaceId`:
 
@@ -414,20 +419,21 @@ GET  /dev-access/session
 Эти endpoints и `DEV_ACCESS_*` config отсутствуют. Их заменила database-backed модель из
 `13-AUTH-WORKSPACE-ARCHITECTURE.md`.
 
-## 10. Auth/workspace API P1
+## 10. Auth/workspace API
 
 Текущий базовый срез:
 
 ```text
-/api/v1/auth/*
-/api/v1/me
-/api/v1/workspaces
-/api/v1/workspaces/:id/members
-/api/v1/exchange-connections
+GET  /api/v1/auth/session
+POST /api/v1/auth/login
+POST /api/v1/auth/logout
+POST /api/v1/auth/workspace
+POST /api/v1/workspaces
 ```
 
-RequestContext начинает строиться из session. Все существующие предметные endpoints
-сохраняют contracts, но repository scope теперь проверяется membership/policy.
+`RequestContext` строится из session. Все существующие предметные endpoints сохраняют
+contracts, а repository scope проверяется membership resolver. `/api/v1/me`, member
+management и `/api/v1/exchange-connections` ещё не реализованы.
 
 ## 11. Public API P2
 

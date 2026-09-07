@@ -1,5 +1,8 @@
 # Auth, users и изоляция workspaces
 
+> Статус: актуальная реализованная архитектура на 2026-09-07. Следующие auth-срезы явно
+> перечислены в конце документа.
+
 ## 1. Принятый scope
 
 Первый клиентский контур использует собственную email/password авторизацию без публичной
@@ -16,7 +19,7 @@
 - CSRF-защита всех изменяющих private запросов;
 - точный CORS origin, security headers и rate limit на login;
 - audit events для создания/отзыва session и переключения workspace;
-- login/logout UI, реальный пользователь и workspace switcher.
+- login/logout UI, реальный пользователь и workspace switcher;
 - создание отдельного workspace с owner membership, настройками и немедленным переключением.
 
 Не входят в этот срез: public signup, email verification, recovery, invitations, device

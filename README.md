@@ -20,6 +20,13 @@ CryptoAnal — dashboard-first платформа для исследовани�
 semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы используют эти
 токены и shadcn-compatible primitives без собственной темы.
 
+## Текущий статус
+
+Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
+работают database users, session auth, CSRF, membership isolation, создание/переключение
+workspaces и multi-workspace worker. Следующие задачи: members/invitations, управление
+sessions и encrypted exchange connections. Landing остаётся последним этапом.
+
 ## Требования
 
 - Node.js 22.18+;

@@ -2,9 +2,13 @@
 
 Документ задаёт требования и фиксирует текущие эксплуатационные границы реализации.
 
+> Статус: formatting, lint, typecheck, production build, bundle budgets, backup/restore и
+> базовые auth/isolation checks действуют. Trading-domain automated suite, exchange secret
+> lifecycle и production deployment hardening остаются незавершёнными.
+
 ## 1. Quality gates реализации
 
-Когда начнётся код, каждый этап должен иметь:
+Каждый кодовый срез должен иметь:
 
 - formatting/lint;
 - TypeScript typecheck;
@@ -18,7 +22,7 @@
 Полный suite не обязан запускаться при правке документации, но критические trading
 изменения нельзя принимать только по UI-проверке.
 
-## 2. Набор будущих проверок
+## 2. Матрица проверок и оставшееся покрытие
 
 ### Domain
 
@@ -45,7 +49,7 @@
 - schemas и error envelope;
 - command state/version conflicts;
 - pagination/filtering;
-- workspace access после P1;
+- workspace access и CSRF;
 - secret redaction;
 - long job lifecycle.
 
@@ -65,7 +69,7 @@
 - открыть overview → позицию → trade details → journal note;
 - сравнить два validation runs;
 - pause/stop runtime;
-- после P1: два workspace не видят данные друг друга.
+- два workspace не видят данные друг друга.
 
 ## 3. Известные regression cases из старого проекта
 
@@ -81,7 +85,7 @@
 Эти случаи должны стать явными проверками/architecture constraints, а не потеряться при
 переписывании.
 
-## 4. Безопасность P0
+## 4. Историческая безопасность P0
 
 P0 dashboard содержит управляющие действия, account data и параметры стратегии, поэтому
 не является публичным продуктом.
@@ -102,7 +106,7 @@ P0 dashboard содержит управляющие действия, account d
 - возвращать exchange keys, secrets или raw signed requests;
 - логировать credential/token/cookie.
 
-### Development gate baseline
+### Исторический development gate baseline
 
 - username + password hash в server env;
 - constant-time verification;
@@ -128,7 +132,7 @@ P0 dashboard содержит управляющие действия, account d
 - kill switch доступен и наблюдаем;
 - environment видим на каждой странице с execution data.
 
-## 6. Безопасность P1
+## 6. Текущая безопасность P1
 
 - session only server-side/opaque cookie;
 - password hashing современным KDF либо внешний identity provider;
@@ -142,7 +146,10 @@ P0 dashboard содержит управляющие действия, account d
 - workspace isolation integration tests;
 - удаление/экспорт данных по документированной policy.
 
-Временный dev gate не мигрируется в User table и не используется для реальных клиентов.
+Реализованы opaque sessions, Argon2id, membership resolver, CSRF, rate limiting, secure
+headers и auth audit events. Остаются exchange credential encryption, recovery/device
+flows, permission matrix и формализованная export/delete policy. Временный dev gate не
+используется.
 
 ## 7. Public security P2
 

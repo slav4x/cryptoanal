@@ -1,5 +1,9 @@
 # Информационная архитектура dashboard
 
+> Статус: основная карта реализована. Dashboard закрыт auth gate, sidebar показывает
+> реального пользователя и workspace switcher, а `/settings` поддерживает создание
+> workspace. Members/security/exchange connection UI остаются следующими срезами.
+
 ## 1. Общая модель
 
 На dashboard-first этапе существует один интерфейс: закрытый рабочий CryptoAnal.
@@ -17,9 +21,11 @@
 /strategies
 /strategies/new
 /strategies/:strategyId
-/strategies/:strategyId/versions/:versionId
+/strategies/:strategyId/versions/new
 /validation
-/validation/runs/:runId
+/validation/:validationRunId
+/validation/compare
+/runtime
 /analytics
 /analytics/health
 /activity
@@ -41,8 +47,8 @@
 - **Система** — состояние, системные логи и настройки.
 
 Группа «Система» визуально вторична. Управление запуском собрано на одном маршруте, а
-связанные действия из обзора и стратегии ведут в тот же workflow. Дублирующий профиль в
-сайдбаре отсутствует до появления настоящей пользовательской модели.
+связанные действия из обзора и стратегии ведут в тот же workflow. Внизу sidebar находится
+реальная session identity и выход, сверху — переключатель доступных workspaces.
 
 ## 4. Структура страниц
 
@@ -210,16 +216,17 @@ Backtest и walk-forward — типы одной validation-модели, но �
 
 ### 4.16. `/settings` — Настройки
 
-Секции P0:
+Текущие секции:
 
 - environment и runtime safety;
 - exchange connection status без показа secrets;
 - market data/timezone/display preferences;
 - notifications;
 - retention/export;
-- system information.
+- system information;
+- список workspaces и создание нового изолированного workspace.
 
-После P1 добавляются profile, workspace, members, exchange connections и security.
+Следующими добавляются управление участниками, sessions/security и exchange connections.
 
 ## 5. Глобальная структура страницы
 

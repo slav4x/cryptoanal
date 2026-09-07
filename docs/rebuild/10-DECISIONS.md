@@ -1,5 +1,9 @@
 # Зафиксированные и отложенные решения
 
+> Статус: документ содержит как действующие, так и исторические решения. D-004 и D-005
+> завершили роль P0 baseline и заменены session-based моделью из
+> `13-AUTH-WORKSPACE-ARCHITECTURE.md`.
+
 ## 1. Зафиксировать сейчас
 
 ### D-001. Название продукта — CryptoAnal
@@ -18,14 +22,15 @@
 
 ### D-004. P0 работает в одном development workspace
 
-Все user-owned данные уже имеют `workspaceId`. `RequestContext` возвращает фиксированный
-workspace/actor до появления реальной session-based identity.
+Историческое решение выполнено и superseded. Все user-owned данные получили
+`workspaceId`; теперь `RequestContext` возвращает пользователя и активный workspace из
+server-side session и membership.
 
 ### D-005. Env login/password — временный access gate
 
-Gate защищает закрытый стенд, но не моделирует пользователя и не упрощает саму auth
-логику. Предпочтение: reverse-proxy Basic Auth; если нужен UI — server-side hash +
-`HttpOnly` cookie. Browser env/localStorage запрещены.
+Superseded: env gate не используется. Реализованы database users, Argon2id, hashed opaque
+sessions, `HttpOnly` cookie, CSRF и login rate limit. Browser env/localStorage по-прежнему
+запрещены для credentials.
 
 ### D-006. Design system — shadcn + semantic tokens
 
@@ -103,16 +108,16 @@ Prisma можно сохранить: основной долг находитс
 Для одного стенда reverse-proxy Basic Auth проще и надёжнее application fake auth.
 Минимальная login page нужна только если удобство важнее дополнительного кода.
 
-## 3. Решить перед users/workspaces
+## 3. Решения users/workspaces
 
-- email/password, magic link или внешний identity provider;
-- personal workspace автоматически или явное создание;
-- нужен ли multi-member workspace в первом клиентском релизе;
-- роли и список permission;
-- session TTL/device management;
-- invitation/recovery flows;
-- credential encryption/key management;
-- policies удаления, экспорта и блокировки аккаунта.
+- [x] email/password и собственные database users;
+- [x] явное создание workspace владельцем;
+- [x] базовые роли `OWNER`/`MEMBER`;
+- [x] server-side session TTL 7 дней;
+- [ ] permission matrix и multi-member UI;
+- [ ] invitation/recovery и device/session management;
+- [ ] credential encryption/key management;
+- [ ] policies удаления, экспорта и блокировки аккаунта.
 
 ## 4. Решить перед landing
 
@@ -136,7 +141,7 @@ Prisma можно сохранить: основной долг находитс
 - performance attribution;
 - failure isolation и fairness scheduling.
 
-## 6. Definition of ready для users/workspaces
+## 6. Definition of ready для users/workspaces — достигнутый baseline
 
 - dashboard workflows и routes стабильны;
 - все user-owned tables уже имеют `workspaceId`;

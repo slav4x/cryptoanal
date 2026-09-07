@@ -580,7 +580,14 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
   });
   const verifyMutation = useMutation({
     mutationFn: verifyExchangeConnection,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({ queryKey: ["deployments"] }),
+        queryClient.invalidateQueries({ queryKey: ["strategies"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+      ]);
+    },
   });
   const error = saveMutation.error ?? revokeMutation.error ?? verifyMutation.error;
 
@@ -761,6 +768,11 @@ function ExchangeConnectionRow({
             Проверено {formatDateTime(connection.lastVerifiedAt)}
           </span>
         ) : null}
+        {connection.activeDeployments > 0 ? (
+          <span className="block text-[10px] text-warning">
+            Используется активным deployment: {connection.activeDeployments}
+          </span>
+        ) : null}
         {connection.lastVerifiedAt && connection.readOnly !== null ? (
           <span className="flex flex-wrap gap-1.5">
             <Badge variant="secondary">
@@ -799,7 +811,12 @@ function ExchangeConnectionRow({
             size="icon"
             variant="ghost"
             aria-label={`Заменить ключи ${connection.label}`}
-            disabled={disabled}
+            disabled={disabled || connection.activeDeployments > 0}
+            title={
+              connection.activeDeployments > 0
+                ? "Сначала остановите связанный deployment"
+                : undefined
+            }
             onClick={onRotate}
           >
             <RotateCcw className="size-4" />
@@ -809,7 +826,12 @@ function ExchangeConnectionRow({
             size="icon"
             variant="ghost"
             aria-label={`Отозвать ${connection.label}`}
-            disabled={disabled}
+            disabled={disabled || connection.activeDeployments > 0}
+            title={
+              connection.activeDeployments > 0
+                ? "Сначала остановите связанный deployment"
+                : undefined
+            }
             onClick={onRevoke}
           >
             <Trash2 className="size-4" />

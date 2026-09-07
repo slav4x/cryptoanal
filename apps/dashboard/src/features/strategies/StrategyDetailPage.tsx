@@ -13,6 +13,7 @@ import {
   ErrorState,
   Input,
   PageHeader,
+  Select,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -34,8 +35,10 @@ import {
   ApiClientError,
   changeStrategyStatus,
   createDeployment,
+  fetchExchangeConnections,
   fetchStrategyDetail,
 } from "../../shared/api";
+import { useAuthSession } from "../auth/auth-context";
 
 type Tab = "overview" | "config" | "versions";
 
@@ -201,12 +204,28 @@ function OverviewTab({ strategy }: { strategy: StrategyDetailDto }) {
 function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const session = useAuthSession();
   const latestVersion = strategy.latestVersion;
+  const [requestedConnectionId, setRequestedConnectionId] = useState("");
+  const connectionsQueryKey = ["exchange-connections", session.activeWorkspace.id] as const;
+  const connectionsQuery = useQuery({
+    queryKey: connectionsQueryKey,
+    queryFn: fetchExchangeConnections,
+    enabled: !strategy.deployment,
+  });
+  const activeConnections =
+    connectionsQuery.data?.data.items.filter((connection) => connection.status === "active") ?? [];
+  const selectedConnection =
+    activeConnections.find((connection) => connection.id === requestedConnectionId) ??
+    activeConnections[0] ??
+    null;
   const mutation = useMutation({
     mutationFn: () => {
       if (!latestVersion) throw new Error("У стратегии нет версии");
+      if (!selectedConnection) throw new Error("Выберите проверенное подключение Bybit");
       return createDeployment(strategy.id, {
         strategyVersionId: latestVersion.id,
+        exchangeConnectionId: selectedConnection.id,
         idempotencyKey: crypto.randomUUID(),
       });
     },
@@ -214,6 +233,7 @@ function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
       void queryClient.invalidateQueries({ queryKey: ["strategy", strategy.id] });
       void queryClient.invalidateQueries({ queryKey: ["strategies"] });
       void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      void queryClient.invalidateQueries({ queryKey: connectionsQueryKey });
       navigate(`/runtime?deployment=${result.data.deployment.id}`);
     },
   });
@@ -237,12 +257,20 @@ function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
         ) : (
           <Button
             size="sm"
-            disabled={strategy.status !== "approved" || !latestVersion || mutation.isPending}
+            disabled={
+              strategy.status !== "approved" ||
+              !latestVersion ||
+              !selectedConnection ||
+              connectionsQuery.isPending ||
+              mutation.isPending
+            }
             onClick={() => mutation.mutate()}
             title={
               strategy.status !== "approved"
                 ? "Сначала одобрите стратегию с пройденной валидацией"
-                : undefined
+                : !selectedConnection
+                  ? "Добавьте и проверьте подключение Bybit"
+                  : undefined
             }
           >
             {mutation.isPending ? (
@@ -254,7 +282,57 @@ function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
           </Button>
         )}
       </CardHeader>
-      {mutation.isError ? (
+      {!strategy.deployment ? (
+        <CardContent className="space-y-3 p-[18px]">
+          {connectionsQuery.isError ? (
+            <p className="text-xs text-loss">{connectionsQuery.error.message}</p>
+          ) : activeConnections.length > 0 ? (
+            <>
+              <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
+                Проверенное подключение
+                <Select
+                  value={selectedConnection?.id ?? ""}
+                  onChange={(event) => setRequestedConnectionId(event.target.value)}
+                >
+                  {activeConnections.map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.label} · {connection.environment}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <p className="text-xs leading-5 text-muted-foreground">
+                Deployment останется dry-run. Подключение фиксируется для provenance и будущего
+                demo/live gate, но приватные ордера не отправляются.
+              </p>
+              {selectedConnection ? (
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">
+                    {selectedConnection.readOnly ? "только чтение" : "чтение и запись"}
+                  </Badge>
+                  <Badge variant={selectedConnection.tradingPermission ? "profit" : "outline"}>
+                    {selectedConnection.tradingPermission ? "торговые права" : "без торговых прав"}
+                  </Badge>
+                  <Badge variant={selectedConnection.ipBound ? "profit" : "warning"}>
+                    {selectedConnection.ipBound ? "IP ограничен" : "без IP allowlist"}
+                  </Badge>
+                </div>
+              ) : null}
+            </>
+          ) : connectionsQuery.isPending ? (
+            <Skeleton className="h-9 w-full" />
+          ) : (
+            <p className="text-xs leading-5 text-muted-foreground">
+              Нет активных подключений. Добавьте ключи и завершите проверку в{" "}
+              <Link className="text-foreground underline underline-offset-4" to="/settings">
+                настройках
+              </Link>
+              .
+            </p>
+          )}
+          {mutation.isError ? <p className="text-xs text-loss">{mutation.error.message}</p> : null}
+        </CardContent>
+      ) : mutation.isError ? (
         <CardContent className="p-[18px]">
           <p className="text-xs text-loss">{mutation.error.message}</p>
         </CardContent>

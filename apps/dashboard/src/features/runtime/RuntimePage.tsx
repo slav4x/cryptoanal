@@ -256,7 +256,8 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
           <div>
             <h2 className="text-sm font-medium">{deployment.strategy.name}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              v{deployment.strategyVersion.version} · {deployment.exchangeAccountId}
+              v{deployment.strategyVersion.version} ·{" "}
+              {deployment.exchangeConnection?.label ?? "подключение не задано"}
             </p>
           </div>
           <DeploymentStatusBadge status={deployment.status} />
@@ -265,6 +266,22 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
       <CardContent className="space-y-[18px] p-[18px]">
         <div className="space-y-3 text-sm">
           <MetaRow label="Среда" value="dry-run" />
+          <MetaRow
+            label="Подключение"
+            value={
+              deployment.exchangeConnection
+                ? `Bybit ${deployment.exchangeConnection.environment}`
+                : "Не привязано"
+            }
+          />
+          <MetaRow
+            label="Проверка ключа"
+            value={
+              deployment.exchangeConnection?.lastVerifiedAt
+                ? formatDateTime(deployment.exchangeConnection.lastVerifiedAt)
+                : "Не подтверждена"
+            }
+          />
           <MetaRow label="Execution run" value={executionRun?.id.slice(0, 8) ?? "Не создан"} mono />
           <MetaRow label="Engine" value={executionRun?.engineVersion ?? "—"} mono />
           <MetaRow
@@ -312,10 +329,16 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
         <div className="rounded-[10px] border border-row-border bg-secondary/35 p-3">
           <p className="text-xs font-medium text-secondary-foreground">Граница безопасности</p>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Команды меняют состояние и фиксируют immutable context. Исполнение сигналов и ордеров к
-            этому контуру пока не подключено.
+            Команды меняют состояние и фиксируют immutable context вместе с подключением. Runtime
+            остаётся dry-run и не отправляет приватные ордера на биржу.
           </p>
         </div>
+
+        {deployment.exchangeConnection?.status !== "active" ? (
+          <p className="text-xs leading-5 text-warning">
+            Подключение не подтверждено. Старт и возобновление заблокированы до успешной проверки.
+          </p>
+        ) : null}
 
         {executionRun && executionRun.openPositions > 0 ? (
           <p className="text-xs leading-5 text-warning">

@@ -82,6 +82,7 @@ import {
   type ValidationRunQueuedDto,
   type ValidationsDto,
   type WatchlistStateDto,
+  type WorkspaceCreateDto,
 } from "@cryptoanal/contracts";
 import type { z } from "zod";
 
@@ -209,6 +210,17 @@ export async function switchWorkspace(workspaceId: string): Promise<ApiEnvelope<
   const response = await request("/api/v1/auth/workspace", authSessionEnvelopeSchema, {
     method: "POST",
     body: JSON.stringify({ workspaceId }),
+  });
+  csrfToken = response.data.authenticated ? response.data.csrfToken : null;
+  return response;
+}
+
+export async function createWorkspace(
+  input: WorkspaceCreateDto,
+): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request("/api/v1/workspaces", authSessionEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
   csrfToken = response.data.authenticated ? response.data.csrfToken : null;
   return response;

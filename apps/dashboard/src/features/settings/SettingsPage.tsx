@@ -9,22 +9,36 @@ import {
   CardTitle,
   ErrorState,
   FieldLabel,
+  Input,
   PageHeader,
   Select,
   Skeleton,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellOff, Download, Gauge, Globe2, Save, ServerCog, ShieldCheck } from "lucide-react";
+import {
+  BellOff,
+  Building2,
+  Download,
+  Gauge,
+  Globe2,
+  Plus,
+  Save,
+  ServerCog,
+  ShieldCheck,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import {
   ApiClientError,
+  createWorkspace,
   exportWorkspace,
   fetchSettings,
   updateWorkspacePreferences,
 } from "../../shared/api";
+import { authSessionQueryKey, useAuthSession } from "../auth/auth-context";
 
 export default function SettingsPage() {
+  const session = useAuthSession();
   const query = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
   if (query.isPending) return <SettingsSkeleton />;
   if (query.isError)
@@ -48,6 +62,7 @@ export default function SettingsPage() {
         description="Рабочие параметры текущего пространства и прозрачное состояние инфраструктуры."
       />
       <div className="grid items-start gap-[18px] xl:grid-cols-2">
+        <WorkspaceCard session={session} />
         <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
         <RuntimeSafetyCard settings={settings} />
         <MarketDataCard settings={settings} />
@@ -56,6 +71,78 @@ export default function SettingsPage() {
         <SystemCard settings={settings} />
       </div>
     </div>
+  );
+}
+
+function WorkspaceCard({ session }: { session: ReturnType<typeof useAuthSession> }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const mutation = useMutation({
+    mutationFn: createWorkspace,
+    onSuccess: (response) => {
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
+      });
+      queryClient.setQueryData(authSessionQueryKey, response);
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start gap-3 border-b">
+        <CardIcon icon={Building2} />
+        <div>
+          <CardTitle>Рабочие пространства</CardTitle>
+          <CardDescription>
+            Каждое пространство имеет собственные стратегии и историю.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 pt-4">
+        <div className="space-y-2">
+          {session.workspaces.map((workspace) => (
+            <div
+              key={workspace.id}
+              className="flex min-h-10 items-center justify-between gap-4 border-b border-row-border last:border-0"
+            >
+              <span className="min-w-0 truncate text-xs text-secondary-foreground">
+                {workspace.name}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-stale">
+                {workspace.id === session.activeWorkspace.id ? "текущее" : workspace.role}
+              </span>
+            </div>
+          ))}
+        </div>
+        <form
+          className="space-y-3 border-t border-row-border pt-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutation.mutate({ name });
+          }}
+        >
+          <Field label="Новое пространство">
+            <Input
+              value={name}
+              minLength={2}
+              maxLength={80}
+              placeholder="Название клиента или проекта"
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </Field>
+          {mutation.error ? <p className="text-xs text-loss">{mutation.error.message}</p> : null}
+          <Button
+            type="submit"
+            variant="secondary"
+            disabled={mutation.isPending || name.trim().length < 2}
+          >
+            <Plus className="size-4" />
+            {mutation.isPending ? "Создание…" : "Создать и открыть"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 

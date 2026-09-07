@@ -401,9 +401,9 @@ Backtest, walk-forward, import/export и тяжёлая регенерация a
 6. cancel разрешён только для cancellable state;
 7. итог хранит provenance и error summary.
 
-## 9. Временный access API
+## 9. Исторический temporary access
 
-Если dashboard развёрнут удалённо, минимальный gate может иметь только:
+Временный env gate рассматривался для P0, но не был перенесён в клиентский контур:
 
 ```text
 POST /dev-access/login
@@ -411,16 +411,12 @@ POST /dev-access/logout
 GET  /dev-access/session
 ```
 
-Сервер сравнивает пароль/hash, rate-limits попытки и выдаёт signed `HttpOnly`, `Secure`,
-`SameSite` cookie. Эти endpoints удаляются или заменяются в P1. Credentials никогда не
-возвращаются и не сохраняются в localStorage.
-
-Альтернатива ещё проще — Basic Auth на reverse proxy. Она предпочтительна для одного
-закрытого стенда, если не нужен экран входа.
+Эти endpoints и `DEV_ACCESS_*` config отсутствуют. Их заменила database-backed модель из
+`13-AUTH-WORKSPACE-ARCHITECTURE.md`.
 
 ## 10. Auth/workspace API P1
 
-Добавляется после dashboard:
+Текущий базовый срез:
 
 ```text
 /api/v1/auth/*

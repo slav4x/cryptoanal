@@ -1,8 +1,8 @@
 # CryptoAnal
 
 CryptoAnal — dashboard-first платформа для исследования, проверки, запуска и анализа
-криптоторговых стратегий. Текущий этап работает в одном development workspace без
-пользовательской авторизации. Полный план находится в [docs/rebuild](docs/rebuild/README.md).
+криптоторговых стратегий. Private dashboard защищён database-backed сессиями, а данные
+разделены membership-based workspaces. Полный план находится в [docs/rebuild](docs/rebuild/README.md).
 
 ## Структура
 
@@ -33,8 +33,10 @@ cp .env.example .env
 pnpm install
 pnpm db:up
 pnpm db:generate
-pnpm db:migrate --name init
+pnpm db:migrate
 pnpm db:seed
+CRYPTOANAL_NEW_USER_PASSWORD='use-a-long-local-password' \
+  pnpm auth:create-user --email owner@example.com --name 'Owner' --workspace development
 pnpm dev
 ```
 
@@ -70,6 +72,8 @@ pnpm dev
 
 Реализованный private API:
 
+- `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`;
+- `POST /api/v1/auth/workspace` — membership-checked смена активного workspace;
 - `GET /api/v1/overview?period=24h|7d|30d`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
@@ -231,9 +235,15 @@ pnpm db:restore-check
 
 ## Безопасность development-этапа
 
-Dashboard содержит private account/runtime данные и управляющие действия. Пока нет
-настоящей auth, его можно использовать локально или в private network. Перед удалённым
-deployment требуется reverse-proxy Basic Auth либо development access gate.
+Dashboard содержит private account/runtime данные и управляющие действия. Private API
+требует server-side session; сырой token хранится только в `HttpOnly` cookie, а в БД — его
+hash. Изменяющие запросы защищены CSRF, login ограничен по частоте, workspace выбирается
+только через membership. Для production необходимо задать случайный `AUTH_SECRET` длиной
+не менее 32 символов и использовать HTTPS.
+
+Публичные signup, recovery и invitations пока отсутствуют. Новых пользователей создаёт
+администратор через `pnpm auth:create-user`; пароль передаётся только через
+`CRYPTOANAL_NEW_USER_PASSWORD` и сохраняется как Argon2id hash.
 
 ## Dry-run account
 

@@ -15,21 +15,14 @@
    публичную методологию, тарифы и санитизированный track record.
 
 Отдельного demo-dashboard не будет. Первый dashboard — настоящий рабочий интерфейс со
-всеми необходимыми действиями. Пока нет настоящей авторизации, он должен запускаться
-локально или за временным development access gate.
+всеми необходимыми действиями. Базовая session-based авторизация и membership уже
+реализованы; расширенные клиентские flows добавляются следующими срезами.
 
-## Временный доступ во время разработки
+## Авторизация
 
-Допустим простой вход по логину и паролю из server-side environment. Это не модель
-пользователя и не основа будущей auth-системы, а только защита закрытого стенда.
-
-- локально gate можно выключить;
-- удалённый стенд нельзя публиковать без gate;
-- пароль не должен попадать в Vite env или browser bundle;
-- предпочтительно хранить `DEV_ACCESS_PASSWORD_HASH`, а не открытый пароль;
-- после входа сервер выдаёт короткоживущую `HttpOnly` cookie;
-- приложение всё равно работает с фиксированными `actorId` и `workspaceId` через единый
-  `RequestContext`, чтобы позже заменить resolver, а не переписывать use cases.
+Dashboard использует database users, Argon2id password hashes, server-side sessions,
+`HttpOnly` cookie, CSRF и membership-based workspace resolver. Публичные signup/recovery и
+приглашения пока намеренно не реализованы.
 
 ## Что читать
 
@@ -51,6 +44,8 @@
     автоподбора параметров, ML-моделей и контролируемого переобучения.
 12. [12-LEGACY-DATA-MIGRATION.md](12-LEGACY-DATA-MIGRATION.md) — фактический inventory,
     mapping, архив и ограничения переноса старой PostgreSQL.
+13. [13-AUTH-WORKSPACE-ARCHITECTURE.md](13-AUTH-WORKSPACE-ARCHITECTURE.md) — текущая
+    session-модель, security boundaries и правила tenant isolation.
 
 ## Короткая формула продукта
 

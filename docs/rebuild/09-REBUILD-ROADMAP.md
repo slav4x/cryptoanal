@@ -130,12 +130,13 @@ fake auth, глобальных user-owned данных и критичных д
 
 ## Этап 8. Настоящие users и workspaces
 
-- [ ] Выбрать auth approach/provider отдельным ADR.
-- [ ] Добавить `User`, `Identity/Session`, `WorkspaceMembership`.
-- [ ] Заменить development resolver на session-based `RequestContext`.
+- [x] Выбрать auth approach/provider отдельным ADR.
+- [x] Добавить `User`, `Session`, `WorkspaceMembership`.
+- [x] Заменить development resolver на session-based `RequestContext`.
 - [ ] Реализовать signup/login/logout/recovery и security flows.
 - [ ] Реализовать workspace creation/switching/membership по подтверждённому scope.
-- [ ] Проверить workspace scope каждого repository/query/job.
+- [x] Закрыть private API membership-based workspace resolver.
+- [ ] Перевести runtime/account/watchdog worker с fixed development workspace на multi-workspace scheduling.
 - [ ] Добавить user/workspace settings и audit log.
 - [ ] Добавить exchange connections и encrypted credentials.
 - [ ] Мигрировать development workspace к реальному owner.

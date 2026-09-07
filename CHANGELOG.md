@@ -6,7 +6,7 @@
 
 - Initial CryptoAnal monorepo foundation.
 - Clean PostgreSQL/Prisma schema with workspace ownership.
-- Shared API contracts and fixed development request context.
+- Shared API contracts and request context boundary.
 - Fastify API and worker entrypoints.
 - shadcn-compatible token-based UI package.
 - Dashboard shell with Overview and Markets routes.
@@ -81,6 +81,11 @@
 - System log redaction on write and read, server-side filters, cursor pagination, metadata inspection and opt-in live tail.
 - Read-only legacy PostgreSQL inventory with schema fingerprinting, config validation and a checksummed business-data archive.
 - PostgreSQL custom-format backups with checksummed manifests and isolated ephemeral restore verification.
+- Database users, Argon2id passwords, hashed server-side sessions and workspace memberships.
+- Session-based private API context with membership-checked workspace switching.
+- HttpOnly auth cookie, CSRF validation, login rate limiting and API security headers.
+- Dashboard login, real user identity and active workspace switcher.
+- Audited auth session create/revoke and workspace switch events.
 
 ### Changed
 

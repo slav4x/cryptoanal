@@ -143,9 +143,8 @@ type RequestContext = {
 };
 ```
 
-В P0 resolver всегда возвращает development identity. В P1 он строится из server-side
-session и membership. Ни один repository method не должен иметь скрытый «global scope»
-для пользовательских сущностей.
+Resolver строится из server-side session и membership. Ни один repository method не
+должен иметь скрытый «global scope» для пользовательских сущностей.
 
 System jobs также имеют явный system actor и workspace. Это необходимо для audit trail.
 

@@ -111,9 +111,9 @@ Dashboard не является демонстрацией. Он должен с
 - несколько exchange adapters;
 - обещание полноценного multi-strategy исполнения.
 
-## 6. Временный development identity
+## 6. Переход от development identity к users
 
-Внутри P0 допустим фиксированный контекст:
+P0 использовал фиксированный контекст:
 
 ```text
 actorId = development-operator
@@ -121,20 +121,9 @@ workspaceId = development
 role = owner
 ```
 
-Он создаётся на сервере и передаётся во все application use cases. UI не должен
-подставлять `workspaceId` вручную. Когда появится auth, меняется resolver контекста,
-а не сигнатуры репозиториев и бизнес-логика.
-
-Env login/password — отдельный внешний gate:
-
-```text
-DEV_ACCESS_ENABLED
-DEV_ACCESS_USERNAME
-DEV_ACCESS_PASSWORD_HASH
-DEV_ACCESS_COOKIE_SECRET
-```
-
-Это не будущий пользователь в базе, не membership и не источник ownership.
+В P1 fixed resolver удалён. Теперь сервер строит тот же context из database session и
+membership, а UI по-прежнему не подставляет `workspaceId` в предметные запросы. Детали
+зафиксированы в `13-AUTH-WORKSPACE-ARCHITECTURE.md`.
 
 ## 7. Стратегии
 

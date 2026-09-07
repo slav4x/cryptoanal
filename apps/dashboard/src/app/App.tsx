@@ -23,6 +23,7 @@ const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
 const JournalPage = lazy(() => import("../features/journal/JournalPage"));
 const PlaybooksPage = lazy(() => import("../features/playbooks/PlaybooksPage"));
 const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
+const SystemLogsPage = lazy(() => import("../features/system/SystemLogsPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 
 export function App() {
@@ -179,6 +180,14 @@ export function App() {
             element={
               <Suspense fallback={<RouteFallback />}>
                 <SettingsPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="system/logs"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <SystemLogsPage />
               </Suspense>
             }
           />

@@ -22,6 +22,12 @@ export {
   WorkspaceTimezoneInvalidError,
 } from "./settings-repository";
 export {
+  redactSystemLogMetadata,
+  SystemLogCursorNotFoundError,
+  SystemLogRepository,
+  type SystemLogFilters,
+} from "./system-log-repository";
+export {
   PlaybookLinkNotFoundError,
   PlaybookNameConflictError,
   PlaybookNotFoundError,

@@ -61,6 +61,8 @@ import {
   strategyStatusTransitionSchema,
   strategyVersionCreateSchema,
   strategyVersionCreatedSchema,
+  systemLogsQuerySchema,
+  systemLogsSchema,
   tradeDetailSchema,
   tradeIdParamsSchema,
   tradingLedgerSchema,
@@ -115,6 +117,9 @@ import {
   StrategyRepository,
   StrategyStatusConflictError,
   StrategyVersionNotAllowedError,
+  redactSystemLogMetadata,
+  SystemLogCursorNotFoundError,
+  SystemLogRepository,
   WorkspaceSettingsConflictError,
   WorkspaceSettingsNotFoundError,
   WorkspaceTimezoneInvalidError,
@@ -165,6 +170,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
   const settingsRepository = new SettingsRepository(prisma);
+  const systemLogRepository = new SystemLogRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
   const validationRepository = new ValidationRepository(prisma);
 
@@ -174,6 +180,33 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   await app.register(cors, {
     origin: config.DASHBOARD_ORIGIN,
     credentials: true,
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const route = request.routeOptions.url;
+    const excluded = route === "/health" || route === "/api/v1/system/logs";
+    const readOnlySuccess = request.method === "GET" && reply.statusCode < 400;
+    if (excluded || readOnlySuccess || request.method === "OPTIONS" || request.method === "HEAD") {
+      return;
+    }
+    try {
+      await systemLogRepository.write({
+        workspaceId: config.DEVELOPMENT_WORKSPACE_ID,
+        level: reply.statusCode >= 500 ? "ERROR" : reply.statusCode >= 400 ? "WARNING" : "INFO",
+        service: "api",
+        event: "http.request.completed",
+        message: `${request.method} ${route} completed with ${reply.statusCode}`,
+        correlationId: request.id,
+        metadata: {
+          method: request.method,
+          route,
+          statusCode: reply.statusCode,
+          durationMs: Math.round(reply.elapsedTime * 100) / 100,
+        },
+      });
+    } catch (error) {
+      request.log.error({ err: error }, "Failed to persist structured system log");
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -942,6 +975,79 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         };
       } catch (error) {
         throwSettingsApiError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/system/logs",
+    {
+      schema: {
+        querystring: systemLogsQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(systemLogsSchema),
+          400: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = await requireWorkspace();
+      const query = request.query;
+      try {
+        const logs = await systemLogRepository.list(workspace.id, {
+          startsAt: getSystemLogStartsAt(query.period),
+          level: query.level ? persistedSystemLogLevel[query.level] : null,
+          service: query.service ?? null,
+          correlationId: query.correlationId ?? null,
+          query: query.query ?? null,
+          cursor: query.cursor ?? null,
+          limit: query.limit,
+        });
+        return {
+          data: {
+            filters: {
+              period: query.period,
+              level: query.level ?? null,
+              service: query.service ?? null,
+              correlationId: query.correlationId ?? null,
+              query: query.query ?? null,
+            },
+            filterOptions: {
+              levels: [
+                "debug" as const,
+                "info" as const,
+                "warning" as const,
+                "error" as const,
+                "critical" as const,
+              ],
+              services: logs.services,
+            },
+            summary: {
+              total: logs.total,
+              warnings: logs.counts.get("WARNING") ?? 0,
+              errors: (logs.counts.get("ERROR") ?? 0) + (logs.counts.get("CRITICAL") ?? 0),
+              services: logs.serviceCount,
+            },
+            items: logs.items.map((item) => ({
+              id: item.id,
+              level: systemLogLevel[item.level],
+              service: item.service,
+              event: item.event,
+              message: item.message,
+              correlationId: item.correlationId,
+              metadata: item.metadata ? redactSystemLogMetadata(item.metadata) : null,
+              createdAt: item.createdAt.toISOString(),
+            })),
+            nextCursor: logs.nextCursor,
+          },
+          meta: createMeta(request.id, logs.total > 0 ? "fresh" : "unavailable"),
+        };
+      } catch (error) {
+        if (error instanceof SystemLogCursorNotFoundError) {
+          throw new ApiError(400, "SYSTEM_LOG_CURSOR_INVALID", "Cursor логов недействителен");
+        }
+        throw error;
       }
     },
   );
@@ -2210,6 +2316,19 @@ const activityPeriodDurationMs = {
   all: null,
 } as const;
 
+const systemLogPeriodDurationMs = {
+  "1h": 60 * 60 * 1_000,
+  "24h": 24 * 60 * 60 * 1_000,
+  "7d": 7 * 24 * 60 * 60 * 1_000,
+  "30d": 30 * 24 * 60 * 60 * 1_000,
+  all: null,
+} as const;
+
+function getSystemLogStartsAt(period: keyof typeof systemLogPeriodDurationMs): Date | null {
+  const durationMs = systemLogPeriodDurationMs[period];
+  return durationMs === null ? null : new Date(Date.now() - durationMs);
+}
+
 function getActivityStartsAt(period: keyof typeof activityPeriodDurationMs): Date | null {
   const durationMs = activityPeriodDurationMs[period];
   return durationMs === null ? null : new Date(Date.now() - durationMs);
@@ -2910,6 +3029,22 @@ const playbookStatus = {
 const persistedPlaybookStatus = {
   active: "ACTIVE",
   archived: "ARCHIVED",
+} as const;
+
+const systemLogLevel = {
+  DEBUG: "debug",
+  INFO: "info",
+  WARNING: "warning",
+  ERROR: "error",
+  CRITICAL: "critical",
+} as const;
+
+const persistedSystemLogLevel = {
+  debug: "DEBUG",
+  info: "INFO",
+  warning: "WARNING",
+  error: "ERROR",
+  critical: "CRITICAL",
 } as const;
 
 const persistedDecisionAction = {

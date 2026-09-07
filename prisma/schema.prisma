@@ -150,6 +150,14 @@ enum PlaybookStatus {
   ARCHIVED
 }
 
+enum SystemLogLevel {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
 model Workspace {
   id                String             @id @default(uuid())
   slug              String             @unique
@@ -181,6 +189,7 @@ model Workspace {
   journalLinks      JournalLink[]
   reviewSessions    ReviewSession[]
   playbooks         Playbook[]
+  systemLogs        SystemLog[]
 }
 
 model WorkspaceSettings {
@@ -734,6 +743,24 @@ model PlaybookTrade {
 
   @@id([playbookId, tradeId])
   @@index([tradeId])
+}
+
+model SystemLog {
+  id            String         @id @default(uuid())
+  workspaceId   String
+  level         SystemLogLevel
+  service       String
+  event         String
+  message       String         @db.Text
+  correlationId String?
+  metadata      Json?
+  createdAt     DateTime       @default(now()) @db.Timestamptz(3)
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, level, createdAt(sort: Desc)])
+  @@index([workspaceId, service, createdAt(sort: Desc)])
+  @@index([workspaceId, correlationId])
 }
 
 model ReviewSessionEntry {

@@ -8,7 +8,7 @@ type MetricCardProps = {
   hint?: string;
   icon?: ReactNode;
   compact?: boolean;
-  tone?: "neutral" | "profit" | "loss";
+  tone?: "neutral" | "profit" | "loss" | "warning";
 };
 
 export function MetricCard({
@@ -39,6 +39,7 @@ export function MetricCard({
             compact ? "text-2xl" : "text-[27px]",
             tone === "profit" && "text-profit",
             tone === "loss" && "text-loss",
+            tone === "warning" && "text-warning",
           )}
         >
           {value}

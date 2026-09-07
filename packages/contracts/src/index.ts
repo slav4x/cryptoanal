@@ -1207,6 +1207,49 @@ export const settingsExportSchema = z.object({
   content: z.string(),
 });
 
+export const systemLogLevelSchema = z.enum(["debug", "info", "warning", "error", "critical"]);
+export const systemLogPeriodSchema = z.enum(["1h", "24h", "7d", "30d", "all"]);
+export const systemLogsQuerySchema = z.object({
+  period: systemLogPeriodSchema.default("24h"),
+  level: systemLogLevelSchema.optional(),
+  service: z.string().trim().min(1).max(60).optional(),
+  correlationId: z.string().trim().min(1).max(120).optional(),
+  query: z.string().trim().min(1).max(200).optional(),
+  cursor: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export const systemLogSchema = z.object({
+  id: z.string(),
+  level: systemLogLevelSchema,
+  service: z.string(),
+  event: z.string(),
+  message: z.string(),
+  correlationId: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+  createdAt: z.iso.datetime(),
+});
+export const systemLogsSchema = z.object({
+  filters: z.object({
+    period: systemLogPeriodSchema,
+    level: systemLogLevelSchema.nullable(),
+    service: z.string().nullable(),
+    correlationId: z.string().nullable(),
+    query: z.string().nullable(),
+  }),
+  filterOptions: z.object({
+    levels: z.array(systemLogLevelSchema),
+    services: z.array(z.string()),
+  }),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    warnings: z.number().int().nonnegative(),
+    errors: z.number().int().nonnegative(),
+    services: z.number().int().nonnegative(),
+  }),
+  items: z.array(systemLogSchema),
+  nextCursor: z.string().nullable(),
+});
+
 export const healthSchema = z.object({
   status: z.enum(["ok", "degraded"]),
   service: z.literal("api"),
@@ -1311,5 +1354,10 @@ export type SettingsDto = z.infer<typeof settingsSchema>;
 export type SettingsUpdateDto = z.infer<typeof settingsUpdateSchema>;
 export type SettingsMutationDto = z.infer<typeof settingsMutationSchema>;
 export type SettingsExportDto = z.infer<typeof settingsExportSchema>;
+export type SystemLogLevel = z.infer<typeof systemLogLevelSchema>;
+export type SystemLogPeriod = z.infer<typeof systemLogPeriodSchema>;
+export type SystemLogsQueryDto = z.infer<typeof systemLogsQuerySchema>;
+export type SystemLogDto = z.infer<typeof systemLogSchema>;
+export type SystemLogsDto = z.infer<typeof systemLogsSchema>;
 export type HealthDto = z.infer<typeof healthSchema>;
 export type Freshness = z.infer<typeof freshnessSchema>;

@@ -16,6 +16,7 @@ import {
   Menu,
   RadioTower,
   Settings,
+  ScrollText,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -34,6 +35,7 @@ const navigation = [
   { label: "Активность", href: "/activity", icon: ListTree, end: false },
   { label: "Разбор", href: "/journal", icon: BookOpenText, end: false },
   { label: "Плейбуки", href: "/playbooks", icon: BookMarked, end: false },
+  { label: "Системные логи", href: "/system/logs", icon: ScrollText, end: false },
   { label: "Настройки", href: "/settings", icon: Settings, end: false },
 ] as const;
 

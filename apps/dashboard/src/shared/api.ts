@@ -23,6 +23,7 @@ import {
   strategyDetailSchema,
   strategyStatusChangedSchema,
   strategyVersionCreatedSchema,
+  systemLogsSchema,
   tradeDetailSchema,
   tradingLedgerSchema,
   validationRunQueuedSchema,
@@ -69,6 +70,8 @@ import {
   type StrategyStatusTransitionDto,
   type StrategyVersionCreateDto,
   type StrategyVersionCreatedDto,
+  type SystemLogsDto,
+  type SystemLogsQueryDto,
   type TradeDetailDto,
   type TradingLedgerDto,
   type ValidationRunInputDto,
@@ -154,6 +157,7 @@ const strategyCreatedEnvelopeSchema = apiEnvelopeSchema(strategyCreatedSchema);
 const strategyDetailEnvelopeSchema = apiEnvelopeSchema(strategyDetailSchema);
 const strategyStatusChangedEnvelopeSchema = apiEnvelopeSchema(strategyStatusChangedSchema);
 const strategyVersionCreatedEnvelopeSchema = apiEnvelopeSchema(strategyVersionCreatedSchema);
+const systemLogsEnvelopeSchema = apiEnvelopeSchema(systemLogsSchema);
 const validationsEnvelopeSchema = apiEnvelopeSchema(validationsSchema);
 const validationRunQueuedEnvelopeSchema = apiEnvelopeSchema(validationRunQueuedSchema);
 const validationRunDetailEnvelopeSchema = apiEnvelopeSchema(validationRunDetailSchema);
@@ -253,6 +257,19 @@ export function updateWorkspacePreferences(
 
 export function exportWorkspace(): Promise<ApiEnvelope<SettingsExportDto>> {
   return request("/api/v1/settings/export", settingsExportEnvelopeSchema);
+}
+
+export function fetchSystemLogs(
+  filters: SystemLogsQueryDto,
+  cursor?: string,
+): Promise<ApiEnvelope<SystemLogsDto>> {
+  const query = new URLSearchParams({ period: filters.period, limit: String(filters.limit) });
+  if (filters.level) query.set("level", filters.level);
+  if (filters.service) query.set("service", filters.service);
+  if (filters.correlationId) query.set("correlationId", filters.correlationId);
+  if (filters.query) query.set("query", filters.query);
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/v1/system/logs?${query.toString()}`, systemLogsEnvelopeSchema);
 }
 
 export function createJournalEntry(

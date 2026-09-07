@@ -158,12 +158,17 @@ enum SystemLogLevel {
   CRITICAL
 }
 
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
 model Workspace {
-  id                String             @id @default(uuid())
-  slug              String             @unique
+  id                String                @id @default(uuid())
+  slug              String                @unique
   name              String
-  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+  createdAt         DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime              @updatedAt @db.Timestamptz(3)
   settings          WorkspaceSettings?
   watchlistItems    WatchlistItem[]
   strategies        Strategy[]
@@ -190,6 +195,52 @@ model Workspace {
   reviewSessions    ReviewSession[]
   playbooks         Playbook[]
   systemLogs        SystemLog[]
+  memberships       WorkspaceMembership[]
+  activeSessions    Session[]
+}
+
+model User {
+  id           String                @id @default(uuid())
+  email        String                @unique @db.VarChar(320)
+  passwordHash String
+  displayName  String                @db.VarChar(120)
+  disabledAt   DateTime?             @db.Timestamptz(3)
+  createdAt    DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime              @updatedAt @db.Timestamptz(3)
+  memberships  WorkspaceMembership[]
+  sessions     Session[]
+}
+
+model WorkspaceMembership {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model Session {
+  id                String    @id @default(uuid())
+  tokenHash         String    @unique @db.Char(64)
+  userId            String
+  activeWorkspaceId String
+  expiresAt         DateTime  @db.Timestamptz(3)
+  lastSeenAt        DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt         DateTime? @db.Timestamptz(3)
+  userAgent         String?   @db.VarChar(500)
+  ipAddress         String?   @db.VarChar(64)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeWorkspace   Workspace @relation(fields: [activeWorkspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([activeWorkspaceId])
 }
 
 model WorkspaceSettings {
@@ -283,19 +334,19 @@ model WatchlistItem {
 }
 
 model Strategy {
-  id               String            @id @default(uuid())
+  id               String             @id @default(uuid())
   workspaceId      String
   name             String
   description      String?
-  status           StrategyStatus    @default(DRAFT)
-  activeVersionId  String?           @unique
+  status           StrategyStatus     @default(DRAFT)
+  activeVersionId  String?            @unique
   createdByActorId String
   updatedByActorId String
-  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  versions         StrategyVersion[] @relation("StrategyVersions")
-  activeVersion    StrategyVersion?  @relation("ActiveStrategyVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
+  workspace        Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions         StrategyVersion[]  @relation("StrategyVersions")
+  activeVersion    StrategyVersion?   @relation("ActiveStrategyVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
   validationRuns   ValidationRun[]
   deployments      Deployment[]
   journalLinks     JournalLink[]

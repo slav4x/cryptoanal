@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "auth:create-user": "tsx --env-file=../../.env src/create-user.ts",
     "dev": "tsx watch --env-file=../../.env src/server.ts",
     "build": "tsup src/server.ts --format esm --clean --sourcemap",
     "start": "node dist/server.js",
@@ -14,7 +15,11 @@
     "@cryptoanal/config": "workspace:*",
     "@cryptoanal/contracts": "workspace:*",
     "@cryptoanal/persistence": "workspace:*",
+    "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "11.3.0",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "argon2": "^0.45.1",
     "fastify": "5.12.3",
     "fastify-type-provider-zod": "7.0.0",
     "zod": "4.5.4"

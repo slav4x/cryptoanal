@@ -24,6 +24,38 @@ export const requestContextSchema = z.object({
   environment: z.enum(["development", "test", "production"]),
 });
 
+export const authLoginSchema = z.object({
+  email: z.email().max(320),
+  password: z.string().min(1).max(256),
+});
+
+export const authWorkspaceSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  role: z.enum(["owner", "member"]),
+});
+
+export const authSessionSchema = z.discriminatedUnion("authenticated", [
+  z.object({ authenticated: z.literal(false) }),
+  z.object({
+    authenticated: z.literal(true),
+    user: z.object({
+      id: z.string(),
+      email: z.email(),
+      displayName: z.string(),
+    }),
+    activeWorkspace: authWorkspaceSchema,
+    workspaces: z.array(authWorkspaceSchema),
+    csrfToken: z.string(),
+    expiresAt: z.iso.datetime(),
+  }),
+]);
+
+export const workspaceSwitchSchema = z.object({
+  workspaceId: z.string().min(1),
+});
+
 export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
 export const overviewQuerySchema = z.object({
   period: overviewPeriodSchema.default("7d"),
@@ -1268,6 +1300,10 @@ export const errorEnvelopeSchema = z.object({
 });
 
 export type RequestContextDto = z.infer<typeof requestContextSchema>;
+export type AuthLoginDto = z.infer<typeof authLoginSchema>;
+export type AuthSessionDto = z.infer<typeof authSessionSchema>;
+export type AuthWorkspaceDto = z.infer<typeof authWorkspaceSchema>;
+export type WorkspaceSwitchDto = z.infer<typeof workspaceSwitchSchema>;
 export type OverviewPeriod = z.infer<typeof overviewPeriodSchema>;
 export type OverviewQueryDto = z.infer<typeof overviewQuerySchema>;
 export type AccountSnapshotPointDto = z.infer<typeof accountSnapshotPointSchema>;

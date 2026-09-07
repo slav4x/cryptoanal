@@ -3,7 +3,6 @@ import {
   buildPerformanceAnalytics,
   evaluateHealth,
   canTransitionStrategyStatus,
-  createDevelopmentContext,
   executionEngineVersion,
   evaluateStrategyLifecycle,
   getDeploymentCommands,
@@ -13,6 +12,8 @@ import {
 import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
+  authLoginSchema,
+  authSessionSchema,
   analyticsQuerySchema,
   analyticsSchema,
   activityQuerySchema,
@@ -76,12 +77,15 @@ import {
   validationRunQueuedSchema,
   validationsSchema,
   watchlistStateSchema,
+  workspaceSwitchSchema,
 } from "@cryptoanal/contracts";
 import {
   ActiveDeploymentExistsError,
   ActivityCursorNotFoundError,
   ActivityRepository,
   AnalyticsRepository,
+  AuthRepository,
+  AuthWorkspaceAccessDeniedError,
   type CryptoAnalPrismaClient,
   DashboardRepository,
   DeploymentCommandNotAllowedError,
@@ -129,9 +133,13 @@ import {
   ValidationStrategyNotFoundError,
   ValidationVersionMismatchError,
 } from "@cryptoanal/persistence";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
-import Fastify from "fastify";
-import { createHash } from "node:crypto";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
+import { argon2id, hash, verify } from "argon2";
+import Fastify, { type FastifyRequest } from "fastify";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -144,6 +152,18 @@ type CreateAppDependencies = {
   config: ServerConfig;
   prisma: CryptoAnalPrismaClient;
 };
+
+type AuthenticatedContext = {
+  sessionId: string;
+  actorId: string;
+  user: { id: string; email: string; displayName: string };
+  workspace: { id: string; slug: string; name: string; role: "owner" | "member" };
+  workspaces: Array<{ id: string; slug: string; name: string; role: "owner" | "member" }>;
+  csrfToken: string;
+  expiresAt: Date;
+};
+
+const sessionCookieName = "cryptoanal_session";
 
 class ApiError extends Error {
   public constructor(
@@ -162,6 +182,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   }).withTypeProvider<ZodTypeProvider>();
 
   const repository = new DashboardRepository(prisma);
+  const authRepository = new AuthRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
   const activityRepository = new ActivityRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
@@ -177,9 +198,49 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
+  await app.register(cookie);
+  await app.register(helmet);
+  await app.register(rateLimit, { global: false });
+
   await app.register(cors, {
     origin: config.DASHBOARD_ORIGIN,
     credentials: true,
+  });
+
+  const requestContexts = new WeakMap<FastifyRequest, AuthenticatedContext>();
+  const invalidPasswordHash = await hash(randomBytes(32), { type: argon2id });
+
+  async function resolveSession(request: FastifyRequest) {
+    const rawToken = request.cookies[sessionCookieName];
+    if (!rawToken) return null;
+    const session = await authRepository.findActiveSession(hashSessionToken(rawToken));
+    if (!session) return null;
+    if (Date.now() - session.lastSeenAt.getTime() > 5 * 60_000) {
+      await authRepository.touchSession(session.id);
+    }
+    return {
+      sessionId: session.id,
+      actorId: session.user.id,
+      user: {
+        id: session.user.id,
+        email: session.user.email,
+        displayName: session.user.displayName,
+      },
+      workspace: serializeAuthWorkspace(session.activeMembership),
+      workspaces: session.user.memberships.map(serializeAuthWorkspace),
+      csrfToken: createCsrfToken(config.AUTH_SECRET, rawToken),
+      expiresAt: session.expiresAt,
+    } satisfies AuthenticatedContext;
+  }
+
+  app.addHook("onRequest", async (request) => {
+    if (request.method === "OPTIONS" || isPublicRoute(request.url)) return;
+    const context = await resolveSession(request);
+    if (!context) throw new ApiError(401, "AUTH_REQUIRED", "Необходим вход в систему");
+    requestContexts.set(request, context);
+    if (isMutatingMethod(request.method)) {
+      assertCsrfToken(request.headers["x-csrf-token"], context.csrfToken);
+    }
   });
 
   app.addHook("onResponse", async (request, reply) => {
@@ -190,8 +251,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       return;
     }
     try {
+      const context = requestContexts.get(request);
+      if (!context) return;
       await systemLogRepository.write({
-        workspaceId: config.DEVELOPMENT_WORKSPACE_ID,
+        workspaceId: context.workspace.id,
         level: reply.statusCode >= 500 ? "ERROR" : reply.statusCode >= 400 ? "WARNING" : "INFO",
         service: "api",
         event: "http.request.completed",
@@ -211,22 +274,33 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   app.setErrorHandler((error, request, reply) => {
     const validationMessages = getValidationMessages(error);
+    const rateLimited = !(error instanceof ApiError) && hasStatusCode(error, 429);
     const statusCode =
-      error instanceof ApiError ? error.statusCode : validationMessages ? 400 : 500;
+      error instanceof ApiError
+        ? error.statusCode
+        : rateLimited
+          ? 429
+          : validationMessages
+            ? 400
+            : 500;
     const code =
       error instanceof ApiError
         ? error.code
-        : validationMessages
-          ? "VALIDATION_ERROR"
-          : "INTERNAL_ERROR";
+        : rateLimited
+          ? "AUTH_RATE_LIMITED"
+          : validationMessages
+            ? "VALIDATION_ERROR"
+            : "INTERNAL_ERROR";
     const message =
       error instanceof ApiError
         ? error.message
-        : validationMessages
-          ? "Параметры запроса не прошли проверку"
-          : "Внутренняя ошибка сервера";
+        : rateLimited
+          ? "Слишком много попыток. Повторите позже"
+          : validationMessages
+            ? "Параметры запроса не прошли проверку"
+            : "Внутренняя ошибка сервера";
 
-    if (!(error instanceof ApiError) && !validationMessages) {
+    if (!(error instanceof ApiError) && !validationMessages && !rateLimited) {
       request.log.error({ err: error }, "Unhandled API error");
     }
 
@@ -240,16 +314,14 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     });
   });
 
-  async function requireWorkspace() {
-    const workspace = await repository.getWorkspace(config.DEVELOPMENT_WORKSPACE_ID);
-    if (!workspace) {
-      throw new ApiError(
-        503,
-        "WORKSPACE_NOT_INITIALIZED",
-        "Development workspace не создан. Выполните pnpm db:seed.",
-      );
-    }
-    return workspace;
+  function requireContext(request: FastifyRequest) {
+    const context = requestContexts.get(request);
+    if (!context) throw new ApiError(401, "AUTH_REQUIRED", "Необходим вход в систему");
+    return context;
+  }
+
+  function requireWorkspace(request: FastifyRequest) {
+    return requireContext(request).workspace;
   }
 
   app.get(
@@ -277,6 +349,134 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   );
 
   app.get(
+    "/api/v1/auth/session",
+    {
+      schema: {
+        response: { 200: apiEnvelopeSchema(authSessionSchema) },
+      },
+    },
+    async (request, reply) => {
+      const context = await resolveSession(request);
+      if (!context) {
+        reply.clearCookie(sessionCookieName, sessionCookieOptions(config));
+        return { data: { authenticated: false as const }, meta: createMeta(request.id, "fresh") };
+      }
+      return { data: serializeAuthSession(context), meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/login",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      schema: {
+        body: authLoginSchema,
+        response: {
+          200: apiEnvelopeSchema(authSessionSchema),
+          401: errorEnvelopeSchema,
+          403: errorEnvelopeSchema,
+          429: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const email = request.body.email.trim().toLowerCase();
+      const user = await authRepository.findUserForLogin(email);
+      const passwordMatches = await verify(
+        user?.passwordHash ?? invalidPasswordHash,
+        request.body.password,
+      );
+      if (!user || !passwordMatches || user.disabledAt) {
+        throw new ApiError(401, "AUTH_INVALID_CREDENTIALS", "Неверный email или пароль");
+      }
+      const membership = user.memberships[0];
+      if (!membership) {
+        throw new ApiError(403, "AUTH_WORKSPACE_REQUIRED", "Пользователь не состоит в workspace");
+      }
+      const rawToken = randomBytes(32).toString("base64url");
+      const expiresAt = new Date(Date.now() + config.AUTH_SESSION_TTL_HOURS * 60 * 60_000);
+      const createdSession = await authRepository.createSession({
+        tokenHash: hashSessionToken(rawToken),
+        userId: user.id,
+        workspaceId: membership.workspace.id,
+        expiresAt,
+        userAgent: normalizeHeader(request.headers["user-agent"]),
+        ipAddress: request.ip,
+        requestId: request.id,
+      });
+      reply.setCookie(sessionCookieName, rawToken, sessionCookieOptions(config));
+      const context = {
+        sessionId: createdSession.id,
+        actorId: user.id,
+        user: { id: user.id, email: user.email, displayName: user.displayName },
+        workspace: serializeAuthWorkspace(membership),
+        workspaces: user.memberships.map(serializeAuthWorkspace),
+        csrfToken: createCsrfToken(config.AUTH_SECRET, rawToken),
+        expiresAt,
+      } satisfies AuthenticatedContext;
+      return { data: serializeAuthSession(context), meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/logout",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(authSessionSchema),
+          401: errorEnvelopeSchema,
+          403: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const context = requireContext(request);
+      await authRepository.revokeSession({
+        sessionId: context.sessionId,
+        workspaceId: context.workspace.id,
+        actorId: context.actorId,
+        requestId: request.id,
+      });
+      reply.clearCookie(sessionCookieName, sessionCookieOptions(config));
+      return { data: { authenticated: false as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/workspace",
+    {
+      schema: {
+        body: workspaceSwitchSchema,
+        response: {
+          200: apiEnvelopeSchema(authSessionSchema),
+          401: errorEnvelopeSchema,
+          403: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const context = requireContext(request);
+      try {
+        await authRepository.switchWorkspace({
+          sessionId: context.sessionId,
+          userId: context.user.id,
+          workspaceId: request.body.workspaceId,
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (error instanceof AuthWorkspaceAccessDeniedError) {
+          throw new ApiError(403, "WORKSPACE_ACCESS_DENIED", "Нет доступа к workspace");
+        }
+        throw error;
+      }
+      const refreshed = await resolveSession(request);
+      if (!refreshed) throw new ApiError(401, "AUTH_REQUIRED", "Необходим вход в систему");
+      requestContexts.set(request, refreshed);
+      return { data: serializeAuthSession(refreshed), meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.get(
     "/api/v1/context",
     {
       schema: {
@@ -287,22 +487,15 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
-      const context = createDevelopmentContext(
-        {
-          actorId: config.DEVELOPMENT_ACTOR_ID,
-          workspaceId: workspace.id,
-          role: "owner",
-        },
-        request.id,
-      );
+      const workspace = requireWorkspace(request);
+      const context = requireContext(request);
 
       return {
         data: {
           actorId: context.actorId,
-          workspaceId: context.workspaceId,
+          workspaceId: context.workspace.id,
           workspaceName: workspace.name,
-          role: context.role,
+          role: context.workspace.role,
           environment: config.NODE_ENV,
         },
         meta: createMeta(request.id, "fresh"),
@@ -322,7 +515,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const period = request.query.period;
       const periodConfig = overviewPeriodConfig[period];
       const overview = await repository.getOverview(workspace.id, {
@@ -429,7 +622,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const query = request.query;
         const activity = await activityRepository.list(workspace.id, {
@@ -515,7 +708,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const query = request.query;
         const journal = await journalRepository.list(workspace.id, {
@@ -614,11 +807,11 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const entry = await journalRepository.createEntry({
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           kind: persistedJournalKind[request.body.kind],
           title: request.body.title,
@@ -659,10 +852,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const review = await journalRepository.createReview({
         workspaceId: workspace.id,
-        actorId: config.DEVELOPMENT_ACTOR_ID,
+        actorId: requireContext(request).actorId,
         requestId: request.id,
         title: request.body.title,
         startsAt: new Date(request.body.startsAt),
@@ -691,7 +884,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const query = request.query;
       const library = await playbookRepository.list(workspace.id, {
         status: query.status ? persistedPlaybookStatus[query.status] : null,
@@ -752,12 +945,12 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request, reply) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const playbook = await playbookRepository.create({
           ...request.body,
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
         });
         return reply.status(201).send({
@@ -785,14 +978,14 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const playbook = await playbookRepository.update({
           ...request.body,
           expectedUpdatedAt: new Date(request.body.expectedUpdatedAt),
           playbookId: request.params.playbookId,
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
         });
         return {
@@ -820,11 +1013,11 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const playbook = await playbookRepository.changeStatus({
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           playbookId: request.params.playbookId,
           expectedStatus: persistedPlaybookStatus[request.body.expectedStatus],
@@ -852,7 +1045,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const [preferences, databaseConnected] = await Promise.all([
         settingsRepository.get(workspace.id),
         repository.ping(),
@@ -898,7 +1091,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           system: {
             applicationVersion,
             workspaceId: workspace.id,
-            actorId: config.DEVELOPMENT_ACTOR_ID,
+            actorId: requireContext(request).actorId,
             database: databaseConnected ? ("connected" as const) : ("unavailable" as const),
           },
         },
@@ -922,11 +1115,11 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const preferences = await settingsRepository.update({
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           timezone: request.body.timezone,
           tableDensity: request.body.tableDensity,
@@ -954,12 +1147,12 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const exportedAt = new Date();
         const payload = await settingsRepository.exportWorkspace({
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
         });
         return {
@@ -993,7 +1186,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const query = request.query;
       try {
         const logs = await systemLogRepository.list(workspace.id, {
@@ -1064,7 +1257,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const now = new Date();
       const [signals, persistedIncidents] = await Promise.all([
         healthRepository.getSignals(workspace.id, now),
@@ -1145,7 +1338,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const filters = request.query;
       const dataset = await analyticsRepository.getPerformanceDataset(workspace.id, {
         startsAt: getAnalyticsStartsAt(filters.period),
@@ -1236,7 +1429,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const instruments = await repository.listMarkets(workspace.id);
       const now = Date.now();
       const items = instruments.map((instrument) => {
@@ -1291,7 +1484,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const strategies = await repository.listStrategies(workspace.id);
       const counts = Object.fromEntries(strategyStatuses.map((status) => [status, 0])) as Record<
         (typeof strategyStatuses)[number],
@@ -1357,7 +1550,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request, reply) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const configHash = createHash("sha256")
         .update(JSON.stringify(request.body.config))
         .digest("hex");
@@ -1365,7 +1558,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       try {
         const result = await strategyRepository.createWithInitialVersion({
           workspaceId: workspace.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           name: request.body.name,
           description: request.body.description,
           configSchemaVersion: request.body.config.schemaVersion,
@@ -1411,7 +1604,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
       if (!strategy) {
         throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
@@ -1483,7 +1676,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request, reply) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const configHash = createHash("sha256")
         .update(JSON.stringify(request.body.config))
         .digest("hex");
@@ -1492,7 +1685,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         const version = await strategyRepository.createVersion({
           workspaceId: workspace.id,
           strategyId: request.params.strategyId,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           configSchemaVersion: request.body.config.schemaVersion,
           config: request.body.config,
           configHash,
@@ -1548,7 +1741,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
       if (!strategy) {
         throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
@@ -1582,7 +1775,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         const changed = await strategyRepository.transitionStatus({
           workspaceId: workspace.id,
           strategyId: strategy.id,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           expectedStatus: persistedStrategyStatus[request.body.expectedStatus],
           targetStatus: persistedManualStrategyStatus[request.body.target],
@@ -1620,7 +1813,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const runs = await validationRepository.list(workspace.id);
       const counts = {
         queued: 0,
@@ -1656,7 +1849,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const run = await validationRepository.get(
         workspace.id,
         request.params.validationRunId,
@@ -1707,7 +1900,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request, reply) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const strategy = await strategyRepository.getDetail(workspace.id, request.params.strategyId);
       if (!strategy) {
         throw new ApiError(404, "STRATEGY_NOT_FOUND", "Стратегия не найдена");
@@ -1745,7 +1938,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           workspaceId: workspace.id,
           strategyId: strategy.id,
           strategyVersionId,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           kind: persistedValidationKind[executionInput.kind],
           datasetId: `market-candles-request:${datasetHash}`,
@@ -1808,7 +2001,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const deployments = await deploymentRepository.list(workspace.id);
       const counts = Object.fromEntries(deploymentStatuses.map((status) => [status, 0])) as Record<
         (typeof deploymentStatuses)[number],
@@ -1843,13 +2036,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request, reply) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const result = await deploymentRepository.create({
           workspaceId: workspace.id,
           strategyId: request.params.strategyId,
           strategyVersionId: request.body.strategyVersionId,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           idempotencyKey: request.body.idempotencyKey,
           exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
@@ -1884,12 +2077,12 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const result = await deploymentRepository.applyCommand({
           workspaceId: workspace.id,
           deploymentId: request.params.deploymentId,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           idempotencyKey: request.body.idempotencyKey,
           command: persistedDeploymentCommand[request.body.command],
@@ -1924,7 +2117,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const instrument = await repository.getMarket(workspace.id, request.params.symbol);
       if (!instrument) {
         throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
@@ -2008,7 +2201,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       if (!(await repository.hasEnabledMarket(request.params.symbol))) {
         throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
       }
@@ -2033,7 +2226,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       if (!(await repository.hasEnabledMarket(request.params.symbol))) {
         throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
       }
@@ -2061,7 +2254,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       try {
         const replayed = await runtimeRepository.replayManualClose(
           workspace.id,
@@ -2121,7 +2314,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           workspaceId: workspace.id,
           positionId: position.id,
           executionRunId: position.executionRunId,
-          actorId: config.DEVELOPMENT_ACTOR_ID,
+          actorId: requireContext(request).actorId,
           requestId: request.id,
           idempotencyKey: request.body.idempotencyKey,
           reason: request.body.reason,
@@ -2155,7 +2348,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const ledger = await repository.getTradingLedger(workspace.id);
       return {
         data: {
@@ -2219,7 +2412,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       },
     },
     async (request) => {
-      const workspace = await requireWorkspace();
+      const workspace = requireWorkspace(request);
       const detail = await repository.getTradeDetail(workspace.id, request.params.tradeId);
       if (!detail) {
         throw new ApiError(404, "TRADE_NOT_FOUND", "Сделка не найдена");
@@ -2533,6 +2726,82 @@ function serializeReviewSession(review: ReviewSessionResult) {
     tags: review.tags,
     entryCount: review._count.entries,
     createdAt: review.createdAt.toISOString(),
+  };
+}
+
+function serializeAuthWorkspace(membership: {
+  role: "OWNER" | "MEMBER";
+  workspace: { id: string; slug: string; name: string };
+}) {
+  return {
+    ...membership.workspace,
+    role: membership.role === "OWNER" ? ("owner" as const) : ("member" as const),
+  };
+}
+
+function serializeAuthSession(context: AuthenticatedContext) {
+  return {
+    authenticated: true as const,
+    user: context.user,
+    activeWorkspace: context.workspace,
+    workspaces: context.workspaces,
+    csrfToken: context.csrfToken,
+    expiresAt: context.expiresAt.toISOString(),
+  };
+}
+
+function hashSessionToken(rawToken: string) {
+  return createHash("sha256").update(rawToken).digest("hex");
+}
+
+function createCsrfToken(secret: string, rawToken: string) {
+  return createHmac("sha256", secret).update(rawToken).digest("base64url");
+}
+
+function assertCsrfToken(received: string | string[] | undefined, expected: string) {
+  if (typeof received !== "string") {
+    throw new ApiError(403, "CSRF_TOKEN_INVALID", "CSRF-токен отсутствует или недействителен");
+  }
+  const receivedBuffer = Buffer.from(received);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    receivedBuffer.length !== expectedBuffer.length ||
+    !timingSafeEqual(receivedBuffer, expectedBuffer)
+  ) {
+    throw new ApiError(403, "CSRF_TOKEN_INVALID", "CSRF-токен отсутствует или недействителен");
+  }
+}
+
+function isMutatingMethod(method: string) {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function isPublicRoute(url: string) {
+  const path = url.split("?", 1)[0];
+  return path === "/health" || path === "/api/v1/auth/login" || path === "/api/v1/auth/session";
+}
+
+function normalizeHeader(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value.join(", ").slice(0, 500);
+  return value?.slice(0, 500) ?? null;
+}
+
+function hasStatusCode(error: unknown, statusCode: number) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    error.statusCode === statusCode
+  );
+}
+
+function sessionCookieOptions(config: ServerConfig) {
+  return {
+    path: "/",
+    httpOnly: true,
+    sameSite: "strict" as const,
+    secure: config.NODE_ENV === "production",
+    maxAge: config.AUTH_SESSION_TTL_HOURS * 60 * 60,
   };
 }
 

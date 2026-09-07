@@ -12,6 +12,7 @@
     "dev": "pnpm --parallel --filter @cryptoanal/api --filter @cryptoanal/dashboard --filter @cryptoanal/worker run dev",
     "build": "pnpm -r --if-present run build",
     "check:budgets": "node scripts/check-dashboard-budgets.mjs",
+    "auth:create-user": "pnpm --filter @cryptoanal/api run auth:create-user --",
     "migration:audit": "tsx scripts/audit-legacy-migration.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",

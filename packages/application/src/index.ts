@@ -12,15 +12,3 @@ export * from "./deployment-lifecycle";
 export * from "./execution-engine";
 export * from "./strategy-lifecycle";
 export * from "./validation-engine";
-
-export type DevelopmentIdentity = Pick<RequestContext, "actorId" | "workspaceId" | "role">;
-
-export function createDevelopmentContext(
-  identity: DevelopmentIdentity,
-  requestId: string,
-): RequestContext {
-  return {
-    ...identity,
-    requestId,
-  };
-}

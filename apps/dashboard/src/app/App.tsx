@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { AppShell } from "./AppShell";
 import { AppErrorBoundary } from "./AppErrorBoundary";
 import { RouteFallback } from "./RouteFallback";
+import { AuthGate } from "../features/auth/AuthGate";
 
 const OverviewPage = lazy(() => import("../features/overview/OverviewPage"));
 const MarketsPage = lazy(() => import("../features/markets/MarketsPage"));
@@ -29,178 +30,180 @@ const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 export function App() {
   return (
     <AppErrorBoundary>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route
-            index
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <OverviewPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="markets"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <MarketsPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="markets/:symbol"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <MarketDetailPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="trades"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <TradesPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="trades/:tradeId"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <TradeDetailPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="strategies"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <StrategiesPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="strategies/new"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <NewStrategyPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="strategies/:strategyId"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <StrategyDetailPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="strategies/:strategyId/versions/new"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <NewStrategyVersionPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="validation"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <ValidationPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="validation/compare"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <ValidationComparePage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="validation/:validationRunId"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <ValidationRunPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="runtime"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <RuntimePage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="analytics"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <AnalyticsPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="analytics/health"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <HealthPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="activity"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <ActivityPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="journal"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <JournalPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="playbooks"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <PlaybooksPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <SettingsPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="system/logs"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <SystemLogsPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="*"
-            element={
-              <Suspense fallback={<RouteFallback />}>
-                <NotFoundPage />
-              </Suspense>
-            }
-          />
-        </Route>
-      </Routes>
+      <AuthGate>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route
+              index
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <OverviewPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="markets"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <MarketsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="markets/:symbol"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <MarketDetailPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="trades"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <TradesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="trades/:tradeId"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <TradeDetailPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="strategies"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <StrategiesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="strategies/new"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <NewStrategyPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="strategies/:strategyId"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <StrategyDetailPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="strategies/:strategyId/versions/new"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <NewStrategyVersionPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="validation"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <ValidationPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="validation/compare"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <ValidationComparePage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="validation/:validationRunId"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <ValidationRunPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="runtime"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <RuntimePage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="analytics"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <AnalyticsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="analytics/health"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <HealthPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="activity"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <ActivityPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="journal"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <JournalPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="playbooks"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <PlaybooksPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="settings"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <SettingsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="system/logs"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <SystemLogsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="*"
+              element={
+                <Suspense fallback={<RouteFallback />}>
+                  <NotFoundPage />
+                </Suspense>
+              }
+            />
+          </Route>
+        </Routes>
+      </AuthGate>
     </AppErrorBoundary>
   );
 }

@@ -1,5 +1,6 @@
 import {
   apiEnvelopeSchema,
+  authSessionSchema,
   analyticsSchema,
   activitySchema,
   deploymentMutationResultSchema,
@@ -30,6 +31,8 @@ import {
   validationRunDetailSchema,
   validationsSchema,
   watchlistStateSchema,
+  type AuthLoginDto,
+  type AuthSessionDto,
   type MarketsDto,
   type AnalyticsDto,
   type AnalyticsQueryDto,
@@ -83,6 +86,7 @@ import {
 import type { z } from "zod";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+let csrfToken: string | null = null;
 
 export class ApiClientError extends Error {
   public constructor(
@@ -113,6 +117,10 @@ async function request<T>(
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  const method = init?.method?.toUpperCase() ?? "GET";
+  if (csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("x-csrf-token", csrfToken);
+  }
   const response = await fetch(`${apiBaseUrl}${path}`, {
     credentials: "include",
     ...init,
@@ -124,6 +132,10 @@ async function request<T>(
     const errorPayload = payload as {
       error?: { code?: string; message?: string; requestId?: string };
     };
+    if (response.status === 401 && path !== "/api/v1/auth/login") {
+      csrfToken = null;
+      window.dispatchEvent(new Event("cryptoanal:auth-required"));
+    }
     throw new ApiClientError(
       errorPayload.error?.message ?? "Запрос завершился ошибкой",
       errorPayload.error?.code ?? "UNKNOWN_ERROR",
@@ -135,6 +147,7 @@ async function request<T>(
 }
 
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
+const authSessionEnvelopeSchema = apiEnvelopeSchema(authSessionSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
 const activityEnvelopeSchema = apiEnvelopeSchema(activitySchema);
 const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
@@ -167,6 +180,38 @@ const positionCloseResultEnvelopeSchema = apiEnvelopeSchema(positionCloseResultS
 
 export function fetchRequestContext(): Promise<ApiEnvelope<RequestContextDto>> {
   return request("/api/v1/context", contextEnvelopeSchema);
+}
+
+export async function fetchAuthSession(): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request("/api/v1/auth/session", authSessionEnvelopeSchema);
+  csrfToken = response.data.authenticated ? response.data.csrfToken : null;
+  return response;
+}
+
+export async function login(input: AuthLoginDto): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request("/api/v1/auth/login", authSessionEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  csrfToken = response.data.authenticated ? response.data.csrfToken : null;
+  return response;
+}
+
+export async function logout(): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request("/api/v1/auth/logout", authSessionEnvelopeSchema, {
+    method: "POST",
+  });
+  csrfToken = null;
+  return response;
+}
+
+export async function switchWorkspace(workspaceId: string): Promise<ApiEnvelope<AuthSessionDto>> {
+  const response = await request("/api/v1/auth/workspace", authSessionEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId }),
+  });
+  csrfToken = response.data.authenticated ? response.data.csrfToken : null;
+  return response;
 }
 
 export function fetchOverview(period: OverviewPeriod = "7d"): Promise<ApiEnvelope<OverviewDto>> {

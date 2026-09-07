@@ -1,19 +1,18 @@
-import { Badge, Button, cn } from "@cryptoanal/ui";
-import { useQuery } from "@tanstack/react-query";
+import { Badge, Button, Select, cn } from "@cryptoanal/ui";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ListTree,
   ArrowLeftRight,
-  Box,
   BookOpenText,
   BookMarked,
-  ChevronsUpDown,
   ChartNoAxesCombined,
   FlaskConical,
   HeartPulse,
   Layers3,
   LayoutDashboard,
   Menu,
+  LogOut,
   RadioTower,
   Settings,
   ScrollText,
@@ -22,7 +21,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { fetchOverview, fetchRequestContext, fetchSettings } from "../shared/api";
+import { fetchOverview, fetchSettings, logout, switchWorkspace } from "../shared/api";
+import { authSessionQueryKey, useAuthSession } from "../features/auth/auth-context";
 
 const workspaceNavigation = [
   { label: "Главная", href: "/", icon: LayoutDashboard, end: true },
@@ -55,16 +55,13 @@ type NavigationItem = {
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const session = useAuthSession();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const runtimePollingEnabled =
     location.pathname === "/" ||
     location.pathname.startsWith("/runtime") ||
     location.pathname.startsWith("/trades");
-  const contextQuery = useQuery({
-    queryKey: ["context"],
-    queryFn: fetchRequestContext,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
   const overviewQuery = useQuery({
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
@@ -82,7 +79,22 @@ export function AppShell() {
     if (density) document.documentElement.dataset.density = density;
   }, [settingsQuery.data?.data.preferences.tableDensity]);
 
-  const workspaceName = contextQuery.data?.data.workspaceName;
+  const switchMutation = useMutation({
+    mutationFn: switchWorkspace,
+    onSuccess: (response) => {
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
+      });
+      queryClient.setQueryData(authSessionQueryKey, response);
+    },
+  });
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSuccess: (response) => {
+      queryClient.clear();
+      queryClient.setQueryData(authSessionQueryKey, response);
+    },
+  });
   const runtimeState = overviewQuery.data?.data.runtimeState ?? "offline";
 
   return (
@@ -95,8 +107,12 @@ export function AppShell() {
       </a>
       <aside className="sticky top-[18px] hidden h-[calc(100vh-36px)] w-(--sidebar-width) shrink-0 lg:flex lg:flex-col">
         <SidebarContent
-          workspaceName={workspaceName}
+          session={session}
           runtimeState={runtimeState}
+          switching={switchMutation.isPending}
+          loggingOut={logoutMutation.isPending}
+          onWorkspaceChange={(workspaceId) => switchMutation.mutate(workspaceId)}
+          onLogout={() => logoutMutation.mutate()}
           onNavigate={() => undefined}
         />
       </aside>
@@ -119,8 +135,12 @@ export function AppShell() {
               <X />
             </Button>
             <SidebarContent
-              workspaceName={workspaceName}
+              session={session}
               runtimeState={runtimeState}
+              switching={switchMutation.isPending}
+              loggingOut={logoutMutation.isPending}
+              onWorkspaceChange={(workspaceId) => switchMutation.mutate(workspaceId)}
+              onLogout={() => logoutMutation.mutate()}
               onNavigate={() => setMobileOpen(false)}
             />
           </aside>
@@ -144,7 +164,7 @@ export function AppShell() {
         </header>
 
         <main id="main-content" tabIndex={-1} className="w-full p-4 sm:p-6 lg:p-0">
-          <Outlet />
+          <Outlet key={session.activeWorkspace.id} />
         </main>
       </div>
     </div>
@@ -152,8 +172,12 @@ export function AppShell() {
 }
 
 type SidebarContentProps = {
-  workspaceName?: string | undefined;
+  session: ReturnType<typeof useAuthSession>;
   runtimeState: "offline" | "idle" | "running" | "paused" | "error";
+  switching: boolean;
+  loggingOut: boolean;
+  onWorkspaceChange: (workspaceId: string) => void;
+  onLogout: () => void;
   onNavigate: () => void;
 };
 
@@ -165,7 +189,15 @@ const runtimeLabels: Record<SidebarContentProps["runtimeState"], string> = {
   error: "ошибка",
 };
 
-function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarContentProps) {
+function SidebarContent({
+  session,
+  runtimeState,
+  switching,
+  loggingOut,
+  onWorkspaceChange,
+  onLogout,
+  onNavigate,
+}: SidebarContentProps) {
   const runtimeIsHealthy = runtimeState === "idle" || runtimeState === "running";
 
   return (
@@ -179,13 +211,19 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
         </span>
       </div>
 
-      <div className="mt-4 flex min-h-10 w-full items-center justify-between gap-1.5 rounded-[10px] border border-input bg-card px-[11px] py-2 text-[13px]">
-        <span className="flex min-w-0 items-center gap-2">
-          <Box className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="truncate">{workspaceName ?? "Development workspace"}</span>
-        </span>
-        <ChevronsUpDown className="size-[15px] shrink-0 text-muted-foreground" aria-hidden="true" />
-      </div>
+      <Select
+        className="mt-4 h-10 bg-card"
+        aria-label="Рабочее пространство"
+        value={session.activeWorkspace.id}
+        disabled={switching}
+        onChange={(event) => onWorkspaceChange(event.target.value)}
+      >
+        {session.workspaces.map((workspace) => (
+          <option key={workspace.id} value={workspace.id}>
+            {workspace.name}
+          </option>
+        ))}
+      </Select>
 
       <nav
         className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1"
@@ -212,6 +250,21 @@ function SidebarContent({ workspaceName, runtimeState, onNavigate }: SidebarCont
           <span className="rounded-[6px] border border-input bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
             dry-run
           </span>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-2 border-t border-sidebar-border pt-3">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-sidebar-foreground">{session.user.displayName}</p>
+            <p className="truncate text-[10px] text-muted-foreground">{session.user.email}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Выйти"
+            disabled={loggingOut}
+            onClick={onLogout}
+          >
+            <LogOut className="size-4" />
+          </Button>
         </div>
       </div>
     </>

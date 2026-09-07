@@ -49,6 +49,8 @@
 10. [10-DECISIONS.md](10-DECISIONS.md) — принятые и отложенные решения.
 11. [11-SELF-LEARNING-MODELS.md](11-SELF-LEARNING-MODELS.md) — отложенная архитектура
     автоподбора параметров, ML-моделей и контролируемого переобучения.
+12. [12-LEGACY-DATA-MIGRATION.md](12-LEGACY-DATA-MIGRATION.md) — фактический inventory,
+    mapping, архив и ограничения переноса старой PostgreSQL.
 
 ## Короткая формула продукта
 

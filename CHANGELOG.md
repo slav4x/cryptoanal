@@ -79,6 +79,7 @@
 - Audited JSON workspace export excluding market candles, technical logs and secrets.
 - Persisted structured system log stream for API mutations and failures without request bodies, headers or cookies.
 - System log redaction on write and read, server-side filters, cursor pagination, metadata inspection and opt-in live tail.
+- Read-only legacy PostgreSQL inventory with schema fingerprinting, config validation and a checksummed business-data archive.
 
 ### Changed
 

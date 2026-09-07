@@ -209,6 +209,16 @@ pnpm check:budgets
 CSS и отдельного route chunk. Интервальный refetch привязан к активным страницам;
 системные логи обновляются автоматически только после явного включения.
 
+Read-only аудит legacy PostgreSQL и локальный архив:
+
+```bash
+pnpm migration:audit -- --source-env ../crypto-trade/bot/.env
+```
+
+Команда не подключается к новой БД. Она сохраняет manifest и gzip-архив business data в
+игнорируемом `var/legacy-migration`; подробный mapping описан в
+[`docs/rebuild/12-LEGACY-DATA-MIGRATION.md`](docs/rebuild/12-LEGACY-DATA-MIGRATION.md).
+
 ## Безопасность development-этапа
 
 Dashboard содержит private account/runtime данные и управляющие действия. Пока нет

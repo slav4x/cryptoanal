@@ -117,10 +117,10 @@ fake auth, глобальных user-owned данных и критичных д
 
 Можно выполнять частями раньше, но завершать после стабилизации схемы dashboard.
 
-- [ ] Зафиксировать mapping старой БД в baseline schema.
+- [x] Зафиксировать mapping старой БД в baseline schema.
 - [ ] Импортировать только данные с понятным provenance.
 - [ ] Привязать импорт к `development` workspace.
-- [ ] Архивировать invalid/ambiguous data отдельно.
+- [x] Архивировать invalid/ambiguous business data отдельно с manifest и SHA-256.
 - [ ] Пересчитать projections и сверить расхождения.
 - [ ] Проверить backup/restore.
 - [ ] Перевести старый проект в read-only reference.

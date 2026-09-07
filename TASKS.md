@@ -71,9 +71,10 @@
 
 ## Этап 7 — Migration
 
-- [ ] Mapping старой БД.
+- [x] Inventory и mapping старой БД.
+- [x] Read-only gzip-архив legacy business data с manifest и SHA-256.
 - [ ] Импорт проверенных данных в development workspace.
-- [ ] Архивирование неоднозначных данных.
+- [ ] Решить: оставить legacy только архивом или вручную преобразовать одну стратегию.
 - [ ] Backup/restore check.
 
 ## Этап 8 — Users и workspaces

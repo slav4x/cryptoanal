@@ -1,7 +1,6 @@
 # Качество, безопасность и эксплуатация
 
-Этот документ задаёт требования для будущей реализации. В рамках текущей задачи тесты
-кода и бота не запускаются и не изменяются.
+Документ задаёт требования и фиксирует текущие эксплуатационные границы реализации.
 
 ## 1. Quality gates реализации
 
@@ -246,3 +245,29 @@ Validation jobs можно выполнять тем же worker с отдель
 - track record только whitelist projection;
 - claims соответствуют реальному продукту;
 - privacy/terms/risk copy согласованы.
+
+## 13. Dashboard performance baseline
+
+Бюджеты проверяются после production build командой `pnpm check:budgets`:
+
+- entry JavaScript — не более 100 KiB gzip;
+- весь JavaScript с lazy route chunks — не более 250 KiB gzip;
+- весь CSS — не более 12 KiB gzip;
+- один route chunk — не более 12 KiB gzip.
+
+Текущий baseline: entry JS 81.58 KiB, весь JS 211.90 KiB, CSS 8.12 KiB, самый тяжёлый
+route chunk 5.85 KiB gzip. Бюджет проверяет собранный `apps/dashboard/dist`, поэтому перед
+ним обязателен `pnpm build`.
+
+Polling включается только на активном маршруте и не работает в фоне:
+
+- runtime и очередь validation — 5 секунд;
+- overview, trades, activity и health — 15 секунд;
+- markets и analytics — 30 секунд;
+- validation detail — 3 секунды только пока run находится в очереди или выполняется;
+- system logs — 5 секунд только после ручного включения автообновления;
+- shell обновляет runtime-индикатор только на overview, runtime и trades.
+
+Desktop accessibility baseline включает skip-link, единый `focus-visible`, reduced motion,
+семантические состояния табов и раскрываемых строк, а также `scope` у заголовков таблиц.
+Mobile responsive review намеренно отложен и не входит в текущий stop-gate.

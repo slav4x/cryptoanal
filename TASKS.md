@@ -66,7 +66,8 @@
 - [x] Journal и review sessions.
 - [x] Playbooks.
 - [x] System logs и settings.
-- [ ] Responsive, accessibility и performance review.
+- [x] Desktop accessibility, keyboard и performance review.
+- [ ] Mobile responsive review — отложен по решению владельца.
 
 ## Этап 7 — Migration
 

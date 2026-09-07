@@ -94,3 +94,9 @@
 - Trade detail now exposes the immutable market context captured at entry.
 - Paused deployments continue managing open positions but cannot open new ones.
 - Deployment stop is blocked while positions remain open.
+- Desktop navigation is grouped into workspace, research and system sections without a placeholder user profile.
+- Dashboard terminology and settings microcopy are aligned around Russian product language.
+- Shared select and field-label primitives replace page-local control styling.
+- Keyboard focus, reduced-motion behavior, tab state and table header semantics are consistent across the dashboard.
+- Shell polling is limited to routes that display runtime state, with opt-in live system logs.
+- Production dashboard bundles are guarded by explicit gzip performance budgets.

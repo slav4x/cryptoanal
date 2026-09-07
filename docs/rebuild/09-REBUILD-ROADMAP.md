@@ -104,11 +104,11 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать playbooks без marketplace/social функций.
 - [x] Реализовать рабочие settings sections.
 - [x] Реализовать system logs с cursor pagination/redaction.
-- [ ] Унифицировать терминологию и microcopy.
-- [ ] Проверить responsive/accessibility/keyboard flows.
-- [ ] Устранить перегруженные страницы и локальные style exceptions.
-- [ ] Проверить performance budgets и query intervals.
-- [ ] Обновить product/operations documentation.
+- [x] Унифицировать терминологию и microcopy.
+- [x] Проверить desktop accessibility и keyboard flows; mobile responsive отложен по решению владельца.
+- [x] Разгруппировать перегруженную навигацию и убрать локальные стили базовых контролов.
+- [x] Зафиксировать performance budgets и route-level query intervals.
+- [x] Обновить product/operations documentation.
 
 **Dashboard stop-gate:** все P0 workflows работают в едином интерфейсе; нет demo branch,
 fake auth, глобальных user-owned данных и критичных действий вне audit/state model.

@@ -136,6 +136,10 @@ System Logs хранит отдельный структурированный �
 редактируются при записи и повторно при выдаче. Экран поддерживает фильтры, keyset
 pagination, раскрытие metadata/correlation id и вручную включаемый live tail.
 
+Desktop-навигация разделена на рабочую область, исследования и систему. Базовые поля,
+select-контролы, focus states и reduced-motion поведение живут в `packages/ui`; мобильная
+адаптация на текущем этапе намеренно не полируется.
+
 Settings сохраняет timezone и плотность таблиц с optimistic conflict protection.
 Остальные секции показывают реально действующие runtime safety limits, интервалы market
 data, состояние public/private exchange connection, notifications и retention без
@@ -198,7 +202,12 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm build
+pnpm check:budgets
 ```
+
+`check:budgets` запускается после сборки и ограничивает gzip-размер entry JS, всего JS,
+CSS и отдельного route chunk. Интервальный refetch привязан к активным страницам;
+системные логи обновляются автоматически только после явного включения.
 
 ## Безопасность development-этапа
 

@@ -2,8 +2,8 @@
 
 > Статус: основная карта реализована. Dashboard закрыт auth gate, sidebar показывает
 > реального пользователя и workspace switcher, а `/settings` поддерживает создание
-> workspace, участников, приглашения, encrypted exchange connections и deployment binding.
-> Следующий срез — periodic credential verification и security/session management.
+> workspace, участников, приглашения, encrypted exchange connections, deployment binding и
+> periodic verification. Следующий срез — security/session management.
 
 ## 1. Общая модель
 

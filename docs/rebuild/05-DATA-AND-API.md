@@ -253,6 +253,11 @@ Pause/resume сохраняют исходный execution run, stop атома�
 schema v2 фиксирует безопасный snapshot connection. Исполнение остаётся `DRY_RUN` и не
 использует credentials для отправки ордеров.
 
+Worker забирает due connections через PostgreSQL `FOR UPDATE SKIP LOCKED` и lease. Успех
+планирует следующую проверку, временная ошибка — короткий retry без изменения `ACTIVE`,
+окончательная ошибка сохраняет `INVALID`. Credential revision и lease owner защищают от
+запоздавшего результата после rotation или повторного claim.
+
 `GET /api/v1/health` строит текущую проекцию API/database/worker/market/account/queue/
 execution/outbox health и возвращает историю `WatchdogIncident`. Worker выполняет
 edge-triggered watchdog-цикл: открывает инциденты для stale data, queue/outbox lag,

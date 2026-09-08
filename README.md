@@ -25,9 +25,8 @@ semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы �
 Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
 работают database users, session auth, CSRF, membership isolation, создание/переключение
 workspaces, приглашения, управление участниками, encrypted exchange connections, проверка
-Bybit credentials, deployment binding и multi-workspace worker. Следующие задачи:
-периодическая перепроверка connections, управление sessions и recovery. Landing остаётся
-последним этапом.
+Bybit credentials, deployment binding, periodic verification и multi-workspace worker.
+Следующие задачи: управление sessions и recovery. Landing остаётся последним этапом.
 
 ## Требования
 
@@ -278,6 +277,13 @@ hash. Изменяющие запросы защищены CSRF, login огра�
 Private Bybit verification использует `BYBIT_DEMO_BASE_URL` для demo,
 `BYBIT_LIVE_BASE_URL` для live и timeout `BYBIT_PRIVATE_REQUEST_TIMEOUT_MS`. Региональный
 mainnet-домен при необходимости задаётся через server environment, без изменений frontend.
+
+После успешной ручной проверки worker перепроверяет connection каждые
+`EXCHANGE_VERIFICATION_INTERVAL_HOURS` часов. Claim защищён lease; временная ошибка
+переносит попытку на `EXCHANGE_VERIFICATION_RETRY_MINUTES`, но не сбрасывает статус
+`ACTIVE`. Окончательная ошибка переводит connection в `INVALID` и создаёт watchdog
+incident. `credentialRevision` не позволяет запоздавшему результату проверки перезаписать
+уже заменённые ключи.
 
 ## Dry-run account
 

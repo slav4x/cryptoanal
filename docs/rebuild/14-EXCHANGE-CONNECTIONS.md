@@ -1,7 +1,8 @@
 # Подключения бирж и шифрование credentials
 
-> Статус: workspace-scoped хранение, API, ручная проверка Bybit V5, управление и binding
-> к dry-run deployment реализованы. Приватные биржевые операции намеренно не включены.
+> Статус: workspace-scoped хранение, API, ручная и периодическая проверка Bybit V5,
+> управление и binding к dry-run deployment реализованы. Приватные биржевые операции
+> намеренно не включены.
 
 ## 1. Граница текущей реализации
 
@@ -98,8 +99,22 @@ rate limit возвращает `503` и не меняет прежний ста
 - окончательная инвалидность переводит ready deployment в failed, running — в paused;
   paused execution продолжает безопасно сопровождать открытые dry-run позиции.
 
-## 6. Следующий срез
+## 6. Периодическая проверка
 
-1. Периодическая перепроверка статуса и уведомления об expiry/invalid credentials.
+- успешная проверка назначает `nextVerificationAt`;
+- worker использует глобальную очередь due connections с `FOR UPDATE SKIP LOCKED`;
+- lease автоматически становится доступен другому worker после timeout;
+- временная ошибка записывает attempt/code/message и назначает retry, сохраняя `ACTIVE`;
+- окончательная ошибка применяет обычный `INVALID` и fail-closed deployment policy;
+- watchdog создаёт отдельные incidents для invalid, retrying и overdue connection;
+- `credentialRevision` и lease owner отклоняют stale result после rotation/reclaim.
+
+Настройки: `EXCHANGE_VERIFICATION_INTERVAL_HOURS`,
+`EXCHANGE_VERIFICATION_RETRY_MINUTES`, `EXCHANGE_VERIFICATION_LEASE_SECONDS` и
+`EXCHANGE_VERIFICATION_POLL_INTERVAL_MS`.
+
+## 7. Следующий срез
+
+1. Управление sessions и recovery.
 2. Отдельный подтверждаемый gate для demo, затем для live; live не включать автоматически.
 3. Версионированная master-key rotation и runbook восстановления.

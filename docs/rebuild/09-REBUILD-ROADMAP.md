@@ -3,7 +3,7 @@
 > Текущий статус: этапы 1–7 завершены; основной контур этапа 8 готов. Реализованы session
 > auth, workspace isolation, invitations/member management, encrypted exchange connections
 > и multi-workspace worker. Остались security и product hardening.
-> Ближайший незавершённый контур — периодическая перепроверка connections и session/recovery flows.
+> Ближайший незавершённый контур — session management и recovery flows.
 
 Порядок обязателен: **dashboard → users/workspaces → landing**. Этапы ниже описывают
 результат, а не календарные сроки. Новый этап начинается после выполнения stop-gate
@@ -158,7 +158,7 @@ fake auth, глобальных user-owned данных и критичных д
 - [ ] Limits/quotas для тяжёлых validation jobs.
 - [x] Ручная проверка exchange connection и permission policy.
 - [x] Привязка deployment к проверенному connection и runtime gate.
-- [ ] Периодическая перепроверка connection.
+- [x] Периодическая перепроверка connection с lease, retry и health incidents.
 - [ ] Export/delete/retention policies.
 - [ ] Support/incident workflow.
 - [ ] Проверить, нужны ли owner/member roles или достаточно одного owner.

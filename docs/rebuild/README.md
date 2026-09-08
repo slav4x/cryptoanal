@@ -13,7 +13,7 @@
 1. **Dashboard-first — завершён.** Рабочий продуктовый контур собран и стабилизирован.
 2. **Users and workspaces — основной контур завершён.** Авторизация, изоляция, создание
    workspaces, invitations, member management, encrypted exchange connections и
-   multi-workspace worker готовы; periodic credential verification, recovery и session
+   multi-workspace worker и periodic credential verification готовы; recovery и session
    management остаются hardening-задачами.
 3. **Landing-last — не начат.** Лендинг, публичная методология, тарифы и санитизированный
    track record строятся только после стабилизации клиентского P1.

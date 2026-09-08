@@ -2,8 +2,8 @@
 
 > Статус: P0 dashboard завершён. Основной P1 реализован: database users, session auth,
 > membership isolation, invitations/member management, encrypted exchange connections,
-> deployment binding и multi-workspace worker. Остаются recovery, periodic credential
-> verification, session lifecycle и hardening.
+> deployment binding, periodic credential verification и multi-workspace worker. Остаются
+> recovery, session lifecycle и hardening.
 
 ## 1. Цель CryptoAnal
 

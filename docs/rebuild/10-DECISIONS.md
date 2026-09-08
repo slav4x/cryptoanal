@@ -104,6 +104,17 @@ trading и не обходит отдельный runtime safety gate.
 в `PAUSED`. Paused runtime сопровождает уже открытые dry-run позиции, но не открывает новые.
 Rotate/revoke credentials блокируются до остановки связанного deployment.
 
+### D-018. Periodic verification — leased PostgreSQL schedule
+
+Worker забирает только due `ACTIVE` connections через `FOR UPDATE SKIP LOCKED`, ставит
+ограниченный lease и не хранит credentials вне памяти процесса. Успех назначает следующую
+проверку через 24 часа по умолчанию; временная недоступность Bybit сохраняет `ACTIVE` и
+назначает retry, окончательная ошибка применяет fail-closed lifecycle.
+
+Каждая rotation увеличивает `credentialRevision`. Manual и scheduled результаты
+принимаются только для той же revision; потерянный lease или запоздавшая проверка не могут
+перезаписать состояние новых credentials.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager

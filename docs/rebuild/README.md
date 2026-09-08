@@ -13,8 +13,8 @@
 1. **Dashboard-first — завершён.** Рабочий продуктовый контур собран и стабилизирован.
 2. **Users and workspaces — основной контур завершён.** Авторизация, изоляция, создание
    workspaces, invitations, member management, encrypted exchange connections и
-   multi-workspace worker и periodic credential verification готовы; recovery и session
-   management остаются hardening-задачами.
+   multi-workspace worker, periodic credential verification, recovery и session management
+   готовы; остаются email delivery и продуктовый hardening.
 3. **Landing-last — не начат.** Лендинг, публичная методология, тарифы и санитизированный
    track record строятся только после стабилизации клиентского P1.
 
@@ -26,7 +26,9 @@
 
 Dashboard использует database users, Argon2id password hashes, server-side sessions,
 `HttpOnly` cookie, CSRF и membership-based workspace resolver. Онбординг работает только
-по одноразовым приглашениям владельца; публичные signup/recovery пока не реализованы.
+по одноразовым приглашениям владельца. Recovery использует короткоживущую одноразовую
+ссылку администратора и отзывает все прежние sessions; public signup и email delivery пока
+не реализованы.
 
 ## Что читать
 

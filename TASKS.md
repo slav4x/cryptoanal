@@ -86,7 +86,8 @@
 - [x] Login/logout и workspace switcher в dashboard.
 - [x] Создание нового workspace с owner membership и изолированными настройками.
 - [x] Invite-only onboarding и управление участниками.
-- [ ] Public signup, recovery и управление sessions.
+- [x] Управление sessions, смена пароля и одноразовый recovery flow.
+- [ ] Public signup, email verification и автоматическая отправка recovery-ссылок.
 - [x] Multi-workspace scheduling для runtime/account/watchdog worker.
 - [x] Workspace-scoped exchange connections и encrypted credentials.
 - [x] Проверка credentials через Bybit, permission policy и lifecycle статусов.

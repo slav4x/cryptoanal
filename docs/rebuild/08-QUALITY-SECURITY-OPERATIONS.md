@@ -150,9 +150,10 @@ P0 dashboard содержит управляющие действия, account d
 
 Реализованы opaque sessions, Argon2id, membership resolver, CSRF, rate limiting, secure
 headers, auth audit events, AES-256-GCM storage, ручная и периодическая Bybit verification
-с lease/retry и watchdog incidents. Остаются master-key rotation, recovery/device flows,
-расширенная permission matrix и формализованная export/delete policy. Временный dev gate
-не используется.
+с lease/retry и watchdog incidents, device/session management, password rotation и
+одноразовый recovery с полным отзывом sessions. Остаются master-key rotation,
+автоматическая email-доставка, расширенная permission matrix и формализованная
+export/delete policy. Временный dev gate не используется.
 
 ## 7. Public security P2
 

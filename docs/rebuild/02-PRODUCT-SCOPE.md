@@ -2,8 +2,8 @@
 
 > Статус: P0 dashboard завершён. Основной P1 реализован: database users, session auth,
 > membership isolation, invitations/member management, encrypted exchange connections,
-> deployment binding, periodic credential verification и multi-workspace worker. Остаются
-> recovery, session lifecycle и hardening.
+> deployment binding, periodic credential verification, password/session lifecycle и
+> multi-workspace worker. Остаются public signup, email delivery и client hardening.
 
 ## 1. Цель CryptoAnal
 
@@ -56,12 +56,12 @@ Dashboard не является демонстрацией. Он должен с
 - создание/переключение workspace и multi-workspace worker scheduling.
 - invite-only onboarding и управление участниками;
 - workspace-scoped подключения Bybit и безопасное хранение credentials.
+- список и отзыв активных сессий, смена пароля и одноразовый recovery flow.
 
 Остаётся:
 
-- public signup и recovery;
-- session/device lifecycle;
-- проверка и ротация lifecycle биржевых подключений;
+- public signup, email verification и автоматическая доставка recovery-ссылок;
+- production master-key rotation для биржевых подключений;
 - permission matrix для роли участника.
 
 ### P2 — маркетинговый контур

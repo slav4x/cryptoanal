@@ -4,6 +4,9 @@
 
 ### Added
 
+- Account security controls for listing and revoking active sessions, changing passwords and enforcing a configurable session limit.
+- One-time password recovery tokens, an administrator recovery-link command and a public recovery screen that revokes all previous sessions.
+
 - Initial CryptoAnal monorepo foundation.
 - Clean PostgreSQL/Prisma schema with workspace ownership.
 - Shared API contracts and request context boundary.

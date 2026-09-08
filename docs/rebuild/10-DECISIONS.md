@@ -115,6 +115,19 @@ Worker забирает только due `ACTIVE` connections через `FOR UP
 принимаются только для той же revision; потерянный lease или запоздавшая проверка не могут
 перезаписать состояние новых credentials.
 
+### D-019. Recovery остаётся одноразовым token flow без фиктивной email-доставки
+
+Password recovery хранит только SHA-256 token, имеет ограниченный TTL и применяется один
+раз. Успешное восстановление меняет Argon2id hash, отзывает все sessions и инвалидирует
+остальные recovery tokens. До выбора email-провайдера ссылку выпускает администратор через
+CLI; API и UI не имитируют отправку письма.
+
+Пользователь видит активные sessions и может отзывать отдельные устройства. Смена пароля
+сохраняет текущую session, отзывает остальные и инвалидирует pending recovery. Login и
+invite acceptance соблюдают общий лимит активных sessions. Создание session повторно
+сверяет password hash под блокировкой user row, поэтому вход, начатый до rotation/recovery,
+не может завершиться после смены credentials.
+
 ## 2. Рекомендации, не требующие решения сейчас
 
 ### Package manager
@@ -149,7 +162,7 @@ Prisma можно сохранить: основной долг находитс
 - [x] server-side session TTL 7 дней;
 - [x] multi-member UI и базовая owner/member policy;
 - [x] invite-only onboarding;
-- [ ] recovery и device/session management;
+- [x] recovery, password rotation и device/session management;
 - [x] application-level credential encryption;
 - [ ] production key management и master-key rotation;
 - [ ] policies удаления, экспорта и блокировки аккаунта.

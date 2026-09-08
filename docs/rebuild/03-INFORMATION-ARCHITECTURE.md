@@ -3,7 +3,8 @@
 > Статус: основная карта реализована. Dashboard закрыт auth gate, sidebar показывает
 > реального пользователя и workspace switcher, а `/settings` поддерживает создание
 > workspace, участников, приглашения, encrypted exchange connections, deployment binding и
-> periodic verification. Следующий срез — security/session management.
+> periodic verification, активные сессии и смену пароля. Следующий срез — оставшийся
+> client hardening.
 
 ## 1. Общая модель
 
@@ -33,6 +34,7 @@
 /journal
 /playbooks
 /system/logs
+/recovery/:token
 /settings
 ```
 
@@ -227,9 +229,9 @@ Backtest и walk-forward — типы одной validation-модели, но �
 - system information;
 - список workspaces и создание нового изолированного workspace.
 
-Реализованы управление участниками, одноразовые приглашения и подключения Bybit с
-зашифрованными credentials. Следующими добавляются sessions/security и проверка доступа
-к бирже без включения торговли.
+Реализованы управление участниками, одноразовые приглашения, активные сессии, смена
+пароля и подключения Bybit с зашифрованными credentials. Recovery вынесен в отдельный
+публичный маршрут по одноразовому token; наличие ссылки не создаёт session автоматически.
 
 ## 5. Глобальная структура страницы
 

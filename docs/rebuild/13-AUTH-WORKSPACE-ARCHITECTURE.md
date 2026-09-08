@@ -1,7 +1,7 @@
 # Auth, users и изоляция workspaces
 
-> Статус: актуальная реализованная архитектура на 2026-09-08. Следующие auth-срезы явно
-> перечислены в конце документа.
+> Статус: актуальная реализованная архитектура на 2026-09-08. Session management,
+> password rotation и recovery реализованы; оставшиеся auth-срезы перечислены в конце.
 
 ## 1. Принятый scope
 
@@ -24,16 +24,21 @@
 - создание отдельного workspace с owner membership, настройками и немедленным переключением;
 - owner-controlled invitations, принятие приглашения и создание пользователя;
 - список участников, смена ролей, удаление участника и отзыв его активных sessions;
-- защита от удаления или понижения последнего владельца.
+- защита от удаления или понижения последнего владельца;
+- список активных sessions пользователя и отзыв отдельного устройства;
+- ограничение числа активных sessions с отзывом наиболее старых;
+- смена пароля с отзывом остальных sessions;
+- короткоживущий одноразовый recovery token с отзывом всех sessions.
 
-Не входят в этот срез: public signup, email verification, recovery, device management,
-SSO и billing. Exchange credentials описаны отдельно в `14-EXCHANGE-CONNECTIONS.md`.
+Не входят в этот срез: public signup, email verification/delivery, SSO и billing. Exchange
+credentials описаны отдельно в `14-EXCHANGE-CONNECTIONS.md`.
 
 ## 2. Модель данных
 
 ```text
 User 1 ── * WorkspaceMembership * ── 1 Workspace
 User 1 ── * Session * ── 1 active Workspace
+User 1 ── * PasswordRecoveryToken
 Workspace 1 ── * WorkspaceInvitation
 Workspace 1 ── * domain entities
 ```
@@ -49,6 +54,10 @@ SHA-256. Отзыв выполняется через `revokedAt`, срок жи
 `WorkspaceInvitation` содержит нормализованный email, роль, SHA-256 одноразового token,
 срок жизни семь дней, автора и результат принятия/отзыва. Сырой token возвращается только
 один раз при создании ссылки и никогда не хранится в БД.
+
+`PasswordRecoveryToken` также хранит только SHA-256, срок действия, `usedAt` и `revokedAt`.
+Выпуск новой ссылки отзывает предыдущие pending tokens пользователя. Применение token
+атомарно меняет password hash и завершает все sessions.
 
 ## 3. Request flow
 
@@ -69,6 +78,11 @@ session.
 GET  /api/v1/auth/session
 POST /api/v1/auth/login
 POST /api/v1/auth/logout
+GET  /api/v1/auth/sessions
+DELETE /api/v1/auth/sessions/:sessionId
+POST /api/v1/auth/password
+GET  /api/v1/auth/recovery/:token
+POST /api/v1/auth/recovery/:token
 POST /api/v1/auth/workspace
 POST /api/v1/workspaces
 GET  /api/v1/workspaces/:workspaceId/access
@@ -81,9 +95,9 @@ POST /api/v1/invitations/:token/accept
 GET  /api/v1/context
 ```
 
-`/health`, login, чтение session и точные invitation routes публичны. Все остальные
-`/api/v1/*` требуют session. Создание/отзыв приглашений и управление ролями требуют
-`OWNER`; список доступен всем участникам текущего workspace.
+`/health`, login, чтение session, recovery и точные invitation routes публичны. Все
+остальные `/api/v1/*` требуют session. Создание/отзыв приглашений и управление ролями
+требуют `OWNER`; список доступен всем участникам текущего workspace.
 Неавторизованный запрос получает `401 AUTH_REQUIRED`, запрещённый workspace —
 `403 WORKSPACE_ACCESS_DENIED`, неверный CSRF — `403 CSRF_TOKEN_INVALID`.
 
@@ -98,6 +112,15 @@ CRYPTOANAL_NEW_USER_PASSWORD='use-a-long-local-password' \
 
 Пароль передаётся процессу через environment, не попадает в argv, Git или базу в открытом
 виде. Команда не перезаписывает существующего пользователя.
+
+До подключения email delivery администратор выпускает recovery-ссылку:
+
+```bash
+pnpm auth:create-recovery --email owner@example.com
+```
+
+Ссылка выводится один раз, действует `AUTH_RECOVERY_TTL_MINUTES` и ведёт на
+`/recovery/:token`. Raw token не записывается в БД или audit log.
 
 ## 6. Инварианты изоляции
 
@@ -131,9 +154,25 @@ workspace и не доступны через session другого tenant.
 Отправка email пока отсутствует: владелец вручную копирует одноразовую ссылку. Это
 сознательная граница текущего development-среза.
 
-## 8. Следующие auth-срезы
+## 8. Session management и recovery
 
-1. Recovery, email verification, password rotation и список устройств/session.
+- `AUTH_MAX_ACTIVE_SESSIONS` ограничивает число одновременных входов; после login или
+  invitation acceptance наиболее старые лишние sessions получают `revokedAt`;
+- `/settings` показывает только sessions текущего пользователя, отмечает текущую и
+  позволяет завершить другую;
+- смена пароля требует текущий пароль, использует compare-and-set по прежнему hash,
+  сохраняет текущую session и отзывает остальные;
+- recovery token имеет 256 бит энтропии, хранится как SHA-256 и применяется условным
+  update только один раз;
+- recovery завершает все sessions и требует нового login, а выдача и применение ссылки
+  записываются в audit каждого workspace пользователя;
+- login повторно сверяет password hash под блокировкой user row перед созданием session,
+  закрывая гонку со сменой или восстановлением пароля;
+- recovery-ссылку до появления email delivery передают только через доверенный канал.
+
+## 9. Следующие auth-срезы
+
+1. Email delivery для invitations/recovery и подтверждение адреса.
 2. Permission matrix для `MEMBER` и дополнительных ролей при реальной необходимости.
-3. Email delivery для приглашений.
-4. Public signup только после отдельного решения о self-service onboarding.
+3. Public signup только после отдельного решения о self-service onboarding.
+4. MFA/SSO при подтверждённой клиентской необходимости.

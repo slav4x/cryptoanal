@@ -25,8 +25,9 @@ semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы �
 Dashboard, runtime/validation, analytics, migration и backup-контуры завершены. В P1 уже
 работают database users, session auth, CSRF, membership isolation, создание/переключение
 workspaces, приглашения, управление участниками, encrypted exchange connections, проверка
-Bybit credentials, deployment binding, periodic verification и multi-workspace worker.
-Следующие задачи: управление sessions и recovery. Landing остаётся последним этапом.
+Bybit credentials, deployment binding, periodic verification, управление пользовательскими
+сессиями, смена и восстановление пароля, multi-workspace worker. Следующий продуктовый блок —
+оставшийся client hardening. Landing остаётся последним этапом.
 
 ## Требования
 
@@ -78,10 +79,14 @@ pnpm dev
 - `/system/logs` — технические события сервисов с фильтрами, cursor pagination и redaction.
 - `/settings` — настройки workspace, runtime safety, состояния интеграций и JSON-экспорт.
 - `/invite/:token` — принятие одноразового приглашения существующим или новым пользователем.
+- `/recovery/:token` — установка нового пароля по одноразовой recovery-ссылке.
 
 Реализованный private API:
 
 - `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`;
+- `GET /api/v1/auth/sessions` и `DELETE .../:sessionId` — просмотр и отзыв активных устройств;
+- `POST /api/v1/auth/password` — смена пароля с отзывом остальных сессий;
+- `GET`/`POST /api/v1/auth/recovery/:token` — проверка и применение recovery token;
 - `POST /api/v1/auth/workspace` — membership-checked смена активного workspace;
 - `POST /api/v1/workspaces` — создание изолированного workspace и owner membership;
 - `GET /api/v1/workspaces/:workspaceId/access` — участники и ожидающие приглашения;
@@ -260,11 +265,21 @@ hash. Изменяющие запросы защищены CSRF, login огра�
 только через membership. Для production необходимо задать случайный `AUTH_SECRET` длиной
 не менее 32 символов, отдельный `EXCHANGE_CREDENTIALS_KEY` и использовать HTTPS.
 
-Публичные signup и recovery пока отсутствуют. Владелец создаёт одноразовую invite-ссылку
-в `/settings`; в БД хранится только SHA-256 токена. Новый пользователь задаёт имя и пароль,
-существующий подтверждает свой пароль. Пароли сохраняются как Argon2id hash. Для bootstrap
-остаётся `pnpm auth:create-user`; пароль передаётся только через
-`CRYPTOANAL_NEW_USER_PASSWORD`.
+Публичный signup и автоматическая email-доставка пока отсутствуют. Владелец создаёт
+одноразовую invite-ссылку в `/settings`; в БД хранится только SHA-256 токена. Новый
+пользователь задаёт имя и пароль, существующий подтверждает свой пароль. Пароли сохраняются
+как Argon2id hash. Для bootstrap остаётся `pnpm auth:create-user`; пароль передаётся только
+через `CRYPTOANAL_NEW_USER_PASSWORD`.
+
+До подключения email-провайдера администратор выпускает recovery-ссылку вручную:
+
+```bash
+pnpm auth:create-recovery --email owner@example.com
+```
+
+Ссылка одноразовая и действует `AUTH_RECOVERY_TTL_MINUTES`. Восстановление отзывает все
+активные сессии пользователя. Обычный вход ограничен `AUTH_MAX_ACTIVE_SESSIONS`; лишние
+старые сессии закрываются автоматически.
 
 Приватные Bybit credentials шифруются AES-256-GCM отдельным ключом окружения. API никогда
 не возвращает исходные значения, а после отзыва подключения ciphertext удаляется. До

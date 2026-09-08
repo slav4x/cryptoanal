@@ -115,6 +115,6 @@ rate limit возвращает `503` и не меняет прежний ста
 
 ## 7. Следующий срез
 
-1. Управление sessions и recovery.
-2. Отдельный подтверждаемый gate для demo, затем для live; live не включать автоматически.
-3. Версионированная master-key rotation и runbook восстановления.
+1. Отдельный подтверждаемый gate для demo, затем для live; live не включать автоматически.
+2. Версионированная master-key rotation и runbook восстановления.
+3. Email delivery для invitation/recovery после выбора провайдера.

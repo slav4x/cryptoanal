@@ -2,8 +2,8 @@
 
 > Текущий статус: этапы 1–7 завершены; основной контур этапа 8 готов. Реализованы session
 > auth, workspace isolation, invitations/member management, encrypted exchange connections
-> и multi-workspace worker. Остались security и product hardening.
-> Ближайший незавершённый контур — session management и recovery flows.
+> и multi-workspace worker. Session/recovery security flows также готовы. Остался
+> product hardening перед landing.
 
 Порядок обязателен: **dashboard → users/workspaces → landing**. Этапы ниже описывают
 результат, а не календарные сроки. Новый этап начинается после выполнения stop-gate
@@ -138,7 +138,8 @@ fake auth, глобальных user-owned данных и критичных д
 - [x] Выбрать auth approach/provider отдельным ADR.
 - [x] Добавить `User`, `Session`, `WorkspaceMembership`.
 - [x] Заменить development resolver на session-based `RequestContext`.
-- [ ] Реализовать signup/recovery и оставшиеся security flows.
+- [x] Реализовать session/device management, password rotation и recovery.
+- [ ] Реализовать public signup, email verification и автоматическую доставку auth-ссылок.
 - [x] Реализовать workspace creation/switching и owner membership.
 - [x] Реализовать invitations и управление участниками workspace.
 - [x] Закрыть private API membership-based workspace resolver.

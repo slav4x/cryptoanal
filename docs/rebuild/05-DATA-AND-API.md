@@ -437,6 +437,11 @@ GET  /dev-access/session
 GET  /api/v1/auth/session
 POST /api/v1/auth/login
 POST /api/v1/auth/logout
+GET  /api/v1/auth/sessions
+DELETE /api/v1/auth/sessions/:sessionId
+POST /api/v1/auth/password
+GET  /api/v1/auth/recovery/:token
+POST /api/v1/auth/recovery/:token
 POST /api/v1/auth/workspace
 POST /api/v1/workspaces
 GET  /api/v1/workspaces/:workspaceId/access
@@ -455,8 +460,10 @@ DELETE /api/v1/exchange-connections/:connectionId
 
 `RequestContext` строится из session. Все существующие предметные endpoints сохраняют
 contracts, а repository scope проверяется membership resolver. Управление участниками и
-credentials доступно только владельцу активного workspace. Публичны только чтение и
-принятие одноразового invitation token; signup/recovery отсутствуют.
+credentials доступно только владельцу активного workspace. Публичны чтение/принятие
+invitation и одноразовый recovery token. Recovery меняет Argon2id hash и отзывает все
+активные sessions; raw token хранится только у получателя ссылки. Public signup и
+автоматическая email-доставка отсутствуют.
 
 ## 11. Public API P2
 

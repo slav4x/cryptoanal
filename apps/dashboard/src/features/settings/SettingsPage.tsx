@@ -758,9 +758,20 @@ function ExchangeConnectionRow({
         </span>
         {connection.lastVerificationMessage ? (
           <span
-            className={`block text-[11px] ${connection.status === "invalid" ? "text-loss" : "text-muted-foreground"}`}
+            className={`block text-[11px] ${
+              connection.status === "invalid"
+                ? "text-loss"
+                : connection.lastVerificationCode !== "VERIFIED"
+                  ? "text-warning"
+                  : "text-muted-foreground"
+            }`}
           >
             {connection.lastVerificationMessage}
+          </span>
+        ) : null}
+        {connection.nextVerificationAt ? (
+          <span className="block text-[10px] text-stale">
+            Следующая проверка {formatDateTime(connection.nextVerificationAt)}
           </span>
         ) : null}
         {connection.lastVerifiedAt ? (

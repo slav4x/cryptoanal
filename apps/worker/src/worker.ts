@@ -15,6 +15,7 @@ import {
   type ExecutionSettlement,
   type PendingExecutionSignal,
   type ValidationCandle,
+  validationDatasetSource,
 } from "@cryptoanal/application";
 import { loadServerConfig } from "@cryptoanal/config";
 import {
@@ -179,14 +180,30 @@ async function accountSnapshotLoop() {
     const workspaceIds = await listOperationalWorkspaceIds("account snapshot");
     for (const workspaceId of workspaceIds) {
       try {
+        const knownAccountIds = await accountSnapshotRepository.listDryRunAccountIds(workspaceId);
+        const accountIds =
+          knownAccountIds.length > 0 ? knownAccountIds : [config.DRY_RUN_ACCOUNT_ID];
+        for (const exchangeAccountId of accountIds) {
+          await accountSnapshotRepository.captureDryRunSnapshot({
+            workspaceId,
+            exchangeAccountId,
+            initialBalance: String(config.DRY_RUN_INITIAL_BALANCE),
+          });
+        }
         const snapshot = await accountSnapshotRepository.captureDryRunSnapshot({
           workspaceId,
-          exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
-          initialBalance: String(config.DRY_RUN_INITIAL_BALANCE),
+          exchangeAccountId: `${config.DRY_RUN_ACCOUNT_ID}:portfolio`,
+          sourceAccountIds: accountIds,
+          initialBalance: String(config.DRY_RUN_INITIAL_BALANCE * accountIds.length),
         });
         logger.debug(
-          { workspaceId, equity: snapshot.equity.toFixed(), observedAt: snapshot.observedAt },
-          "Dry-run account snapshot updated",
+          {
+            workspaceId,
+            accounts: accountIds.length,
+            equity: snapshot.equity.toFixed(),
+            observedAt: snapshot.observedAt,
+          },
+          "Dry-run portfolio snapshot updated",
         );
       } catch (error) {
         logger.error({ err: error, workspaceId }, "Failed to update dry-run account snapshot");
@@ -466,6 +483,7 @@ async function processRuntimeTarget(
     try {
       const state = await runtimeRepository.getCycleState({
         workspaceId: target.workspaceId,
+        exchangeAccountId: target.exchangeAccountId,
         executionRunId: executionRun.id,
         symbol,
         interval,
@@ -499,6 +517,7 @@ async function processRuntimeTarget(
       const pendingSignal = parsePendingSignal(state.cursor?.pendingSignal ?? null);
       const equity = await runtimeRepository.getDryRunEquity(
         target.workspaceId,
+        target.exchangeAccountId,
         String(config.DRY_RUN_INITIAL_BALANCE),
       );
       const tradingDay = getTradingDateKey(candle.openTime, strategyConfig.schedule.timezone);
@@ -1200,7 +1219,6 @@ const validationPollIntervalMs = 2_000;
 const validationLeaseMs = 5 * 60_000;
 const maximumDatasetCandles = 250_000;
 const persistenceBatchSize = 2_000;
-const validationDatasetSource = "bybit-public-linear-klines";
 const timeframeMinutes = { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 } as const;
 const bybitIntervals: Record<keyof typeof timeframeMinutes, string> = {
   "5m": "5",

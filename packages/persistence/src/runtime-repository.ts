@@ -115,6 +115,7 @@ export class RuntimeRepository {
 
   public async getCycleState(input: {
     workspaceId: string;
+    exchangeAccountId: string;
     executionRunId: string;
     symbol: string;
     interval: string;
@@ -176,7 +177,9 @@ export class RuntimeRepository {
       this.prisma.trade.findMany({
         where: {
           workspaceId: input.workspaceId,
-          executionRunId: input.executionRunId,
+          executionRun: {
+            deployment: { exchangeAccountId: input.exchangeAccountId },
+          },
           closedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1_000) },
         },
         select: { closedAt: true, netPnl: true },
@@ -186,14 +189,27 @@ export class RuntimeRepository {
     return { cursor, position, candles: candles.reverse(), recentTrades };
   }
 
-  public async getDryRunEquity(workspaceId: string, initialBalance: string) {
+  public async getDryRunEquity(
+    workspaceId: string,
+    exchangeAccountId: string,
+    initialBalance: string,
+  ) {
     const [trades, positions] = await Promise.all([
       this.prisma.trade.aggregate({
-        where: { workspaceId, environment: "DRY_RUN" },
+        where: {
+          workspaceId,
+          environment: "DRY_RUN",
+          executionRun: { deployment: { exchangeAccountId } },
+        },
         _sum: { netPnl: true },
       }),
       this.prisma.position.findMany({
-        where: { workspaceId, environment: "DRY_RUN", status: "OPEN" },
+        where: {
+          workspaceId,
+          environment: "DRY_RUN",
+          status: "OPEN",
+          executionRun: { deployment: { exchangeAccountId } },
+        },
         select: { unrealizedPnl: true },
       }),
     ]);

@@ -12,6 +12,7 @@ export type QueueValidationRunInput = {
   requestId: string;
   kind: ValidationJobKind;
   datasetId: string;
+  datasetSnapshotId: string | null;
   datasetAsOf: Date;
   engineVersion: string;
   configHash: string;
@@ -130,6 +131,39 @@ export class ValidationRepository {
         _count: { select: { trades: true } },
       },
     });
+  }
+
+  public async findHistoricalDatasetSnapshot(input: {
+    workspaceId: string;
+    source: string;
+    exchange: string;
+    instrumentType: string;
+    timeframe: string;
+    symbols: string[];
+    startsAt: Date;
+    endDayStartsAt: Date;
+    endDayEndsAt: Date;
+  }) {
+    const snapshots = await this.prisma.datasetSnapshot.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        source: input.source,
+        exchange: input.exchange,
+        instrumentType: input.instrumentType,
+        timeframe: input.timeframe,
+        startsAt: input.startsAt,
+        endsAt: { gte: input.endDayStartsAt, lte: input.endDayEndsAt },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: datasetSnapshotSelect,
+    });
+    const symbols = [...new Set(input.symbols)].sort();
+    return (
+      snapshots.find(
+        (snapshot) => JSON.stringify(readStringArray(snapshot.symbols)) === JSON.stringify(symbols),
+      ) ?? null
+    );
   }
 
   public async claimNext(
@@ -503,7 +537,7 @@ export class ValidationRepository {
       }
 
       const completedAt = new Date();
-      await transaction.validationRun.update({
+      const run = await transaction.validationRun.update({
         where: { id: input.runId },
         data: {
           status: "FAILED",
@@ -512,6 +546,7 @@ export class ValidationRepository {
           failureMessage: input.failureMessage,
           completedAt,
         },
+        select: { strategyId: true },
       });
       await transaction.job.update({
         where: { id: input.jobId },
@@ -523,6 +558,14 @@ export class ValidationRepository {
           lockedBy: null,
           lockedAt: null,
         },
+      });
+      await transaction.strategy.updateMany({
+        where: {
+          id: run.strategyId,
+          workspaceId: input.workspaceId,
+          status: "VALIDATING",
+        },
+        data: { status: "DRAFT", updatedByActorId: input.workerId },
       });
       await transaction.auditEvent.create({
         data: {
@@ -602,6 +645,7 @@ export class ValidationRepository {
           strategyVersionId: input.strategyVersionId,
           kind: input.kind,
           datasetId: input.datasetId,
+          datasetSnapshotId: input.datasetSnapshotId,
           datasetAsOf: input.datasetAsOf,
           engineVersion: input.engineVersion,
           configHash: input.configHash,

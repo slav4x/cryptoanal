@@ -16,6 +16,7 @@ import {
 export type ValidationCandle = ExecutionCandle;
 
 export const validationEngineVersion = "cryptoanal-validation@0.2.0";
+export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
 
@@ -246,7 +247,10 @@ function runBacktest(
     trades.push(closed);
     equity += closed.netPnl;
   }
-  const lastTime = Math.max(...input.candles.map((candle) => candle.openTime.getTime()));
+  const lastTime = input.candles.reduce(
+    (latest, candle) => Math.max(latest, candle.openTime.getTime()),
+    Number.NEGATIVE_INFINITY,
+  );
   if (Number.isFinite(lastTime)) {
     equitySeries.push({ observedAt: new Date(lastTime).toISOString(), equity: round(equity) });
   }

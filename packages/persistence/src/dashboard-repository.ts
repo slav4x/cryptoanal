@@ -14,6 +14,7 @@ export class DashboardRepository {
   public async getOverview(
     workspaceId: string,
     equityWindow: { startsAt: Date; bucketSeconds: number },
+    portfolioAccountId: string,
   ) {
     const startOfUtcDay = new Date();
     startOfUtcDay.setUTCHours(0, 0, 0, 0);
@@ -25,7 +26,7 @@ export class DashboardRepository {
       dayAggregate,
       account,
       heartbeat,
-      activeDeployment,
+      activeDeployments,
     ] = await Promise.all([
       this.prisma.position.findMany({
         where: { workspaceId, status: "OPEN" },
@@ -48,7 +49,7 @@ export class DashboardRepository {
         _sum: { netPnl: true },
       }),
       this.prisma.accountSnapshot.findFirst({
-        where: { workspaceId },
+        where: { workspaceId, exchangeAccountId: portfolioAccountId },
         orderBy: { observedAt: "desc" },
         select: {
           exchangeAccountId: true,
@@ -63,9 +64,8 @@ export class DashboardRepository {
         orderBy: { lastSeenAt: "desc" },
         select: { lastSeenAt: true },
       }),
-      this.prisma.deployment.findFirst({
+      this.prisma.deployment.findMany({
         where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
-        orderBy: { updatedAt: "desc" },
         select: {
           status: true,
           executionRuns: {
@@ -119,8 +119,16 @@ export class DashboardRepository {
         : null,
       equitySeries,
       workerLastSeenAt: heartbeat?.lastSeenAt ?? null,
-      runtimeDeploymentStatus: activeDeployment?.status ?? null,
-      runtimeHasFailures: (activeDeployment?.executionRuns[0]?.runtimeCursors.length ?? 0) > 0,
+      runtimeDeploymentStatus: activeDeployments.some(
+        (deployment) => deployment.status === "RUNNING",
+      )
+        ? ("RUNNING" as const)
+        : activeDeployments.some((deployment) => deployment.status === "PAUSED")
+          ? ("PAUSED" as const)
+          : null,
+      runtimeHasFailures: activeDeployments.some(
+        (deployment) => (deployment.executionRuns[0]?.runtimeCursors.length ?? 0) > 0,
+      ),
     };
   }
 

@@ -4,6 +4,7 @@ import { Prisma } from "./generated/prisma/client";
 type CaptureDryRunSnapshotInput = {
   workspaceId: string;
   exchangeAccountId: string;
+  sourceAccountIds?: string[];
   initialBalance: string;
   observedAt?: Date;
 };
@@ -11,19 +12,38 @@ type CaptureDryRunSnapshotInput = {
 export class AccountSnapshotRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
 
+  public async listDryRunAccountIds(workspaceId: string) {
+    const deployments = await this.prisma.deployment.findMany({
+      where: {
+        workspaceId,
+        environment: "DRY_RUN",
+      },
+      distinct: ["exchangeAccountId"],
+      orderBy: { exchangeAccountId: "asc" },
+      select: { exchangeAccountId: true },
+    });
+    return deployments.map((deployment) => deployment.exchangeAccountId);
+  }
+
   public async captureDryRunSnapshot({
     workspaceId,
     exchangeAccountId,
+    sourceAccountIds = [exchangeAccountId],
     initialBalance,
     observedAt = new Date(),
   }: CaptureDryRunSnapshotInput) {
+    const accountFilter = {
+      executionRun: {
+        deployment: { exchangeAccountId: { in: sourceAccountIds } },
+      },
+    } as const;
     const [tradeAggregate, positions] = await Promise.all([
       this.prisma.trade.aggregate({
-        where: { workspaceId, environment: "DRY_RUN" },
+        where: { workspaceId, environment: "DRY_RUN", ...accountFilter },
         _sum: { netPnl: true },
       }),
       this.prisma.position.findMany({
-        where: { workspaceId, environment: "DRY_RUN", status: "OPEN" },
+        where: { workspaceId, environment: "DRY_RUN", status: "OPEN", ...accountFilter },
         select: { unrealizedPnl: true },
       }),
     ]);

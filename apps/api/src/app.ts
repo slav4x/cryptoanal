@@ -7,6 +7,7 @@ import {
   evaluateStrategyLifecycle,
   getDeploymentCommands,
   settleExecutionPosition,
+  validationDatasetSource,
   validationEngineVersion,
 } from "@cryptoanal/application";
 import type { ServerConfig } from "@cryptoanal/config";
@@ -1070,10 +1071,14 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       const workspace = requireWorkspace(request);
       const period = request.query.period;
       const periodConfig = overviewPeriodConfig[period];
-      const overview = await repository.getOverview(workspace.id, {
-        startsAt: new Date(Date.now() - periodConfig.durationMs),
-        bucketSeconds: periodConfig.bucketSeconds,
-      });
+      const overview = await repository.getOverview(
+        workspace.id,
+        {
+          startsAt: new Date(Date.now() - periodConfig.durationMs),
+          bucketSeconds: periodConfig.bucketSeconds,
+        },
+        `${config.DRY_RUN_ACCOUNT_ID}:portfolio`,
+      );
       const now = Date.now();
       const workerHealthy = overview.workerLastSeenAt
         ? now - overview.workerLastSeenAt.getTime() < 45_000
@@ -2771,6 +2776,25 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       const datasetHash = createHash("sha256")
         .update(JSON.stringify(executionInput.dataset))
         .digest("hex");
+      const datasetStartsAt = new Date(`${executionInput.dataset.startDate}T00:00:00.000Z`);
+      const datasetEndDayStartsAt = new Date(`${executionInput.dataset.endDate}T00:00:00.000Z`);
+      const datasetEndDayEndsAt = new Date(`${executionInput.dataset.endDate}T23:59:59.999Z`);
+      const startOfCurrentUtcDay = new Date();
+      startOfCurrentUtcDay.setUTCHours(0, 0, 0, 0);
+      const reusableSnapshot =
+        datasetEndDayEndsAt < startOfCurrentUtcDay
+          ? await validationRepository.findHistoricalDatasetSnapshot({
+              workspaceId: workspace.id,
+              source: validationDatasetSource,
+              exchange: "bybit",
+              instrumentType: "linear-perpetual",
+              timeframe: executionInput.dataset.timeframe,
+              symbols: executionInput.dataset.symbols,
+              startsAt: datasetStartsAt,
+              endDayStartsAt: datasetEndDayStartsAt,
+              endDayEndsAt: datasetEndDayEndsAt,
+            })
+          : null;
 
       try {
         const queued = await validationRepository.queue({
@@ -2780,8 +2804,11 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           actorId: requireContext(request).actorId,
           requestId: request.id,
           kind: persistedValidationKind[executionInput.kind],
-          datasetId: `market-candles-request:${datasetHash}`,
-          datasetAsOf: new Date(),
+          datasetId: reusableSnapshot
+            ? `dataset-snapshot:${reusableSnapshot.id}`
+            : `market-candles-request:${datasetHash}`,
+          datasetSnapshotId: reusableSnapshot?.id ?? null,
+          datasetAsOf: reusableSnapshot?.endsAt ?? new Date(),
           engineVersion: validationEngineVersion,
           configHash: version.configHash,
           input: executionInput,
@@ -2885,7 +2912,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           requestId: request.id,
           idempotencyKey: request.body.idempotencyKey,
           exchangeConnectionId: request.body.exchangeConnectionId,
-          exchangeAccountId: config.DRY_RUN_ACCOUNT_ID,
+          exchangeAccountId: `${config.DRY_RUN_ACCOUNT_ID}:strategy:${request.params.strategyId}`,
         });
 
         return reply.status(201).send({

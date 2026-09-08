@@ -35,7 +35,30 @@ Bybit credentials, deployment binding, periodic verification, управлени
 - pnpm 10+;
 - Docker с Compose либо PostgreSQL 17+.
 
-## Запуск
+## Постоянный локальный запуск через Docker
+
+После заполнения `.env` весь контур запускается одной командой:
+
+```bash
+docker compose up -d --build
+```
+
+Compose сохраняет PostgreSQL в именованном volume, автоматически применяет миграции перед
+стартом API и перезапускает сервисы после сбоя или рестарта Docker. Проверка состояния и
+просмотр логов:
+
+```bash
+docker compose ps
+docker compose logs -f api worker
+```
+
+Остановка приложений без удаления базы:
+
+```bash
+docker compose stop api worker dashboard
+```
+
+## Запуск для разработки без контейнеров приложений
 
 ```bash
 cp .env.example .env
@@ -48,6 +71,8 @@ CRYPTOANAL_NEW_USER_PASSWORD='use-a-long-local-password' \
   pnpm auth:create-user --email owner@example.com --name 'Owner' --workspace development
 pnpm dev
 ```
+
+В этом режиме PostgreSQL работает в Docker, а API, worker и Vite — как локальные процессы.
 
 Адреса:
 

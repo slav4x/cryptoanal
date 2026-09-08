@@ -15,6 +15,7 @@
 - [x] Собрать dashboard shell, Overview и Markets.
 - [x] Подключить реальный public Bybit market data adapter.
 - [x] Закрыть dashboard полноценным session-based access gate.
+- [x] Упаковать API, worker и dashboard в Docker Compose с healthcheck и автоперезапуском.
 
 ## Этап 2 — Trading data
 

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Docker Compose services for the API, worker and production-built dashboard with health checks, automatic migrations and restart policies.
 - Account security controls for listing and revoking active sessions, changing passwords and enforcing a configurable session limit.
 - One-time password recovery tokens, an administrator recovery-link command and a public recovery screen that revokes all previous sessions.
 

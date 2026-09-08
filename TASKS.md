@@ -39,14 +39,16 @@
 - [x] Dry-run deployments и execution runs.
 - [x] Immutable execution context с hash и provenance validation run.
 - [x] Start/pause/resume/stop commands, confirmations, idempotency и audit trail.
-- [x] Один активный deployment на dry-run account.
+- [x] Один активный deployment на изолированный dry-run account.
+- [x] Параллельные strategy deployments с автоматическими account ids и portfolio snapshot.
 - [x] Worker execution loop для активного dry-run deployment.
 - [x] Manual close позиции как отдельная команда.
 
 ## Этап 4 — Validation Center
 
 - [x] Единая execution semantics runtime/backtest.
-- [x] Immutable dataset snapshots с content hash и повторным использованием.
+- [x] Immutable dataset snapshots с content hash и повторным использованием исторических
+      наборов без повторной загрузки.
 - [x] Durable очередь ValidationRun/Job для backtest и walk-forward.
 - [x] Run composer и мониторинг очереди в Validation Center.
 - [x] Worker execution для backtest/walk-forward jobs.
@@ -105,7 +107,7 @@
 
 ## Идеи
 
-- Multi-strategy allocation.
+- Shared-account multi-strategy allocation для будущего demo/live execution.
 - Team roles beyond owner/member.
 - Billing.
 - AI assistant.

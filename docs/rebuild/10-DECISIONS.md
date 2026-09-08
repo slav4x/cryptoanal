@@ -55,10 +55,13 @@ Dashboard не обращается к exchange/DB. API — boundary/use cases, 
 
 Run, deployment, position и trade всегда указывают точную версию/config hash.
 
-### D-011. Multi-strategy не заявляется до реального исполнения
+### D-011. Dry-run multi-strategy использует изолированные accounts
 
-Data model может быть готова к нескольким deployments, но P0 поддерживает один активный
-deployment на execution account до реализации allocation/conflict/risk attribution.
+P0 исполняет несколько deployments параллельно, но автоматически назначает каждой
+стратегии отдельный virtual dry-run account. Equity, дневной PnL, позиции и snapshots
+считаются в границах account; overview использует отдельный агрегированный portfolio
+snapshot. Один account по-прежнему допускает только один active deployment. Совместный
+demo/live account остаётся заблокированным до allocation/conflict/risk attribution.
 
 ### D-012. Journal и playbooks входят в dashboard
 

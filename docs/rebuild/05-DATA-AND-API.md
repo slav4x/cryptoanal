@@ -244,6 +244,9 @@ context hash позволяет обнаружить любое изменени
 `CommandReceipt` делает create/start/pause/resume/stop идемпотентными во времени, а
 `expectedStatus` защищает от команд по устаревшему UI. Account-level advisory lock
 обеспечивает не более одного deployment в ready/running/paused на dry-run account.
+API автоматически создаёт стабильный account id из базового `DRY_RUN_ACCOUNT_ID` и
+`strategyId`, поэтому разные стратегии могут работать параллельно на изолированном
+капитале. Worker дополнительно пишет сводный portfolio snapshot по всем dry-run accounts.
 Pause/resume сохраняют исходный execution run, stop атомарно завершает его и возвращает
 стратегию в approved. Каждая успешная команда создаёт `AuditEvent` с причиной и
 переходом состояния.

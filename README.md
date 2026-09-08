@@ -215,7 +215,8 @@ walk-forward. Результат содержит PnL, доходность, dra
 
 Перед расчётом worker материализует фактические свечи в immutable `DatasetSnapshot`.
 Snapshot хранит source, timeframe, пары, фактический диапазон, candle count и content
-hash; одинаковый набор данных повторно используется внутри workspace. Validation run
+hash; одинаковый завершённый исторический набор данных повторно используется внутри
+workspace без повторной загрузки с биржи. Validation run
 ссылается на snapshot до запуска engine, поэтому после потери lease или перезапуска
 worker продолжает работу на том же наборе, а не загружает изменившуюся историю заново.
 
@@ -226,8 +227,11 @@ per-symbol breakdown и provenance загружаются отдельным det
 идентификатор, hash, источник и фактические границы immutable dataset snapshot.
 
 Dry-run deployment создаётся только для активной approved-версии, имеющей завершённую
-passed-валидацию с тем же config hash. На один `DRY_RUN_ACCOUNT_ID` допускается один
-deployment в состоянии ready/running/paused. Start создаёт новый immutable
+passed-валидацию с тем же config hash. Каждая стратегия автоматически получает отдельный
+виртуальный account `${DRY_RUN_ACCOUNT_ID}:strategy:<strategyId>`; на один такой account
+допускается один deployment в состоянии ready/running/paused. Поэтому несколько стратегий
+могут безопасно исполняться параллельно без смешивания капитала, дневного PnL и открытых
+позиций. Start создаёт новый immutable
 `ExecutionRun.context` с version/config/validation provenance, безопасным snapshot
 выбранного `ACTIVE` Bybit connection и SHA-256 context hash;
 pause/resume продолжают тот же run, stop завершает его. Каждая команда требует
@@ -327,14 +331,16 @@ incident. `credentialRevision` не позволяет запоздавшему 
 
 ## Dry-run account
 
-Worker сохраняет отдельные account snapshots для каждого workspace с membership активного
-пользователя. Капитал рассчитывается как `DRY_RUN_INITIAL_BALANCE + realized PnL +
-unrealized PnL`; доступный баланс остаётся неопределённым до появления risk/margin model
-или private exchange adapter.
+Worker сохраняет account snapshots каждого виртуального strategy account и сводный
+`${DRY_RUN_ACCOUNT_ID}:portfolio`. Капитал отдельной стратегии рассчитывается как
+`DRY_RUN_INITIAL_BALANCE + realized PnL + unrealized PnL`; portfolio складывает капиталы и
+PnL всех известных dry-run accounts. Доступный баланс остаётся неопределённым до появления
+risk/margin model или private exchange adapter.
 
 Настройки:
 
-- `DRY_RUN_ACCOUNT_ID` — стабильный идентификатор dry-run счёта внутри каждого workspace;
+- `DRY_RUN_ACCOUNT_ID` — базовый идентификатор для strategy accounts и portfolio внутри
+  каждого workspace;
 - `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
 - `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут;
 - `RUNTIME_POLL_INTERVAL_MS` — частота поиска новых завершённых свечей, по умолчанию 5 секунд.

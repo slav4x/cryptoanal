@@ -66,6 +66,7 @@ polling и без прямого обращения UI к exchange.
 - [x] Реализовать manual close позиции как отдельную command.
 - [x] Добавить confirmations, optimistic state, durable idempotency и audit events.
 - [x] Поддерживать один активный deployment на account до multi-strategy readiness.
+- [x] Запускать несколько dry-run стратегий параллельно на изолированных virtual accounts.
 - [x] Подключить worker execution loop к running dry-run deployment.
 
 **Готово, когда:** стратегию можно создать, версионировать и безопасно запустить из UI;
@@ -187,13 +188,14 @@ private strategies или управляющие endpoints.
 - Нельзя начинать полноценную auth-модель до стабилизации ownership и workflows dashboard.
 - Нельзя публиковать P0 dashboard без private network/access gate.
 - Нельзя строить landing как замену незавершённому продукту.
-- Нельзя запускать multi-strategy только потому, что schema содержит profile/allocations.
+- Нельзя переносить изолированный dry-run multi-strategy в общий demo/live account без
+  portfolio allocation и конфликтной политики.
 - Нельзя переносить стратегию со статусом validated при конфликтующих источниках.
 - Нельзя разрешать live execution без отдельного operational readiness review.
 
 ## Ideas — не реализовывать без отдельного запроса
 
-- multi-strategy portfolio allocation;
+- shared-account multi-strategy portfolio allocation для demo/live;
 - team roles beyond owner/member;
 - billing/subscriptions;
 - AI assistant/coach;

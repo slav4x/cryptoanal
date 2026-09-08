@@ -4,6 +4,9 @@
 
 ### Added
 
+- Parallel dry-run strategy execution with automatically isolated per-strategy accounts and an aggregated portfolio snapshot.
+- Reuse of exact immutable historical dataset snapshots across backtest and walk-forward runs.
+- Parallel strategy experiment record with accepted and rejected configurations.
 - Docker Compose services for the API, worker and production-built dashboard with health checks, automatic migrations and restart policies.
 - Account security controls for listing and revoking active sessions, changing passwords and enforcing a configurable session limit.
 - One-time password recovery tokens, an administrator recovery-link command and a public recovery screen that revokes all previous sessions.
@@ -104,6 +107,8 @@
 
 ### Changed
 
+- Overview runtime health now aggregates all active deployments instead of inspecting only the most recently updated one.
+- Dry-run equity, daily loss state and snapshots are scoped to the deployment account.
 - Dashboard visual system aligned with the approved `crypto-trade/design` direction.
 - Dashboard typography, control geometry, semantic metrics and desktop shell refined against the source HTML mockups.
 - Overview now reports account freshness and uses bucketed account snapshots instead of placeholder capital data.
@@ -126,3 +131,8 @@
 - Deployment start/resume requires an active connection; confirmed invalid credentials pause running deployments and fail ready deployments.
 - Credential rotation and revocation are blocked while the connection is used by an active deployment.
 - Credential revisions prevent stale manual or worker verification results from overwriting rotated keys.
+
+### Fixed
+
+- Validation no longer overflows the JavaScript call stack when processing large candle datasets.
+- Technical validation failures return the strategy to draft so it can be corrected and queued again.

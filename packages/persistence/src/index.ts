@@ -13,6 +13,9 @@ export {
   AuthInvitationMembershipExistsError,
   AuthLastOwnerError,
   AuthMemberNotFoundError,
+  AuthPasswordConflictError,
+  AuthRecoveryInvalidError,
+  AuthSessionNotFoundError,
   AuthWorkspaceAccessDeniedError,
   AuthWorkspaceLimitReachedError,
 } from "./auth-repository";

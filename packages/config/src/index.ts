@@ -26,6 +26,13 @@ const serverConfigSchema = z
       .min(1)
       .max(24 * 30)
       .default(24 * 7),
+    AUTH_MAX_ACTIVE_SESSIONS: z.coerce.number().int().min(1).max(50).default(10),
+    AUTH_RECOVERY_TTL_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(10)
+      .max(24 * 60)
+      .default(60),
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),

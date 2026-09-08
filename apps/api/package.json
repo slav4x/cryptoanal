@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "auth:create-user": "tsx --env-file=../../.env src/create-user.ts",
+    "auth:create-recovery": "tsx --env-file=../../.env src/create-recovery.ts",
     "dev": "tsx watch --env-file=../../.env src/server.ts",
     "build": "tsup src/server.ts --format esm --clean --sourcemap",
     "start": "node dist/server.js",

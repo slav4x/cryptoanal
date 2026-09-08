@@ -29,6 +29,46 @@ export const authLoginSchema = z.object({
   password: z.string().min(1).max(256),
 });
 
+export const authSessionParamsSchema = z.object({ sessionId: z.uuid() });
+export const authManagedSessionSchema = z.object({
+  id: z.uuid(),
+  current: z.boolean(),
+  createdAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  expiresAt: z.iso.datetime(),
+  userAgent: z.string().nullable(),
+  ipAddress: z.string().nullable(),
+});
+export const authSessionsSchema = z.object({ sessions: z.array(authManagedSessionSchema) });
+export const authSessionRevokedSchema = z.object({
+  revoked: z.literal(true),
+  current: z.boolean(),
+});
+export const authPasswordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(256),
+    newPassword: z.string().min(12).max(256),
+  })
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    message: "Новый пароль должен отличаться от текущего",
+    path: ["newPassword"],
+  });
+export const authPasswordChangedSchema = z.object({
+  changed: z.literal(true),
+  revokedSessions: z.number().int().nonnegative(),
+});
+export const authRecoveryTokenParamsSchema = z.object({
+  token: z.string().regex(/^[A-Za-z0-9_-]{40,128}$/),
+});
+export const authRecoveryDetailsSchema = z.object({
+  emailHint: z.string(),
+  expiresAt: z.iso.datetime(),
+});
+export const authPasswordRecoverySchema = z.object({
+  newPassword: z.string().min(12).max(256),
+});
+export const authPasswordRecoveredSchema = z.object({ recovered: z.literal(true) });
+
 export const authWorkspaceSchema = z.object({
   id: z.string(),
   slug: z.string(),
@@ -1420,6 +1460,14 @@ export type RequestContextDto = z.infer<typeof requestContextSchema>;
 export type AuthLoginDto = z.infer<typeof authLoginSchema>;
 export type AuthSessionDto = z.infer<typeof authSessionSchema>;
 export type AuthWorkspaceDto = z.infer<typeof authWorkspaceSchema>;
+export type AuthManagedSessionDto = z.infer<typeof authManagedSessionSchema>;
+export type AuthSessionsDto = z.infer<typeof authSessionsSchema>;
+export type AuthSessionRevokedDto = z.infer<typeof authSessionRevokedSchema>;
+export type AuthPasswordChangeDto = z.infer<typeof authPasswordChangeSchema>;
+export type AuthPasswordChangedDto = z.infer<typeof authPasswordChangedSchema>;
+export type AuthRecoveryDetailsDto = z.infer<typeof authRecoveryDetailsSchema>;
+export type AuthPasswordRecoveryDto = z.infer<typeof authPasswordRecoverySchema>;
+export type AuthPasswordRecoveredDto = z.infer<typeof authPasswordRecoveredSchema>;
 export type WorkspaceSwitchDto = z.infer<typeof workspaceSwitchSchema>;
 export type WorkspaceCreateDto = z.infer<typeof workspaceCreateSchema>;
 export type WorkspaceAccessDto = z.infer<typeof workspaceAccessSchema>;

@@ -13,6 +13,7 @@
     "build": "pnpm -r --if-present run build",
     "check:budgets": "node scripts/check-dashboard-budgets.mjs",
     "auth:create-user": "pnpm --filter @cryptoanal/api run auth:create-user --",
+    "auth:create-recovery": "pnpm --filter @cryptoanal/api run auth:create-recovery --",
     "migration:audit": "tsx scripts/audit-legacy-migration.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",

@@ -208,17 +208,31 @@ model Workspace {
 }
 
 model User {
-  id                  String                @id @default(uuid())
-  email               String                @unique @db.VarChar(320)
+  id                  String                  @id @default(uuid())
+  email               String                  @unique @db.VarChar(320)
   passwordHash        String
-  displayName         String                @db.VarChar(120)
-  disabledAt          DateTime?             @db.Timestamptz(3)
-  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
+  displayName         String                  @db.VarChar(120)
+  disabledAt          DateTime?               @db.Timestamptz(3)
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
   memberships         WorkspaceMembership[]
   sessions            Session[]
-  sentInvitations     WorkspaceInvitation[] @relation("InvitationInviter")
-  acceptedInvitations WorkspaceInvitation[] @relation("InvitationAcceptor")
+  passwordRecoveries  PasswordRecoveryToken[]
+  sentInvitations     WorkspaceInvitation[]   @relation("InvitationInviter")
+  acceptedInvitations WorkspaceInvitation[]   @relation("InvitationAcceptor")
+}
+
+model PasswordRecoveryToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @db.Char(64)
+  userId    String
+  expiresAt DateTime  @db.Timestamptz(3)
+  usedAt    DateTime? @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 model WorkspaceMembership {

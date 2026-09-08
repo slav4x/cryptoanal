@@ -13,7 +13,16 @@ import type { ServerConfig } from "@cryptoanal/config";
 import {
   apiEnvelopeSchema,
   authLoginSchema,
+  authPasswordChangedSchema,
+  authPasswordChangeSchema,
+  authPasswordRecoveredSchema,
+  authPasswordRecoverySchema,
+  authRecoveryDetailsSchema,
+  authRecoveryTokenParamsSchema,
+  authSessionParamsSchema,
+  authSessionRevokedSchema,
   authSessionSchema,
+  authSessionsSchema,
   invitationAcceptSchema,
   invitationDetailsSchema,
   invitationTokenParamsSchema,
@@ -113,8 +122,11 @@ import {
   AuthInvitationMembershipExistsError,
   AuthLastOwnerError,
   AuthMemberNotFoundError,
+  AuthPasswordConflictError,
+  AuthRecoveryInvalidError,
   AuthWorkspaceAccessDeniedError,
   AuthWorkspaceLimitReachedError,
+  AuthSessionNotFoundError,
   type CryptoAnalPrismaClient,
   DashboardRepository,
   CredentialCipher,
@@ -457,15 +469,25 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       }
       const rawToken = randomBytes(32).toString("base64url");
       const expiresAt = new Date(Date.now() + config.AUTH_SESSION_TTL_HOURS * 60 * 60_000);
-      const createdSession = await authRepository.createSession({
-        tokenHash: hashSessionToken(rawToken),
-        userId: user.id,
-        workspaceId: membership.workspace.id,
-        expiresAt,
-        userAgent: normalizeHeader(request.headers["user-agent"]),
-        ipAddress: request.ip,
-        requestId: request.id,
-      });
+      let createdSession: { id: string };
+      try {
+        createdSession = await authRepository.createSession({
+          tokenHash: hashSessionToken(rawToken),
+          userId: user.id,
+          workspaceId: membership.workspace.id,
+          expiresAt,
+          userAgent: normalizeHeader(request.headers["user-agent"]),
+          ipAddress: request.ip,
+          requestId: request.id,
+          maxActiveSessions: config.AUTH_MAX_ACTIVE_SESSIONS,
+          expectedPasswordHash: user.passwordHash,
+        });
+      } catch (error) {
+        if (error instanceof AuthPasswordConflictError) {
+          throw new ApiError(401, "AUTH_INVALID_CREDENTIALS", "Неверный email или пароль");
+        }
+        throw error;
+      }
       reply.setCookie(sessionCookieName, rawToken, sessionCookieOptions(config));
       const context = {
         sessionId: createdSession.id,
@@ -501,6 +523,173 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
       });
       reply.clearCookie(sessionCookieName, sessionCookieOptions(config));
       return { data: { authenticated: false as const }, meta: createMeta(request.id, "fresh") };
+    },
+  );
+
+  app.get(
+    "/api/v1/auth/sessions",
+    {
+      schema: {
+        response: { 200: apiEnvelopeSchema(authSessionsSchema) },
+      },
+    },
+    async (request) => {
+      const context = requireContext(request);
+      const sessions = await authRepository.listSessions(context.user.id, context.sessionId);
+      return {
+        data: {
+          sessions: sessions.map((session) => ({
+            ...session,
+            createdAt: session.createdAt.toISOString(),
+            lastSeenAt: session.lastSeenAt.toISOString(),
+            expiresAt: session.expiresAt.toISOString(),
+          })),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.delete(
+    "/api/v1/auth/sessions/:sessionId",
+    {
+      schema: {
+        params: authSessionParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(authSessionRevokedSchema),
+          404: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const context = requireContext(request);
+      try {
+        const result = await authRepository.revokeUserSession({
+          sessionId: request.params.sessionId,
+          currentSessionId: context.sessionId,
+          userId: context.user.id,
+          workspaceId: context.workspace.id,
+          requestId: request.id,
+        });
+        if (result.current) {
+          reply.clearCookie(sessionCookieName, sessionCookieOptions(config));
+        }
+        return {
+          data: { revoked: true as const, current: result.current },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        if (error instanceof AuthSessionNotFoundError) {
+          throw new ApiError(404, "AUTH_SESSION_NOT_FOUND", "Сессия не найдена или уже завершена");
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/password",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "15 minutes" } },
+      schema: {
+        body: authPasswordChangeSchema,
+        response: {
+          200: apiEnvelopeSchema(authPasswordChangedSchema),
+          403: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          429: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const context = requireContext(request);
+      const user = await authRepository.findUserForLogin(context.user.email);
+      if (!user || !(await verify(user.passwordHash, request.body.currentPassword))) {
+        throw new ApiError(403, "AUTH_CURRENT_PASSWORD_INVALID", "Текущий пароль указан неверно");
+      }
+      try {
+        const result = await authRepository.changePassword({
+          userId: context.user.id,
+          currentSessionId: context.sessionId,
+          workspaceId: context.workspace.id,
+          expectedPasswordHash: user.passwordHash,
+          passwordHash: await hash(request.body.newPassword, { type: argon2id }),
+          requestId: request.id,
+        });
+        return {
+          data: { changed: true as const, revokedSessions: result.revokedSessions },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        if (error instanceof AuthPasswordConflictError) {
+          throw new ApiError(
+            409,
+            "AUTH_PASSWORD_CONFLICT",
+            "Пароль уже изменился. Обновите страницу и повторите вход",
+          );
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/auth/recovery/:token",
+    {
+      schema: {
+        params: authRecoveryTokenParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(authRecoveryDetailsSchema),
+          404: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const recovery = await authRepository.findPasswordRecovery(
+        hashSessionToken(request.params.token),
+      );
+      if (!recovery || recovery.user.disabledAt) {
+        throw new ApiError(404, "AUTH_RECOVERY_INVALID", "Ссылка недействительна или истекла");
+      }
+      return {
+        data: {
+          emailHint: maskEmail(recovery.user.email),
+          expiresAt: recovery.expiresAt.toISOString(),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/recovery/:token",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "15 minutes" } },
+      schema: {
+        params: authRecoveryTokenParamsSchema,
+        body: authPasswordRecoverySchema,
+        response: {
+          200: apiEnvelopeSchema(authPasswordRecoveredSchema),
+          404: errorEnvelopeSchema,
+          429: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        await authRepository.recoverPassword({
+          tokenHash: hashSessionToken(request.params.token),
+          passwordHash: await hash(request.body.newPassword, { type: argon2id }),
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (error instanceof AuthRecoveryInvalidError) {
+          throw new ApiError(404, "AUTH_RECOVERY_INVALID", "Ссылка недействительна или истекла");
+        }
+        throw error;
+      }
+      reply.clearCookie(sessionCookieName, sessionCookieOptions(config));
+      return { data: { recovered: true as const }, meta: createMeta(request.id, "fresh") };
     },
   );
 
@@ -820,10 +1009,15 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           userAgent: normalizeHeader(request.headers["user-agent"]),
           ipAddress: request.ip,
           requestId: request.id,
+          maxActiveSessions: config.AUTH_MAX_ACTIVE_SESSIONS,
+          expectedPasswordHash: existingUser?.passwordHash ?? null,
         });
       } catch (error) {
         if (error instanceof AuthInvitationInvalidError) {
           throw new ApiError(404, "INVITATION_INVALID", "Приглашение недействительно или истекло");
+        }
+        if (error instanceof AuthPasswordConflictError) {
+          throw new ApiError(401, "AUTH_INVALID_CREDENTIALS", "Пароль изменился. Повторите вход");
         }
         throw error;
       }
@@ -3429,6 +3623,7 @@ function isPublicRoute(url: string) {
     path === "/health" ||
     path === "/api/v1/auth/login" ||
     path === "/api/v1/auth/session" ||
+    (path ? /^\/api\/v1\/auth\/recovery\/[A-Za-z0-9_-]{40,128}$/.test(path) : false) ||
     (path ? /^\/api\/v1\/invitations\/[A-Za-z0-9_-]{40,128}(?:\/accept)?$/.test(path) : false)
   );
 }
@@ -3436,6 +3631,15 @@ function isPublicRoute(url: string) {
 function normalizeHeader(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value.join(", ").slice(0, 500);
   return value?.slice(0, 500) ?? null;
+}
+
+function maskEmail(email: string) {
+  const separator = email.lastIndexOf("@");
+  if (separator <= 0) return "***";
+  const local = email.slice(0, separator);
+  const domain = email.slice(separator + 1);
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${"*".repeat(Math.max(1, local.length - visible.length))}@${domain}`;
 }
 
 function createWorkspaceSlug(name: string) {

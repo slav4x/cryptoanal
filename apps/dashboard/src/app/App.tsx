@@ -27,6 +27,7 @@ const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
 const SystemLogsPage = lazy(() => import("../features/system/SystemLogsPage"));
 const NotFoundPage = lazy(() => import("../features/not-found/NotFoundPage"));
 const InvitationPage = lazy(() => import("../features/auth/InvitationPage"));
+const RecoveryPage = lazy(() => import("../features/auth/RecoveryPage"));
 
 export function App() {
   return (
@@ -37,6 +38,14 @@ export function App() {
           element={
             <Suspense fallback={<RouteFallback />}>
               <InvitationPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="recovery/:token"
+          element={
+            <Suspense fallback={<RouteFallback />}>
+              <RecoveryPage />
             </Suspense>
           }
         />

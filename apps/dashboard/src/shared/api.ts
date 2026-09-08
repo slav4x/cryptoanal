@@ -1,6 +1,11 @@
 import {
   apiEnvelopeSchema,
+  authPasswordChangedSchema,
+  authPasswordRecoveredSchema,
+  authRecoveryDetailsSchema,
+  authSessionRevokedSchema,
   authSessionSchema,
+  authSessionsSchema,
   analyticsSchema,
   activitySchema,
   deploymentMutationResultSchema,
@@ -38,7 +43,14 @@ import {
   workspaceAccessSchema,
   workspaceInvitationCreatedSchema,
   type AuthLoginDto,
+  type AuthPasswordChangeDto,
+  type AuthPasswordChangedDto,
+  type AuthPasswordRecoveredDto,
+  type AuthPasswordRecoveryDto,
+  type AuthRecoveryDetailsDto,
+  type AuthSessionRevokedDto,
   type AuthSessionDto,
+  type AuthSessionsDto,
   type MarketsDto,
   type AnalyticsDto,
   type AnalyticsQueryDto,
@@ -151,6 +163,7 @@ async function request<T>(
     if (
       response.status === 401 &&
       path !== "/api/v1/auth/login" &&
+      !path.startsWith("/api/v1/auth/recovery/") &&
       !path.startsWith("/api/v1/invitations/")
     ) {
       csrfToken = null;
@@ -168,6 +181,11 @@ async function request<T>(
 
 const contextEnvelopeSchema = apiEnvelopeSchema(requestContextSchema);
 const authSessionEnvelopeSchema = apiEnvelopeSchema(authSessionSchema);
+const authSessionsEnvelopeSchema = apiEnvelopeSchema(authSessionsSchema);
+const authSessionRevokedEnvelopeSchema = apiEnvelopeSchema(authSessionRevokedSchema);
+const authPasswordChangedEnvelopeSchema = apiEnvelopeSchema(authPasswordChangedSchema);
+const authRecoveryDetailsEnvelopeSchema = apiEnvelopeSchema(authRecoveryDetailsSchema);
+const authPasswordRecoveredEnvelopeSchema = apiEnvelopeSchema(authPasswordRecoveredSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
 const activityEnvelopeSchema = apiEnvelopeSchema(activitySchema);
 const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
@@ -229,6 +247,51 @@ export async function logout(): Promise<ApiEnvelope<AuthSessionDto>> {
   const response = await request("/api/v1/auth/logout", authSessionEnvelopeSchema, {
     method: "POST",
   });
+  csrfToken = null;
+  return response;
+}
+
+export function fetchAuthSessions(): Promise<ApiEnvelope<AuthSessionsDto>> {
+  return request("/api/v1/auth/sessions", authSessionsEnvelopeSchema);
+}
+
+export async function revokeAuthSession(
+  sessionId: string,
+): Promise<ApiEnvelope<AuthSessionRevokedDto>> {
+  const response = await request(
+    `/api/v1/auth/sessions/${encodeURIComponent(sessionId)}`,
+    authSessionRevokedEnvelopeSchema,
+    { method: "DELETE" },
+  );
+  if (response.data.current) csrfToken = null;
+  return response;
+}
+
+export function changePassword(
+  input: AuthPasswordChangeDto,
+): Promise<ApiEnvelope<AuthPasswordChangedDto>> {
+  return request("/api/v1/auth/password", authPasswordChangedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchPasswordRecovery(token: string): Promise<ApiEnvelope<AuthRecoveryDetailsDto>> {
+  return request(
+    `/api/v1/auth/recovery/${encodeURIComponent(token)}`,
+    authRecoveryDetailsEnvelopeSchema,
+  );
+}
+
+export async function recoverPassword(
+  token: string,
+  input: AuthPasswordRecoveryDto,
+): Promise<ApiEnvelope<AuthPasswordRecoveredDto>> {
+  const response = await request(
+    `/api/v1/auth/recovery/${encodeURIComponent(token)}`,
+    authPasswordRecoveredEnvelopeSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  );
   csrfToken = null;
   return response;
 }

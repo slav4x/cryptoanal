@@ -29,6 +29,8 @@ import {
   Gauge,
   Globe2,
   KeyRound,
+  LockKeyhole,
+  MonitorSmartphone,
   Plus,
   RotateCcw,
   Save,
@@ -42,14 +44,17 @@ import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import {
   ApiClientError,
+  changePassword,
   createExchangeConnection,
   createWorkspace,
   createWorkspaceInvitation,
   exportWorkspace,
   fetchExchangeConnections,
+  fetchAuthSessions,
   fetchSettings,
   fetchWorkspaceAccess,
   removeWorkspaceMember,
+  revokeAuthSession,
   revokeExchangeConnection,
   revokeWorkspaceInvitation,
   rotateExchangeConnectionCredentials,
@@ -86,6 +91,7 @@ export default function SettingsPage() {
       <div className="grid items-start gap-[18px] xl:grid-cols-2">
         <WorkspaceCard session={session} />
         <WorkspaceAccessCard session={session} />
+        <SecurityCard />
         <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
         <RuntimeSafetyCard settings={settings} />
         <MarketDataCard settings={settings} />
@@ -95,6 +101,169 @@ export default function SettingsPage() {
         <SystemCard settings={settings} />
       </div>
     </div>
+  );
+}
+
+function SecurityCard() {
+  const queryClient = useQueryClient();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const queryKey = ["auth-sessions"] as const;
+  const sessionsQuery = useQuery({ queryKey, queryFn: fetchAuthSessions });
+  const revokeMutation = useMutation({
+    mutationFn: revokeAuthSession,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+  });
+  const passwordMutation = useMutation({
+    mutationFn: changePassword,
+    onSuccess: async ({ data }) => {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmation("");
+      setSuccessMessage(
+        data.revokedSessions > 0
+          ? `Пароль изменён, завершено других сессий: ${data.revokedSessions}`
+          : "Пароль изменён",
+      );
+      await queryClient.invalidateQueries({ queryKey });
+    },
+  });
+  const mismatch = confirmation.length > 0 && newPassword !== confirmation;
+
+  return (
+    <Card className="xl:col-span-2">
+      <CardHeader className="flex-row items-start gap-3 border-b">
+        <CardIcon icon={LockKeyhole} />
+        <div>
+          <CardTitle>Безопасность аккаунта</CardTitle>
+          <CardDescription>
+            Активные устройства и смена пароля. Текущая сессия сохраняется после смены пароля.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-6 pt-4 lg:grid-cols-2">
+        <div>
+          <FieldLabel>Активные сессии</FieldLabel>
+          {sessionsQuery.isPending ? (
+            <Skeleton className="mt-3 h-24 w-full" />
+          ) : sessionsQuery.isError ? (
+            <div className="mt-3">
+              <ErrorState
+                description={sessionsQuery.error.message}
+                requestId={
+                  sessionsQuery.error instanceof ApiClientError
+                    ? sessionsQuery.error.requestId
+                    : undefined
+                }
+                onRetry={() => void sessionsQuery.refetch()}
+              />
+            </div>
+          ) : (
+            <div className="mt-2">
+              {sessionsQuery.data.data.sessions.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex min-h-14 items-center justify-between gap-4 border-b border-row-border py-2 last:border-0"
+                >
+                  <span className="flex min-w-0 items-start gap-2.5">
+                    <MonitorSmartphone className="mt-0.5 size-4 shrink-0 text-stale" />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-xs text-secondary-foreground">
+                        <span className="truncate">{describeDevice(item.userAgent)}</span>
+                        {item.current ? <Badge variant="profit">текущая</Badge> : null}
+                      </span>
+                      <span className="mt-1 block text-[10px] text-stale">
+                        {item.ipAddress ?? "IP неизвестен"} · активность{" "}
+                        {formatDateTime(item.lastSeenAt)}
+                      </span>
+                    </span>
+                  </span>
+                  {!item.current ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={revokeMutation.isPending}
+                      onClick={() => revokeMutation.mutate(item.id)}
+                    >
+                      Завершить
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              {revokeMutation.error ? (
+                <p className="mt-2 text-xs text-loss">{revokeMutation.error.message}</p>
+              ) : null}
+            </div>
+          )}
+        </div>
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setSuccessMessage(null);
+            if (!mismatch) passwordMutation.mutate({ currentPassword, newPassword });
+          }}
+        >
+          <FieldLabel>Смена пароля</FieldLabel>
+          <Field label="Текущий пароль">
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              maxLength={256}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              required
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Новый пароль">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                minLength={12}
+                maxLength={256}
+                onChange={(event) => setNewPassword(event.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Повторите пароль">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={confirmation}
+                minLength={12}
+                maxLength={256}
+                onChange={(event) => setConfirmation(event.target.value)}
+                required
+              />
+            </Field>
+          </div>
+          {mismatch ? <p className="text-xs text-loss">Пароли не совпадают</p> : null}
+          {passwordMutation.error ? (
+            <p className="text-xs text-loss">{passwordMutation.error.message}</p>
+          ) : null}
+          {successMessage ? <p className="text-xs text-profit">{successMessage}</p> : null}
+          <div className="flex justify-end border-t border-row-border pt-4">
+            <Button
+              type="submit"
+              disabled={
+                passwordMutation.isPending ||
+                mismatch ||
+                currentPassword.length === 0 ||
+                newPassword.length < 12
+              }
+            >
+              <KeyRound className="size-4" />
+              {passwordMutation.isPending ? "Сохранение…" : "Изменить пароль"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1031,6 +1200,31 @@ function formatDateTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function describeDevice(userAgent: string | null) {
+  if (!userAgent) return "Неизвестное устройство";
+  const browser = userAgent.includes("Edg/")
+    ? "Edge"
+    : userAgent.includes("Firefox/")
+      ? "Firefox"
+      : userAgent.includes("Chrome/")
+        ? "Chrome"
+        : userAgent.includes("Safari/")
+          ? "Safari"
+          : "Браузер";
+  const system = userAgent.includes("Windows")
+    ? "Windows"
+    : userAgent.includes("Macintosh")
+      ? "macOS"
+      : userAgent.includes("Android")
+        ? "Android"
+        : /iPhone|iPad/.test(userAgent)
+          ? "iOS"
+          : userAgent.includes("Linux")
+            ? "Linux"
+            : "устройство";
+  return `${browser} · ${system}`;
 }
 
 const timezones = ["UTC", "Europe/Moscow", "Asia/Novosibirsk", "Asia/Almaty", "Asia/Dubai"];

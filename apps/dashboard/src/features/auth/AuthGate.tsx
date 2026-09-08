@@ -126,6 +126,9 @@ function LoginPage({
               <Button type="submit" className="w-full" disabled={loginMutation.isPending}>
                 {loginMutation.isPending ? "Входим…" : "Войти"}
               </Button>
+              <p className="text-center text-xs text-muted-foreground">
+                Нет доступа? Обратитесь к администратору за одноразовой ссылкой восстановления.
+              </p>
             </form>
           </CardContent>
         </Card>

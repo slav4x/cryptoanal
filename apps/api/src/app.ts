@@ -100,6 +100,7 @@ import {
   BybitCredentialsRejectedError,
   BybitPrivateApiUnavailableError,
   BybitPrivateClient,
+  describeBybitCredentialRejection,
   evaluateBybitPermissions,
 } from "@cryptoanal/exchange-bybit";
 import {
@@ -132,6 +133,7 @@ import {
   ExchangeConnectionNotFoundError,
   ExchangeConnectionInUseError,
   ExchangeConnectionRepository,
+  ExchangeConnectionVerificationConflictError,
   HealthRepository,
   JournalCursorNotFoundError,
   JournalRepository,
@@ -1581,6 +1583,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           accountUid: information.accountUid,
           permissions: information.permissions,
           verifiedAt,
+          nextVerificationAt: withdrawalPermission
+            ? null
+            : addHours(verifiedAt, config.EXCHANGE_VERIFICATION_INTERVAL_HOURS),
+          expectedCredentialRevision: connection.credentialRevision,
         });
         return {
           data: { connection: serializeExchangeConnection(persisted) },
@@ -1588,27 +1594,49 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         };
       } catch (error) {
         if (error instanceof BybitCredentialsRejectedError) {
-          const persisted = await exchangeConnectionRepository.recordVerification({
-            workspaceId: workspace.id,
-            connectionId: connection.id,
-            actorId: context.actorId,
-            requestId: request.id,
-            status: "INVALID",
-            code: `BYBIT_${error.code}`,
-            message: describeBybitCredentialRejection(error.code),
-            readOnly: null,
-            tradingPermission: null,
-            ipBound: null,
-            accountUid: null,
-            permissions: null,
-            verifiedAt,
-          });
-          return {
-            data: { connection: serializeExchangeConnection(persisted) },
-            meta: createMeta(request.id, "fresh"),
-          };
+          try {
+            const persisted = await exchangeConnectionRepository.recordVerification({
+              workspaceId: workspace.id,
+              connectionId: connection.id,
+              actorId: context.actorId,
+              requestId: request.id,
+              status: "INVALID",
+              code: `BYBIT_${error.code}`,
+              message: describeBybitCredentialRejection(error.code),
+              readOnly: null,
+              tradingPermission: null,
+              ipBound: null,
+              accountUid: null,
+              permissions: null,
+              verifiedAt,
+              nextVerificationAt: null,
+              expectedCredentialRevision: connection.credentialRevision,
+            });
+            return {
+              data: { connection: serializeExchangeConnection(persisted) },
+              meta: createMeta(request.id, "fresh"),
+            };
+          } catch (persistenceError) {
+            throwExchangeConnectionApiError(persistenceError);
+          }
         }
         if (error instanceof BybitPrivateApiUnavailableError) {
+          try {
+            await exchangeConnectionRepository.recordVerificationUnavailable({
+              workspaceId: workspace.id,
+              connectionId: connection.id,
+              expectedCredentialRevision: connection.credentialRevision,
+              attemptedAt: verifiedAt,
+              nextVerificationAt: addMinutes(
+                verifiedAt,
+                config.EXCHANGE_VERIFICATION_RETRY_MINUTES,
+              ),
+              code: "BYBIT_UNAVAILABLE",
+              message: "Bybit временно не подтвердил подключение; запланирована повторная проверка",
+            });
+          } catch (persistenceError) {
+            throwExchangeConnectionApiError(persistenceError);
+          }
           throw new ApiError(
             503,
             "EXCHANGE_VERIFICATION_UNAVAILABLE",
@@ -3158,6 +3186,7 @@ function createHealthThresholds(config: ServerConfig) {
     accountStaleMs: config.ACCOUNT_SNAPSHOT_INTERVAL_MS * 2,
     queueLagMs: 5 * 60_000,
     outboxLagMs: 5 * 60_000,
+    exchangeVerificationOverdueMs: config.EXCHANGE_VERIFICATION_POLL_INTERVAL_MS * 3,
   };
 }
 
@@ -3468,6 +3497,8 @@ function serializeExchangeConnection(connection: {
   lastVerificationCode: string | null;
   lastVerificationMessage: string | null;
   lastVerifiedAt: Date | null;
+  lastVerificationAttemptAt: Date | null;
+  nextVerificationAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   _count: { deployments: number };
@@ -3486,6 +3517,8 @@ function serializeExchangeConnection(connection: {
     lastVerificationCode: connection.lastVerificationCode,
     lastVerificationMessage: connection.lastVerificationMessage,
     lastVerifiedAt: connection.lastVerifiedAt?.toISOString() ?? null,
+    lastVerificationAttemptAt: connection.lastVerificationAttemptAt?.toISOString() ?? null,
+    nextVerificationAt: connection.nextVerificationAt?.toISOString() ?? null,
     activeDeployments: connection._count.deployments,
     createdAt: connection.createdAt.toISOString(),
     updatedAt: connection.updatedAt.toISOString(),
@@ -3502,24 +3535,6 @@ function serializePermissionGroups(value: unknown) {
     .map(([name, permissions]) => ({ name, permissions }))
     .filter((group) => group.permissions.length > 0)
     .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function describeBybitCredentialRejection(code: string) {
-  const descriptions: Record<string, string> = {
-    "-2015": "Срок действия API-ключа истёк",
-    "33004": "Срок действия API-ключа истёк",
-    "10003": "API-ключ не существует или не соответствует выбранному контуру",
-    "10004": "API secret не соответствует ключу",
-    "10005": "Bybit отклонил разрешения API-ключа",
-    "10007": "Bybit не подтвердил владельца API-ключа",
-    "10008": "Текущий режим аккаунта не поддерживается",
-    "10009": "Bybit ограничил доступ для текущего региона",
-    "10010": "IP сервера отсутствует в allowlist API-ключа",
-    "10024": "Проверка заблокирована compliance-правилами Bybit",
-    "10027": "Операции для аккаунта заблокированы Bybit",
-    HTTP_401: "Bybit отклонил API-ключ или подпись",
-  };
-  return descriptions[code] ?? "Bybit отклонил API credentials";
 }
 
 function serializeExchangeEnvironment(environment: "DRY_RUN" | "DEMO" | "LIVE") {
@@ -3544,7 +3559,22 @@ function throwExchangeConnectionApiError(error: unknown): never {
       "Сначала остановите deployment, использующий это подключение",
     );
   }
+  if (error instanceof ExchangeConnectionVerificationConflictError) {
+    throw new ApiError(
+      409,
+      "EXCHANGE_CONNECTION_VERIFICATION_CONFLICT",
+      "Credentials изменились во время проверки. Запустите проверку ещё раз",
+    );
+  }
   throw error;
+}
+
+function addMinutes(value: Date, minutes: number) {
+  return new Date(value.getTime() + minutes * 60_000);
+}
+
+function addHours(value: Date, hours: number) {
+  return addMinutes(value, hours * 60);
 }
 
 function hasStatusCode(error: unknown, statusCode: number) {

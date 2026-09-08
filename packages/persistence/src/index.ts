@@ -4,6 +4,8 @@ export {
   ExchangeConnectionInUseError,
   ExchangeConnectionNotFoundError,
   ExchangeConnectionRepository,
+  ExchangeConnectionVerificationConflictError,
+  ExchangeConnectionVerificationLeaseLostError,
 } from "./exchange-connection-repository";
 export {
   AuthRepository,

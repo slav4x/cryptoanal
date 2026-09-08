@@ -97,6 +97,24 @@ export class BybitCredentialsRejectedError extends Error {
   }
 }
 
+export function describeBybitCredentialRejection(code: string) {
+  const descriptions: Record<string, string> = {
+    "-2015": "Срок действия API-ключа истёк",
+    "33004": "Срок действия API-ключа истёк",
+    "10003": "API-ключ не существует или не соответствует выбранному контуру",
+    "10004": "API secret не соответствует ключу",
+    "10005": "Bybit отклонил разрешения API-ключа",
+    "10007": "Bybit не подтвердил владельца API-ключа",
+    "10008": "Текущий режим аккаунта не поддерживается",
+    "10009": "Bybit ограничил доступ для текущего региона",
+    "10010": "IP сервера отсутствует в allowlist API-ключа",
+    "10024": "Проверка заблокирована compliance-правилами Bybit",
+    "10027": "Операции для аккаунта заблокированы Bybit",
+    HTTP_401: "Bybit отклонил API-ключ или подпись",
+  };
+  return descriptions[code] ?? "Bybit отклонил API credentials";
+}
+
 export class BybitPrivateApiUnavailableError extends Error {
   public constructor(
     public readonly code: string,

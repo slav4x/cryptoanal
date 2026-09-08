@@ -1,0 +1,2 @@
+ALTER INDEX "ExchangeConnection_status_nextVerificationAt_verificationLeaseE"
+RENAME TO "ExchangeConnection_verification_schedule_idx";

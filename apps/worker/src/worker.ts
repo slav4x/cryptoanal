@@ -22,10 +22,22 @@ import {
   validationExecutionInputSchema,
   validationMetricsSchema,
 } from "@cryptoanal/contracts";
-import { BybitPublicMarketClient } from "@cryptoanal/exchange-bybit";
+import {
+  BybitCredentialsRejectedError,
+  BybitPrivateApiUnavailableError,
+  BybitPrivateClient,
+  BybitPublicMarketClient,
+  describeBybitCredentialRejection,
+  evaluateBybitPermissions,
+} from "@cryptoanal/exchange-bybit";
 import {
   AccountSnapshotRepository,
+  CredentialCipher,
+  ExchangeConnectionRepository,
+  ExchangeConnectionVerificationConflictError,
+  ExchangeConnectionVerificationLeaseLostError,
   createPrismaClient,
+  exchangeCredentialContext,
   HealthRepository,
   MarketDataRepository,
   RuntimeRepository,
@@ -36,6 +48,7 @@ import {
   type ClaimedValidationJob,
   type ValidationDatasetCandlePersistenceInput,
 } from "@cryptoanal/persistence";
+import { randomUUID } from "node:crypto";
 import pino from "pino";
 
 const heartbeatIntervalMs = 15_000;
@@ -49,7 +62,13 @@ const validationRepository = new ValidationRepository(prisma);
 const runtimeRepository = new RuntimeRepository(prisma);
 const healthRepository = new HealthRepository(prisma);
 const workspaceRepository = new WorkspaceRepository(prisma);
+const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
+const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
 const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
+const privateClients = {
+  DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL),
+  LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL),
+} as const;
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 
 let stopping = false;
@@ -195,6 +214,156 @@ async function validationJobLoop() {
     }
 
     if (!processed) await delay(validationPollIntervalMs);
+  }
+}
+
+async function exchangeVerificationLoop() {
+  while (!stopping) {
+    let processed = false;
+    try {
+      const now = new Date();
+      const connection = await exchangeConnectionRepository.claimDueVerification({
+        workerId,
+        now,
+        leaseExpiresAt: addMilliseconds(now, config.EXCHANGE_VERIFICATION_LEASE_SECONDS * 1_000),
+      });
+      if (connection) {
+        processed = true;
+        await verifyExchangeConnection(connection);
+      }
+    } catch (error) {
+      if (
+        error instanceof ExchangeConnectionVerificationConflictError ||
+        error instanceof ExchangeConnectionVerificationLeaseLostError
+      ) {
+        logger.info({ err: error }, "Exchange verification claim was superseded");
+      } else {
+        logger.error({ err: error }, "Exchange verification loop failed");
+      }
+    }
+
+    if (!processed) await delay(config.EXCHANGE_VERIFICATION_POLL_INTERVAL_MS);
+  }
+}
+
+async function verifyExchangeConnection(
+  connection: NonNullable<
+    Awaited<ReturnType<ExchangeConnectionRepository["claimDueVerification"]>>
+  >,
+) {
+  const attemptedAt = new Date();
+  try {
+    if (!connection.encryptedApiKey || !connection.encryptedApiSecret) {
+      throw new Error("Encrypted credentials are unavailable");
+    }
+    const context = exchangeCredentialContext({
+      workspaceId: connection.workspaceId,
+      exchange: connection.exchange,
+      environment: connection.environment,
+      label: connection.label,
+    });
+    let apiKey: string;
+    let apiSecret: string;
+    try {
+      apiKey = credentialCipher.decrypt(connection.encryptedApiKey, context);
+      apiSecret = credentialCipher.decrypt(connection.encryptedApiSecret, context);
+    } catch {
+      throw new ScheduledCredentialsUnreadableError();
+    }
+    const information = await privateClients[connection.environment].getApiKeyInformation(
+      apiKey,
+      apiSecret,
+      AbortSignal.timeout(config.BYBIT_PRIVATE_REQUEST_TIMEOUT_MS),
+    );
+    const { tradingPermission, withdrawalPermission } = evaluateBybitPermissions(
+      information.permissions,
+    );
+    await exchangeConnectionRepository.recordVerification({
+      workspaceId: connection.workspaceId,
+      connectionId: connection.id,
+      actorId: `system:${workerId}`,
+      requestId: `scheduled:${randomUUID()}`,
+      status: withdrawalPermission ? "INVALID" : "ACTIVE",
+      code: withdrawalPermission ? "WITHDRAW_PERMISSION_NOT_ALLOWED" : "VERIFIED",
+      message: withdrawalPermission
+        ? "Отключите разрешение Withdraw у API-ключа"
+        : information.readOnly
+          ? "Ключ действителен и работает только на чтение"
+          : tradingPermission
+            ? "Ключ действителен; торговые разрешения доступны"
+            : "Ключ действителен; торговые разрешения отсутствуют",
+      readOnly: information.readOnly,
+      tradingPermission,
+      ipBound: information.ipBound,
+      accountUid: information.accountUid,
+      permissions: information.permissions,
+      verifiedAt: attemptedAt,
+      nextVerificationAt: withdrawalPermission
+        ? null
+        : addHours(attemptedAt, config.EXCHANGE_VERIFICATION_INTERVAL_HOURS),
+      expectedCredentialRevision: connection.credentialRevision,
+      leaseOwner: workerId,
+    });
+    logger.info(
+      { connectionId: connection.id, workspaceId: connection.workspaceId },
+      "Exchange connection verified",
+    );
+  } catch (error) {
+    if (error instanceof BybitCredentialsRejectedError) {
+      await exchangeConnectionRepository.recordVerification({
+        workspaceId: connection.workspaceId,
+        connectionId: connection.id,
+        actorId: `system:${workerId}`,
+        requestId: `scheduled:${randomUUID()}`,
+        status: "INVALID",
+        code: `BYBIT_${error.code}`,
+        message: describeBybitCredentialRejection(error.code),
+        readOnly: null,
+        tradingPermission: null,
+        ipBound: null,
+        accountUid: null,
+        permissions: null,
+        verifiedAt: attemptedAt,
+        nextVerificationAt: null,
+        expectedCredentialRevision: connection.credentialRevision,
+        leaseOwner: workerId,
+      });
+      logger.warn(
+        { connectionId: connection.id, workspaceId: connection.workspaceId, code: error.code },
+        "Exchange connection became invalid",
+      );
+      return;
+    }
+    if (
+      error instanceof ExchangeConnectionVerificationConflictError ||
+      error instanceof ExchangeConnectionVerificationLeaseLostError
+    ) {
+      throw error;
+    }
+    const unavailable = error instanceof BybitPrivateApiUnavailableError;
+    const credentialsUnreadable = error instanceof ScheduledCredentialsUnreadableError;
+    await exchangeConnectionRepository.recordVerificationUnavailable({
+      workspaceId: connection.workspaceId,
+      connectionId: connection.id,
+      expectedCredentialRevision: connection.credentialRevision,
+      leaseOwner: workerId,
+      attemptedAt,
+      nextVerificationAt: addMinutes(attemptedAt, config.EXCHANGE_VERIFICATION_RETRY_MINUTES),
+      code: unavailable
+        ? "BYBIT_UNAVAILABLE"
+        : credentialsUnreadable
+          ? "CREDENTIALS_UNREADABLE"
+          : "VERIFICATION_FAILED",
+      message: unavailable
+        ? "Bybit временно не подтвердил подключение; запланирована повторная проверка"
+        : credentialsUnreadable
+          ? "Credentials не удалось расшифровать; проверьте master key"
+          : "Плановая проверка завершилась технической ошибкой; будет выполнен повтор",
+    });
+    logger.warn(
+      { connectionId: connection.id, workspaceId: connection.workspaceId },
+      "Exchange verification postponed",
+    );
   }
 }
 
@@ -806,6 +975,8 @@ class RuntimeWorkerError extends Error {
   }
 }
 
+class ScheduledCredentialsUnreadableError extends Error {}
+
 function runtimeFailure(error: unknown): { code: string; message: string } {
   if (error instanceof RuntimeWorkerError) {
     return { code: error.code, message: error.message.slice(0, 500) };
@@ -1002,6 +1173,18 @@ function delay(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function addMilliseconds(value: Date, milliseconds: number) {
+  return new Date(value.getTime() + milliseconds);
+}
+
+function addMinutes(value: Date, minutes: number) {
+  return addMilliseconds(value, minutes * 60_000);
+}
+
+function addHours(value: Date, hours: number) {
+  return addMinutes(value, hours * 60);
+}
+
 function healthThresholds() {
   return {
     workerStaleMs: heartbeatIntervalMs * 3,
@@ -1009,6 +1192,7 @@ function healthThresholds() {
     accountStaleMs: config.ACCOUNT_SNAPSHOT_INTERVAL_MS * 2,
     queueLagMs: 5 * 60_000,
     outboxLagMs: 5 * 60_000,
+    exchangeVerificationOverdueMs: config.EXCHANGE_VERIFICATION_POLL_INTERVAL_MS * 3,
   };
 }
 
@@ -1043,6 +1227,7 @@ await Promise.all([
   candleDataLoop(),
   accountSnapshotLoop(),
   validationJobLoop(),
+  exchangeVerificationLoop(),
   runtimeLoop(),
   watchdogLoop(),
 ]);

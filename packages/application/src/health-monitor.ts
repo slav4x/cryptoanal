@@ -22,6 +22,7 @@ export type HealthMonitorInput = {
     accountStaleMs: number;
     queueLagMs: number;
     outboxLagMs: number;
+    exchangeVerificationOverdueMs: number;
   };
   workerLastSeenAt: Date | null;
   markets: Array<{ symbol: string; observedAt: Date | null }>;
@@ -40,6 +41,15 @@ export type HealthMonitorInput = {
   pendingOutbox: number;
   oldestPendingOutboxAt: Date | null;
   riskStops24h: number;
+  exchangeConnections: Array<{
+    id: string;
+    label: string;
+    status: "UNVERIFIED" | "ACTIVE" | "INVALID";
+    lastVerificationCode: string | null;
+    lastVerificationAttemptAt: Date | null;
+    nextVerificationAt: Date | null;
+    activeDeployments: number;
+  }>;
   driftCandidates: Array<{
     deploymentId: string;
     executionRunId: string;
@@ -185,6 +195,62 @@ export function evaluateHealth(input: HealthMonitorInput) {
       },
     });
   }
+  for (const connection of input.exchangeConnections) {
+    if (connection.status === "INVALID") {
+      conditions.push({
+        fingerprint: `exchange-connection:${connection.id}:invalid`,
+        domain: "exchange-private",
+        code: "EXCHANGE_CONNECTION_INVALID",
+        severity: connection.activeDeployments > 0 ? "critical" : "warning",
+        title: `Подключение ${connection.label} недействительно`,
+        description:
+          connection.activeDeployments > 0
+            ? "Связанный deployment остановлен или поставлен на паузу до повторной проверки ключей."
+            : "Замените credentials и выполните ручную проверку.",
+        resourceType: "exchange-connection",
+        resourceId: connection.id,
+        metadata: {
+          code: connection.lastVerificationCode,
+          activeDeployments: connection.activeDeployments,
+        },
+      });
+      continue;
+    }
+    if (connection.status !== "ACTIVE") continue;
+    if (connection.lastVerificationCode && connection.lastVerificationCode !== "VERIFIED") {
+      conditions.push({
+        fingerprint: `exchange-connection:${connection.id}:retry`,
+        domain: "exchange-private",
+        code: "EXCHANGE_VERIFICATION_RETRYING",
+        severity: "warning",
+        title: `Проверка ${connection.label} отложена`,
+        description: "Последняя автоматическая проверка не завершилась; worker повторит её.",
+        resourceType: "exchange-connection",
+        resourceId: connection.id,
+        metadata: {
+          code: connection.lastVerificationCode,
+          attemptedAt: connection.lastVerificationAttemptAt?.toISOString() ?? null,
+          nextVerificationAt: connection.nextVerificationAt?.toISOString() ?? null,
+        },
+      });
+    } else if (
+      connection.nextVerificationAt &&
+      input.now.getTime() - connection.nextVerificationAt.getTime() >
+        input.thresholds.exchangeVerificationOverdueMs
+    ) {
+      conditions.push({
+        fingerprint: `exchange-connection:${connection.id}:overdue`,
+        domain: "exchange-private",
+        code: "EXCHANGE_VERIFICATION_OVERDUE",
+        severity: "warning",
+        title: `Проверка ${connection.label} просрочена`,
+        description: "Worker не выполнил плановую проверку connection в ожидаемый срок.",
+        resourceType: "exchange-connection",
+        resourceId: connection.id,
+        metadata: { nextVerificationAt: connection.nextVerificationAt.toISOString() },
+      });
+    }
+  }
   if (
     input.oldestPendingOutboxAt &&
     age(input.now, input.oldestPendingOutboxAt) > input.thresholds.outboxLagMs
@@ -235,6 +301,12 @@ export function evaluateHealth(input: HealthMonitorInput) {
       latest(input.markets.map((market) => market.observedAt)),
     ),
     exchangeDomain(input.markets, staleMarkets),
+    domainFromConditions(
+      "exchange-private",
+      "Bybit private connections",
+      conditions,
+      latest(input.exchangeConnections.map((item) => item.lastVerificationAttemptAt)),
+    ),
     domainFromConditions("account", "Торговый счёт", conditions, input.accountObservedAt),
     domainFromConditions("queue", "Очередь задач", conditions, input.oldestQueuedJobAt),
     domainFromConditions(

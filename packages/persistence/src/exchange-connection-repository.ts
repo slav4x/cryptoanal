@@ -17,6 +17,8 @@ const exchangeConnectionSelect = {
   lastVerificationCode: true,
   lastVerificationMessage: true,
   lastVerifiedAt: true,
+  lastVerificationAttemptAt: true,
+  nextVerificationAt: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -28,6 +30,8 @@ const exchangeConnectionSelect = {
 
 export class ExchangeConnectionNotFoundError extends Error {}
 export class ExchangeConnectionInUseError extends Error {}
+export class ExchangeConnectionVerificationConflictError extends Error {}
+export class ExchangeConnectionVerificationLeaseLostError extends Error {}
 
 export class ExchangeConnectionRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
@@ -62,6 +66,7 @@ export class ExchangeConnectionRepository {
         environment: true,
         encryptedApiKey: true,
         encryptedApiSecret: true,
+        credentialRevision: true,
       },
     });
   }
@@ -142,6 +147,11 @@ export class ExchangeConnectionRepository {
           lastVerificationCode: null,
           lastVerificationMessage: null,
           lastVerifiedAt: null,
+          lastVerificationAttemptAt: null,
+          nextVerificationAt: null,
+          verificationLeaseOwner: null,
+          verificationLeaseExpiresAt: null,
+          credentialRevision: { increment: 1 },
         },
         select: exchangeConnectionSelect,
       });
@@ -174,6 +184,9 @@ export class ExchangeConnectionRepository {
     accountUid: string | null;
     permissions: Record<string, string[]> | null;
     verifiedAt: Date;
+    nextVerificationAt: Date | null;
+    expectedCredentialRevision: number;
+    leaseOwner?: string;
   }) {
     return this.prisma.$transaction(async (transaction) => {
       const existing = await lockExchangeConnection(
@@ -181,6 +194,7 @@ export class ExchangeConnectionRepository {
         input.workspaceId,
         input.connectionId,
       );
+      assertVerificationOwnership(existing, input.expectedCredentialRevision, input.leaseOwner);
       const affectedDeployments =
         input.status === "INVALID"
           ? await transaction.deployment.findMany({
@@ -204,6 +218,10 @@ export class ExchangeConnectionRepository {
           lastVerificationCode: input.code,
           lastVerificationMessage: input.message,
           lastVerifiedAt: input.verifiedAt,
+          lastVerificationAttemptAt: input.verifiedAt,
+          nextVerificationAt: input.nextVerificationAt,
+          verificationLeaseOwner: null,
+          verificationLeaseExpiresAt: null,
         },
         select: exchangeConnectionSelect,
       });
@@ -266,6 +284,78 @@ export class ExchangeConnectionRepository {
     });
   }
 
+  public async claimDueVerification(input: { workerId: string; now: Date; leaseExpiresAt: Date }) {
+    const claimed = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        workspaceId: string;
+        exchange: string;
+        label: string;
+        environment: PersistedEnvironment;
+        encryptedApiKey: Uint8Array | null;
+        encryptedApiSecret: Uint8Array | null;
+        credentialRevision: number;
+      }>
+    >(Prisma.sql`
+      WITH candidate AS (
+        SELECT "id"
+        FROM "ExchangeConnection"
+        WHERE "status" = 'ACTIVE'
+          AND "revokedAt" IS NULL
+          AND "encryptedApiKey" IS NOT NULL
+          AND "encryptedApiSecret" IS NOT NULL
+          AND "nextVerificationAt" IS NOT NULL
+          AND "nextVerificationAt" <= ${input.now}
+          AND ("verificationLeaseExpiresAt" IS NULL OR "verificationLeaseExpiresAt" <= ${input.now})
+        ORDER BY "nextVerificationAt" ASC, "id" ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE "ExchangeConnection" AS connection
+      SET "verificationLeaseOwner" = ${input.workerId},
+          "verificationLeaseExpiresAt" = ${input.leaseExpiresAt},
+          "updatedAt" = ${input.now}
+      FROM candidate
+      WHERE connection."id" = candidate."id"
+      RETURNING connection."id", connection."workspaceId", connection."exchange",
+        connection."label", connection."environment", connection."encryptedApiKey",
+        connection."encryptedApiSecret", connection."credentialRevision"
+    `);
+    return claimed[0] ?? null;
+  }
+
+  public async recordVerificationUnavailable(input: {
+    workspaceId: string;
+    connectionId: string;
+    expectedCredentialRevision: number;
+    leaseOwner?: string;
+    attemptedAt: Date;
+    nextVerificationAt: Date;
+    code: string;
+    message: string;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const existing = await lockExchangeConnection(
+        transaction,
+        input.workspaceId,
+        input.connectionId,
+      );
+      assertVerificationOwnership(existing, input.expectedCredentialRevision, input.leaseOwner);
+      return transaction.exchangeConnection.update({
+        where: { id: existing.id },
+        data: {
+          lastVerificationCode: input.code,
+          lastVerificationMessage: input.message,
+          lastVerificationAttemptAt: input.attemptedAt,
+          nextVerificationAt: input.nextVerificationAt,
+          verificationLeaseOwner: null,
+          verificationLeaseExpiresAt: null,
+        },
+        select: exchangeConnectionSelect,
+      });
+    });
+  }
+
   public async revoke(input: {
     workspaceId: string;
     connectionId: string;
@@ -308,8 +398,14 @@ async function lockExchangeConnection(
   workspaceId: string,
   connectionId: string,
 ) {
-  const connections = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT "id"
+  const connections = await transaction.$queryRaw<
+    Array<{
+      id: string;
+      credentialRevision: number;
+      verificationLeaseOwner: string | null;
+    }>
+  >(Prisma.sql`
+    SELECT "id", "credentialRevision", "verificationLeaseOwner"
     FROM "ExchangeConnection"
     WHERE "id" = ${connectionId} AND "workspaceId" = ${workspaceId} AND "revokedAt" IS NULL
     FOR UPDATE
@@ -317,6 +413,19 @@ async function lockExchangeConnection(
   const connection = connections[0];
   if (!connection) throw new ExchangeConnectionNotFoundError();
   return connection;
+}
+
+function assertVerificationOwnership(
+  connection: { credentialRevision: number; verificationLeaseOwner: string | null },
+  expectedCredentialRevision: number,
+  leaseOwner?: string,
+) {
+  if (connection.credentialRevision !== expectedCredentialRevision) {
+    throw new ExchangeConnectionVerificationConflictError();
+  }
+  if (leaseOwner && connection.verificationLeaseOwner !== leaseOwner) {
+    throw new ExchangeConnectionVerificationLeaseLostError();
+  }
 }
 
 async function assertConnectionNotInUse(

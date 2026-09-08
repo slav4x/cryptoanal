@@ -146,6 +146,8 @@ export const exchangeConnectionSchema = z.object({
   lastVerificationCode: z.string().nullable(),
   lastVerificationMessage: z.string().nullable(),
   lastVerifiedAt: z.iso.datetime().nullable(),
+  lastVerificationAttemptAt: z.iso.datetime().nullable(),
+  nextVerificationAt: z.iso.datetime().nullable(),
   activeDeployments: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

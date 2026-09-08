@@ -38,6 +38,10 @@ const serverConfigSchema = z
       .min(1_000)
       .max(30_000)
       .default(10_000),
+    EXCHANGE_VERIFICATION_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+    EXCHANGE_VERIFICATION_RETRY_MINUTES: z.coerce.number().int().min(1).max(1_440).default(15),
+    EXCHANGE_VERIFICATION_LEASE_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+    EXCHANGE_VERIFICATION_POLL_INTERVAL_MS: z.coerce.number().int().min(10_000).default(60_000),
     MARKET_POLL_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
     CANDLE_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).default(60_000),
     ACCOUNT_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),

@@ -30,6 +30,7 @@ export class HealthRepository {
       pendingOutbox,
       oldestPendingOutbox,
       riskStops24h,
+      exchangeConnections,
       activeDeployments,
     ] = await Promise.all([
       this.prisma.workerHeartbeat.findFirst({
@@ -96,6 +97,22 @@ export class HealthRepository {
       this.prisma.decision.count({
         where: { workspaceId, reasonCode: "DAILY_LOSS_LIMIT", decidedAt: { gte: dayAgo } },
       }),
+      this.prisma.exchangeConnection.findMany({
+        where: { workspaceId, revokedAt: null },
+        select: {
+          id: true,
+          label: true,
+          status: true,
+          lastVerificationCode: true,
+          lastVerificationAttemptAt: true,
+          nextVerificationAt: true,
+          _count: {
+            select: {
+              deployments: { where: { status: { in: ["READY", "RUNNING", "PAUSED"] } } },
+            },
+          },
+        },
+      }),
       this.prisma.deployment.findMany({
         where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
         select: {
@@ -152,6 +169,15 @@ export class HealthRepository {
       pendingOutbox,
       oldestPendingOutboxAt: oldestPendingOutbox?.availableAt ?? null,
       riskStops24h,
+      exchangeConnections: exchangeConnections.map((connection) => ({
+        id: connection.id,
+        label: connection.label,
+        status: connection.status,
+        lastVerificationCode: connection.lastVerificationCode,
+        lastVerificationAttemptAt: connection.lastVerificationAttemptAt,
+        nextVerificationAt: connection.nextVerificationAt,
+        activeDeployments: connection._count.deployments,
+      })),
       driftCandidates: activeDeployments.flatMap((deployment) => {
         const executionRun = deployment.executionRuns[0];
         if (!executionRun) return [];

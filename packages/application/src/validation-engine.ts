@@ -84,9 +84,16 @@ function runWalkForward(
   input: ValidationEngineInput,
   windows: { trainingDays: number; testDays: number },
 ): ValidationEngineResult {
-  const times = input.candles.map((candle) => candle.openTime.getTime());
-  const datasetStart = Math.min(...times);
-  const datasetEnd = Math.max(...times);
+  const { datasetStart, datasetEnd } = input.candles.reduce(
+    (bounds, candle) => {
+      const time = candle.openTime.getTime();
+      return {
+        datasetStart: Math.min(bounds.datasetStart, time),
+        datasetEnd: Math.max(bounds.datasetEnd, time),
+      };
+    },
+    { datasetStart: Number.POSITIVE_INFINITY, datasetEnd: Number.NEGATIVE_INFINITY },
+  );
   const dayMs = 86_400_000;
   const trades: ValidationTrade[] = [];
   const equitySeries: Array<{ observedAt: string; equity: number }> = [];

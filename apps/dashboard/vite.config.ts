@@ -13,6 +13,7 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("/lightweight-charts/")) return "vendor-lightweight-charts";
+          if (id.includes("/@radix-ui/")) return "vendor-radix-ui";
         },
       },
     },

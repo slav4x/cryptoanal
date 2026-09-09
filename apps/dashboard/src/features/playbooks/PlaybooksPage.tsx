@@ -13,6 +13,10 @@ import {
   MetricCard,
   PageHeader,
   Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -471,16 +475,21 @@ function FilterSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="space-y-1.5">
+    <div className="space-y-1.5">
       <FieldLabel>{label}</FieldLabel>
-      <Select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
-    </label>
+    </div>
   );
 }
 

@@ -13,6 +13,10 @@ import {
   FieldLabel,
   Input,
   Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Textarea,
 } from "@cryptoanal/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -56,15 +60,17 @@ export function JournalEntryComposer({
       <CardContent className="space-y-4 pt-4">
         <div className="grid gap-3 xl:grid-cols-[180px_1fr_220px]">
           <Field label="Тип">
-            <Select
-              value={kind}
-              onChange={(event) => setKind(event.target.value as JournalEntryKind)}
-            >
-              {Object.entries(kindLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
+            <Select value={kind} onValueChange={(value) => setKind(value as JournalEntryKind)}>
+              <SelectTrigger aria-label="Тип">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(kindLabels).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </Field>
           <Field label="Заголовок">
@@ -102,31 +108,37 @@ export function JournalEntryComposer({
           <Field label="Тип связи">
             <Select
               value={linkType}
-              onChange={(event) => {
-                setLinkType(event.target.value as JournalLinkType | "");
+              onValueChange={(value) => {
+                setLinkType(value as JournalLinkType | "");
                 setTargetId("");
               }}
             >
-              <option value="">Без связи</option>
-              {Object.entries(linkTypeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
+              <SelectTrigger aria-label="Тип связи">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Без связи</SelectItem>
+                {Object.entries(linkTypeLabels).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </Field>
           <Field label="Связанный объект">
-            <Select
-              value={targetId}
-              disabled={!linkType}
-              onChange={(event) => setTargetId(event.target.value)}
-            >
-              <option value="">Не выбран</option>
-              {targetOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
+            <Select value={targetId} disabled={!linkType} onValueChange={setTargetId}>
+              <SelectTrigger aria-label="Связанный объект">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Не выбран</SelectItem>
+                {targetOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </Field>
         </div>

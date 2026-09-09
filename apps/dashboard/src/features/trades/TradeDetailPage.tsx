@@ -186,7 +186,7 @@ export default function TradeDetailPage() {
 
                   {order.fills.length > 0 ? (
                     <div className="mt-4 overflow-x-auto rounded-[10px] border border-row-border">
-                      <table className="w-full min-w-[620px] border-collapse text-xs">
+                      <table className="w-full min-w-[620px] border-collapse text-[13px]">
                         <thead>
                           <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                             <th scope="col" className="px-3 py-2 font-medium">

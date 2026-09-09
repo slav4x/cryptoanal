@@ -20,6 +20,7 @@ const javascript = assets.filter((name) => name.endsWith(".js"));
 const styles = assets.filter((name) => name.endsWith(".css"));
 const routeChunks = javascript.filter((name) => /Page-[^.]+\.js$/.test(name));
 const chartChunks = javascript.filter((name) => name.startsWith("vendor-lightweight-charts-"));
+const radixChunks = javascript.filter((name) => name.startsWith("vendor-radix-ui-"));
 const entryName = path.basename(entryMatch[1]);
 
 const kib = (bytes) => bytes / 1024;
@@ -32,10 +33,11 @@ const largest = (names) =>
 
 const measurements = [
   { label: "entry JS", bytes: gzipSize(entryName), limit: 100 },
-  { label: "all JS", bytes: totalGzip(javascript), limit: 310 },
+  { label: "all JS", bytes: totalGzip(javascript), limit: 340 },
   { label: "all CSS", bytes: totalGzip(styles), limit: 12 },
   { label: "largest route", ...largest(routeChunks), limit: 12 },
   { label: "chart vendor", ...largest(chartChunks), limit: 70 },
+  { label: "Radix UI vendor", ...largest(radixChunks), limit: 40 },
 ];
 
 let failed = false;

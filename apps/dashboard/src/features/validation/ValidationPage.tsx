@@ -12,10 +12,15 @@ import {
   CardHeader,
   EmptyState,
   ErrorState,
+  FieldLabel,
   Input,
   PageHeader,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
-  cn,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, FlaskConical, GitCompareArrows, LoaderCircle, Plus } from "lucide-react";
@@ -114,21 +119,25 @@ export default function ValidationPage() {
               <p className="text-xs text-muted-foreground">Создаёт ValidationRun и durable job.</p>
             </CardHeader>
             <CardContent className="space-y-4 p-[18px]">
-              <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
-                Стратегия
-                <select
+              <div className="space-y-2">
+                <FieldLabel>Стратегия</FieldLabel>
+                <Select
                   value={selectedStrategyId}
-                  onChange={(event) => setSearchParams({ strategy: event.target.value })}
-                  className={selectClassName}
+                  onValueChange={(strategy) => setSearchParams({ strategy })}
                 >
-                  {strategies.map((strategy) => (
-                    <option key={strategy.id} value={strategy.id}>
-                      {strategy.name} ·{" "}
-                      {strategy.latestVersion ? `v${strategy.latestVersion.version}` : "—"}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <SelectTrigger aria-label="Стратегия">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {strategies.map((strategy) => (
+                      <SelectItem key={strategy.id} value={strategy.id}>
+                        {strategy.name} ·{" "}
+                        {strategy.latestVersion ? `v${strategy.latestVersion.version}` : "—"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <ValidationComposer key={selectedStrategyId} strategyId={selectedStrategyId} />
             </CardContent>
           </Card>
@@ -246,14 +255,15 @@ function ValidationForm({ strategy }: { strategy: StrategyDetailDto }) {
       ) : null}
 
       <FormField label="Тип проверки">
-        <select
-          value={kind}
-          onChange={(event) => setKind(event.target.value as typeof kind)}
-          className={selectClassName}
-        >
-          <option value="backtest">Backtest</option>
-          <option value="walk-forward">Walk-forward</option>
-        </select>
+        <Select value={kind} onValueChange={(nextKind) => setKind(nextKind as typeof kind)}>
+          <SelectTrigger aria-label="Тип проверки">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="backtest">Backtest</SelectItem>
+            <SelectItem value="walk-forward">Walk-forward</SelectItem>
+          </SelectContent>
+        </Select>
       </FormField>
 
       <div className="grid grid-cols-2 gap-3">
@@ -349,7 +359,7 @@ function RunsTable({ runs }: { runs: ValidationRunDto[] }) {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] border-collapse text-xs">
+            <table className="w-full min-w-[920px] border-collapse text-[13px]">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                   <th scope="col" className="px-[18px] py-3 font-medium">
@@ -468,10 +478,10 @@ function RunReportLink({ runId }: { runId: string }) {
 
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
-      {label}
+    <div className="space-y-2">
+      <FieldLabel>{label}</FieldLabel>
       {children}
-    </label>
+    </div>
   );
 }
 
@@ -548,8 +558,3 @@ const kindLabels: Record<ValidationKindDto, string> = {
   "walk-forward": "Walk-forward",
   holdout: "Holdout",
 };
-
-const selectClassName = cn(
-  "h-9 w-full rounded-[10px] border border-input bg-background px-3 text-sm text-foreground outline-none",
-  "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
-);

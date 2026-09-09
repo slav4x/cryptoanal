@@ -8,7 +8,16 @@ export { FieldLabel } from "./components/field-label";
 export { Input } from "./components/input";
 export { MetricCard } from "./components/metric-card";
 export { PageHeader } from "./components/page-header";
-export { Select } from "./components/select";
+export {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "./components/select";
 export { Skeleton } from "./components/skeleton";
 export { Textarea } from "./components/textarea";
 export { cn } from "./lib/cn";

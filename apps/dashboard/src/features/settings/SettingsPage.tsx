@@ -18,6 +18,10 @@ import {
   Input,
   PageHeader,
   Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
 } from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -415,9 +419,14 @@ function WorkspaceAccessCard({ session }: { session: ReturnType<typeof useAuthSe
               />
             </Field>
             <Field label="Роль">
-              <Select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
-                <option value="member">Участник</option>
-                <option value="owner">Владелец</option>
+              <Select value={role} onValueChange={(value) => setRole(value as typeof role)}>
+                <SelectTrigger aria-label="Роль">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Участник</SelectItem>
+                  <SelectItem value="owner">Владелец</SelectItem>
+                </SelectContent>
               </Select>
             </Field>
             <Button type="submit" disabled={invitationMutation.isPending}>
@@ -476,14 +485,20 @@ function MemberRow({
       <span className="flex shrink-0 items-center gap-1">
         {canManage ? (
           <Select
-            className="h-8 w-[116px] text-[11px]"
             value={member.role}
             disabled={disabled}
-            aria-label={`Роль ${member.email}`}
-            onChange={(event) => onRoleChange(event.target.value as "owner" | "member")}
+            onValueChange={(value) => onRoleChange(value as "owner" | "member")}
           >
-            <option value="member">Участник</option>
-            <option value="owner">Владелец</option>
+            <SelectTrigger
+              className="h-8 w-[116px] text-[11px]"
+              aria-label={`Роль ${member.email}`}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="member">Участник</SelectItem>
+              <SelectItem value="owner">Владелец</SelectItem>
+            </SelectContent>
           </Select>
         ) : (
           <Badge variant="outline">{member.role === "owner" ? "владелец" : "участник"}</Badge>
@@ -607,21 +622,31 @@ function PreferencesCard({ preferences }: { preferences: WorkspacePreferencesDto
       <CardContent className="space-y-4 pt-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Timezone">
-            <Select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
-              {timezones.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
+            <Select value={timezone} onValueChange={setTimezone}>
+              <SelectTrigger aria-label="Timezone">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {timezones.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {item}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </Field>
           <Field label="Плотность таблиц">
             <Select
               value={tableDensity}
-              onChange={(event) => setTableDensity(event.target.value as TableDensity)}
+              onValueChange={(value) => setTableDensity(value as TableDensity)}
             >
-              <option value="compact">Компактная</option>
-              <option value="comfortable">Комфортная</option>
+              <SelectTrigger aria-label="Плотность таблиц">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="compact">Компактная</SelectItem>
+                <SelectItem value="comfortable">Комфортная</SelectItem>
+              </SelectContent>
             </Select>
           </Field>
         </div>
@@ -845,10 +870,15 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
                   <Field label="Контур">
                     <Select
                       value={environment}
-                      onChange={(event) => setEnvironment(event.target.value as "demo" | "live")}
+                      onValueChange={(value) => setEnvironment(value as "demo" | "live")}
                     >
-                      <option value="demo">Demo</option>
-                      <option value="live">Live</option>
+                      <SelectTrigger aria-label="Контур">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="demo">Demo</SelectItem>
+                        <SelectItem value="live">Live</SelectItem>
+                      </SelectContent>
                     </Select>
                   </Field>
                 </>

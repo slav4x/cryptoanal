@@ -14,6 +14,11 @@ import {
   ErrorState,
   MetricCard,
   PageHeader,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -274,20 +279,21 @@ type FilterSelectProps<T extends string> = {
 
 function FilterSelect<T extends string>({ label, value, options, onChange }: FilterSelectProps<T>) {
   return (
-    <label className="space-y-1.5">
+    <div className="space-y-1.5">
       <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
-      <select
-        value={value}
-        className="h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none transition-colors focus:border-ring"
-        onChange={(event) => onChange(event.target.value as T)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+      <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
+        <SelectTrigger aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -303,9 +309,9 @@ function BreakdownCard({ title, items }: { title: string; items: AnalyticsBreakd
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">Нет данных.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[400px] border-collapse text-[12px]">
+            <table className="w-full min-w-[400px] border-collapse text-[13px]">
               <thead>
-                <tr className="text-left text-[9px] uppercase tracking-[0.08em] text-stale">
+                <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                   <th scope="col" className="px-4 py-2.5 font-medium">
                     Группа
                   </th>

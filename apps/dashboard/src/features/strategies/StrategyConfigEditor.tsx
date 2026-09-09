@@ -5,7 +5,13 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  FieldLabel,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   cn,
 } from "@cryptoanal/ui";
 import type { ComponentProps, ReactNode } from "react";
@@ -241,8 +247,8 @@ function Field({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <label htmlFor={htmlFor} className="text-xs font-medium text-secondary-foreground">
-          {label}
+        <label htmlFor={htmlFor}>
+          <FieldLabel>{label}</FieldLabel>
         </label>
         {hint ? <span className="text-[10px] text-stale">{hint}</span> : null}
       </div>
@@ -342,18 +348,18 @@ function SelectField({
 }) {
   return (
     <Field label={label} htmlFor={id}>
-      <select
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-full rounded-[10px] border border-input bg-background px-3 text-sm text-foreground outline-none transition-shadow focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Field>
   );
 }

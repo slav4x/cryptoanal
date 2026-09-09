@@ -11,9 +11,14 @@ import {
   CardContent,
   CardHeader,
   ErrorState,
+  FieldLabel,
   Input,
   PageHeader,
   Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -288,19 +293,24 @@ function DeploymentCard({ strategy }: { strategy: StrategyDetailDto }) {
             <p className="text-xs text-loss">{connectionsQuery.error.message}</p>
           ) : activeConnections.length > 0 ? (
             <>
-              <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
-                Проверенное подключение
+              <div className="space-y-2">
+                <FieldLabel>Проверенное подключение</FieldLabel>
                 <Select
                   value={selectedConnection?.id ?? ""}
-                  onChange={(event) => setRequestedConnectionId(event.target.value)}
+                  onValueChange={setRequestedConnectionId}
                 >
-                  {activeConnections.map((connection) => (
-                    <option key={connection.id} value={connection.id}>
-                      {connection.label} · {connection.environment}
-                    </option>
-                  ))}
+                  <SelectTrigger aria-label="Проверенное подключение">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeConnections.map((connection) => (
+                      <SelectItem key={connection.id} value={connection.id}>
+                        {connection.label} · {connection.environment}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
-              </label>
+              </div>
               <p className="text-xs leading-5 text-muted-foreground">
                 Deployment останется dry-run. Подключение фиксируется для provenance и будущего
                 demo/live gate, но приватные ордера не отправляются.
@@ -408,8 +418,8 @@ function LifecycleCard({ strategy }: { strategy: StrategyDetailDto }) {
         </div>
 
         <div className="space-y-3">
-          <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
-            Комментарий к изменению статуса
+          <label className="block space-y-2">
+            <FieldLabel>Комментарий к изменению статуса</FieldLabel>
             <Input
               value={reason}
               onChange={(event) => {
@@ -565,7 +575,7 @@ function VersionsTab({ strategy }: { strategy: StrategyDetailDto }) {
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] border-collapse text-xs">
+              <table className="w-full min-w-[640px] border-collapse text-[13px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                     <th scope="col" className="px-[18px] py-3 font-medium">

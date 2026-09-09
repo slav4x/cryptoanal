@@ -172,7 +172,7 @@ function ComparisonTable({
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
-        <table className="w-full min-w-[820px] border-collapse text-xs">
+        <table className="w-full min-w-[820px] border-collapse text-[13px]">
           <thead>
             <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
               <th scope="col" className="w-44 px-[18px] py-3 font-medium">

@@ -57,7 +57,7 @@ export function PairTradingContext({
           ) : null}
           {!loading && trades.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] border-collapse text-[12px]">
+              <table className="w-full min-w-[520px] border-collapse text-[13px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                     <th scope="col" className="px-4 py-2.5 font-medium">

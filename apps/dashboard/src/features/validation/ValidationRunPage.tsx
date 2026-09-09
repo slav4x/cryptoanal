@@ -251,7 +251,7 @@ function SymbolBreakdown({
         {rows.length === 0 ? (
           <EmptyState title="Сделок нет" description="Ни одна пара не сформировала сделку." />
         ) : (
-          <table className="w-full border-collapse text-xs">
+          <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                 <th scope="col" className="px-[18px] py-3 font-medium">
@@ -316,7 +316,7 @@ function ValidationTrades({
           <EmptyState title="Сделок нет" description="Стратегия не сформировала входов." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[880px] border-collapse text-xs">
+            <table className="w-full min-w-[880px] border-collapse text-[13px]">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                   <th scope="col" className="px-[18px] py-3 font-medium">

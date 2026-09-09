@@ -1,4 +1,13 @@
-import { Badge, Button, Select, cn } from "@cryptoanal/ui";
+import {
+  Badge,
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  cn,
+} from "@cryptoanal/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -216,17 +225,20 @@ function SidebarContent({
       </div>
 
       <Select
-        className="mt-4 h-10 bg-card"
-        aria-label="Рабочее пространство"
         value={session.activeWorkspace.id}
         disabled={switching}
-        onChange={(event) => onWorkspaceChange(event.target.value)}
+        onValueChange={onWorkspaceChange}
       >
-        {session.workspaces.map((workspace) => (
-          <option key={workspace.id} value={workspace.id}>
-            {workspace.name}
-          </option>
-        ))}
+        <SelectTrigger className="mt-4 h-10 bg-card" aria-label="Рабочее пространство">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {session.workspaces.map((workspace) => (
+            <SelectItem key={workspace.id} value={workspace.id}>
+              {workspace.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
 
       <nav

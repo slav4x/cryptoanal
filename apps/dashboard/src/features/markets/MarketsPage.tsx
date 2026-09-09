@@ -119,7 +119,7 @@ export default function MarketsPage() {
           ) : null}
           {marketsQuery.isSuccess ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-sm">
+              <table className="w-full min-w-[760px] border-collapse text-[13px]">
                 <thead>
                   <tr className="border-b text-left text-[10px] uppercase tracking-[0.08em] text-stale">
                     <th scope="col" className="h-10 px-5 font-medium">

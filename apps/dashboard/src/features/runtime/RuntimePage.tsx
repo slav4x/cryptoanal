@@ -11,6 +11,7 @@ import {
   CardHeader,
   EmptyState,
   ErrorState,
+  FieldLabel,
   Input,
   PageHeader,
   Skeleton,
@@ -354,8 +355,8 @@ function DeploymentControl({ deployment }: { deployment: DeploymentDto }) {
                 {commandContent[pendingCommand].description}
               </p>
             </div>
-            <label className="block space-y-2 text-xs font-medium text-secondary-foreground">
-              Причина команды
+            <label className="block space-y-2">
+              <FieldLabel>Причина команды</FieldLabel>
               <Input
                 value={reason}
                 onChange={(event) => {

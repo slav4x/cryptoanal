@@ -1,5 +1,5 @@
 import { strategyCreateSchema } from "@cryptoanal/contracts";
-import { Button, Card, CardContent, Input, PageHeader, Textarea } from "@cryptoanal/ui";
+import { Button, Card, CardContent, FieldLabel, Input, PageHeader, Textarea } from "@cryptoanal/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, LoaderCircle } from "lucide-react";
 import type { FormEvent } from "react";
@@ -59,8 +59,8 @@ export default function NewStrategyPage() {
           </p>
         </header>
         <CardContent className="grid gap-4 p-[18px] lg:grid-cols-2">
-          <label className="space-y-2 text-xs font-medium text-secondary-foreground">
-            Название
+          <label className="space-y-2">
+            <FieldLabel>Название</FieldLabel>
             <Input
               value={name}
               onChange={(event) => {
@@ -73,8 +73,8 @@ export default function NewStrategyPage() {
               maxLength={80}
             />
           </label>
-          <label className="space-y-2 text-xs font-medium text-secondary-foreground">
-            Описание
+          <label className="space-y-2">
+            <FieldLabel>Описание</FieldLabel>
             <Textarea
               value={description}
               onChange={(event) => {

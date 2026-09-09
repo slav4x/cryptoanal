@@ -7,6 +7,7 @@ import {
   CardTitle,
   EmptyState,
   ErrorState,
+  FieldLabel,
   Input,
   MetricCard,
   PageHeader,
@@ -199,8 +200,8 @@ function PositionsTable({
                 Будут созданы fill, trade, decision и audit event. Команда необратима.
               </p>
             </div>
-            <label className="space-y-2 text-xs font-medium text-secondary-foreground">
-              Причина закрытия
+            <label className="space-y-2">
+              <FieldLabel>Причина закрытия</FieldLabel>
               <Input
                 value={reason}
                 onChange={(event) => {

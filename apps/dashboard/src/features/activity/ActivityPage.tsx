@@ -15,6 +15,11 @@ import {
   ErrorState,
   MetricCard,
   PageHeader,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
   cn,
 } from "@cryptoanal/ui";
@@ -363,20 +368,21 @@ function FilterSelect<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <label className="space-y-1.5">
+    <div className="space-y-1.5">
       <span className="block text-[10px] uppercase tracking-[0.1em] text-stale">{label}</span>
-      <select
-        value={value}
-        className="h-9 w-full rounded-[9px] border border-input bg-background px-3 text-[13px] text-secondary-foreground outline-none focus:border-ring"
-        onChange={(event) => onChange(event.target.value as T)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+      <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
+        <SelectTrigger aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 

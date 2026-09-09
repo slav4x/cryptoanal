@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { fetchOverview, fetchSettings, logout, switchWorkspace } from "../shared/api";
 import { authSessionQueryKey, useAuthSession } from "../features/auth/auth-context";
@@ -73,6 +73,10 @@ export function AppShell() {
     queryFn: fetchSettings,
     staleTime: 60_000,
   });
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   useEffect(() => {
     const density = settingsQuery.data?.data.preferences.tableDensity;

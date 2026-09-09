@@ -9,6 +9,7 @@
 - Family-specific strategy editor controls, configuration snapshots and validation/runtime diagnostics.
 - Interactive Lightweight Charts candlestick workspace with pan, zoom, crosshair, OHLC inspection and reset-to-latest control.
 - Position and trade overlays with entry/exit markers, current SL/TP/trailing levels and independently switchable layers.
+- Interactive Overview equity chart with pan, zoom, crosshair values and period reset.
 - Reuse of exact immutable historical dataset snapshots across backtest and walk-forward runs.
 - Parallel strategy experiment record with accepted and rejected configurations.
 - Docker Compose services for the API, worker and production-built dashboard with health checks, automatic migrations and restart policies.
@@ -145,5 +146,6 @@
 
 ### Fixed
 
+- Route changes now reset document scroll, while Overview period changes retain the current position and rendered page.
 - Validation no longer overflows the JavaScript call stack when processing large candle datasets.
 - Technical validation failures return the strategy to draft so it can be corrected and queued again.

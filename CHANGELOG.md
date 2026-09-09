@@ -113,6 +113,8 @@
 
 ### Changed
 
+- Dashboard block descriptions and form actions now follow a consistent 14/13/12 px desktop typography hierarchy.
+- Select triggers keep long selected values on one line with ellipsis while preserving the dropdown indicator.
 - Dashboard inputs, textareas, field labels and table typography now use shared desktop geometry and interaction states.
 - All feature filters and form dropdowns now use the shared custom Select instead of native browser controls or page-local styles.
 - Radix UI is isolated in a dedicated vendor chunk with an explicit bundle budget.

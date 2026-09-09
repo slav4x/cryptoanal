@@ -20,7 +20,9 @@ CryptoAnal — dashboard-first платформа для исследовани�
 semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы используют эти
 токены и shadcn-compatible primitives без собственной темы. Поля форм используют единую
 desktop-геометрию, а выпадающие списки собраны на Radix Select с общими состояниями
-focus, disabled и keyboard navigation.
+focus, disabled и keyboard navigation. Основные контролы используют текст 13 px,
+компактные варианты — 12 px; длинное выбранное значение Select остаётся в одну строку
+и обрезается многоточием.
 
 ## Текущий статус
 

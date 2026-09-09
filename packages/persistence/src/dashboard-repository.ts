@@ -293,6 +293,9 @@ export class DashboardRepository {
           side: true,
           quantity: true,
           entryPrice: true,
+          stopPrice: true,
+          takePrice: true,
+          trailingPrice: true,
           markPrice: true,
           unrealizedPnl: true,
           openedAt: true,
@@ -323,6 +326,9 @@ export class DashboardRepository {
           exitReason: true,
           openedAt: true,
           closedAt: true,
+          position: {
+            select: { stopPrice: true, takePrice: true, trailingPrice: true },
+          },
           strategyVersion: {
             select: { version: true, strategy: { select: { id: true, name: true } } },
           },
@@ -388,6 +394,9 @@ export class DashboardRepository {
         },
         position: {
           select: {
+            stopPrice: true,
+            takePrice: true,
+            trailingPrice: true,
             orders: {
               orderBy: { createdAt: "asc" },
               select: {

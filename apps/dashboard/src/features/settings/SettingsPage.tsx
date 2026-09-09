@@ -490,7 +490,7 @@ function MemberRow({
             onValueChange={(value) => onRoleChange(value as "owner" | "member")}
           >
             <SelectTrigger
-              className="h-8 w-[116px] text-[11px]"
+              className="h-8 w-[116px] text-[12px]"
               aria-label={`Роль ${member.email}`}
             >
               <SelectValue />

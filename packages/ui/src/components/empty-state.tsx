@@ -14,7 +14,7 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
         <CircleOff className="size-5" aria-hidden="true" />
       </span>
       <h3 className="text-sm font-medium">{title}</h3>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">{description}</p>
+      <p className="mt-1 max-w-md text-[13px] leading-5 text-muted-foreground">{description}</p>
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );

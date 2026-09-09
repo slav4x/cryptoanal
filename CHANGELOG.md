@@ -7,6 +7,8 @@
 - Parallel dry-run strategy execution with automatically isolated per-strategy accounts and an aggregated portfolio snapshot.
 - Independent EMA crossover, breakout, mean-reversion and momentum signal families in the shared runtime/validation engine.
 - Family-specific strategy editor controls, configuration snapshots and validation/runtime diagnostics.
+- Interactive Lightweight Charts candlestick workspace with pan, zoom, crosshair, OHLC inspection and reset-to-latest control.
+- Position and trade overlays with entry/exit markers, current SL/TP/trailing levels and independently switchable layers.
 - Reuse of exact immutable historical dataset snapshots across backtest and walk-forward runs.
 - Parallel strategy experiment record with accepted and rejected configurations.
 - Docker Compose services for the API, worker and production-built dashboard with health checks, automatic migrations and restart policies.
@@ -109,6 +111,9 @@
 
 ### Changed
 
+- Pair pages now show every open position in one wide table with execution and risk levels.
+- Trading ledger contracts expose persisted stop-loss, take-profit and trailing-stop prices.
+- The chart library is isolated in a route-loaded vendor chunk with its own bundle budget.
 - Mean-reversion positions can exit on a confirmed return to the rolling mean using the shared `signal-exit` reason.
 - Fifteen isolated strategy accounts now run in parallel across four algorithmic families in the development dry-run portfolio.
 - Validation engine reuses timezone date formatters to keep large walk-forward runs within

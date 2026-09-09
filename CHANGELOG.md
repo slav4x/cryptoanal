@@ -107,6 +107,8 @@
 
 ### Changed
 
+- Validation engine reuses timezone date formatters to keep large walk-forward runs within
+  bounded memory.
 - Overview runtime health now aggregates all active deployments instead of inspecting only the most recently updated one.
 - Dry-run equity, daily loss state and snapshots are scoped to the deployment account.
 - Dashboard visual system aligned with the approved `crypto-trade/design` direction.

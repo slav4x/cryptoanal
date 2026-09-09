@@ -54,6 +54,8 @@ Dashboard использует database users, Argon2id password hashes, server-
     session-модель, security boundaries и правила tenant isolation.
 14. [14-EXCHANGE-CONNECTIONS.md](14-EXCHANGE-CONNECTIONS.md) — модель подключения бирж,
     шифрование credentials, проверка, deployment binding и ограничения runtime.
+15. [15-PARALLEL-STRATEGY-EXPERIMENTS.md](15-PARALLEL-STRATEGY-EXPERIMENTS.md) — активные
+    dry-run варианты, единые правила сравнения и отрицательные результаты исследований.
 
 ## Короткая формула продукта
 

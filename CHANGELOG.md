@@ -10,6 +10,7 @@
 - Interactive Lightweight Charts candlestick workspace with pan, zoom, crosshair, OHLC inspection and reset-to-latest control.
 - Position and trade overlays with entry/exit markers, current SL/TP/trailing levels and independently switchable layers.
 - Interactive Overview equity chart with pan, zoom, crosshair values and period reset.
+- Radix-based shadcn-compatible Select primitives with keyboard navigation, portal content and empty-value support.
 - Reuse of exact immutable historical dataset snapshots across backtest and walk-forward runs.
 - Parallel strategy experiment record with accepted and rejected configurations.
 - Docker Compose services for the API, worker and production-built dashboard with health checks, automatic migrations and restart policies.
@@ -112,6 +113,9 @@
 
 ### Changed
 
+- Dashboard inputs, textareas, field labels and table typography now use shared desktop geometry and interaction states.
+- All feature filters and form dropdowns now use the shared custom Select instead of native browser controls or page-local styles.
+- Radix UI is isolated in a dedicated vendor chunk with an explicit bundle budget.
 - Pair pages now show every open position in one wide table with execution and risk levels.
 - Trading ledger contracts expose persisted stop-loss, take-profit and trailing-stop prices.
 - The chart library is isolated in a route-loaded vendor chunk with its own bundle budget.

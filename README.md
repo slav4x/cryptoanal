@@ -9,7 +9,7 @@ CryptoAnal — dashboard-first платформа для исследовани�
 - `apps/dashboard` — React/Vite dashboard;
 - `apps/api` — Fastify API;
 - `apps/worker` — execution и background jobs;
-- `packages/ui` — shadcn-compatible компоненты и design tokens;
+- `packages/ui` — shadcn-compatible компоненты, Radix Select и design tokens;
 - `packages/contracts` — Zod schemas и общие DTO;
 - `packages/application` — use cases, context и ports;
 - `packages/persistence` — Prisma client и repositories;
@@ -18,7 +18,9 @@ CryptoAnal — dashboard-first платформа для исследовани�
 
 Визуальное направление перенесено из согласованных макетов `crypto-trade/design` в
 semantic tokens `packages/ui/src/styles/globals.css`. Feature-страницы используют эти
-токены и shadcn-compatible primitives без собственной темы.
+токены и shadcn-compatible primitives без собственной темы. Поля форм используют единую
+desktop-геометрию, а выпадающие списки собраны на Radix Select с общими состояниями
+focus, disabled и keyboard navigation.
 
 ## Текущий статус
 
@@ -270,7 +272,7 @@ pnpm check:budgets
 ```
 
 `check:budgets` запускается после сборки и ограничивает gzip-размер entry JS, всего JS,
-CSS, отдельного route chunk и изолированного `lightweight-charts` vendor chunk.
+CSS, отдельного route chunk и изолированных `lightweight-charts` и Radix UI vendor chunks.
 Интервальный refetch привязан к активным страницам; системные логи обновляются
 автоматически только после явного включения.
 

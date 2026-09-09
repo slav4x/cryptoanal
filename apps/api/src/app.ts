@@ -4439,17 +4439,18 @@ const persistedValidationKind = {
 
 const validationExitReasons: Record<
   string,
-  "stop-loss" | "take-profit" | "trailing-stop" | "end-of-data"
+  "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data"
 > = {
   "stop-loss": "stop-loss",
   "take-profit": "take-profit",
   "trailing-stop": "trailing-stop",
+  "signal-exit": "signal-exit",
   "end-of-data": "end-of-data",
 };
 
 function serializeValidationExitReason(
   value: string,
-): "stop-loss" | "take-profit" | "trailing-stop" | "end-of-data" {
+): "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data" {
   const reason = validationExitReasons[value];
   if (!reason) throw new Error(`Unknown validation exit reason: ${value}`);
   return reason;

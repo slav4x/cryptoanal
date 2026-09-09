@@ -575,12 +575,20 @@ export const strategyConfigSchema = z
       timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
     }),
     signal: z.object({
+      family: z
+        .enum(["ema-crossover", "breakout", "mean-reversion", "momentum"])
+        .default("ema-crossover"),
       direction: z.enum(["long", "short", "both"]),
       emaFastPeriod: z.number().int().min(2).max(200),
       emaSlowPeriod: z.number().int().min(3).max(400),
       rsiPeriod: z.number().int().min(2).max(100),
       rsiOversold: z.number().min(1).max(49),
       rsiOverbought: z.number().min(51).max(99),
+      breakoutLookbackPeriod: z.number().int().min(2).max(400).default(20),
+      meanReversionLookbackPeriod: z.number().int().min(5).max(400).default(20),
+      meanReversionEntryZScore: z.number().min(0.5).max(5).default(2),
+      momentumLookbackPeriod: z.number().int().min(2).max(400).default(20),
+      momentumThresholdPercent: z.number().positive().max(100).default(2),
     }),
     filters: z.object({
       minimumVolume24hUsdt: z.number().nonnegative(),
@@ -612,7 +620,10 @@ export const strategyConfigSchema = z
     }),
   })
   .superRefine((config, context) => {
-    if (config.signal.emaFastPeriod >= config.signal.emaSlowPeriod) {
+    if (
+      config.signal.family === "ema-crossover" &&
+      config.signal.emaFastPeriod >= config.signal.emaSlowPeriod
+    ) {
       context.addIssue({
         code: "custom",
         message: "Быстрая EMA должна быть меньше медленной EMA",
@@ -771,7 +782,7 @@ export const validationTradeResultSchema = z.object({
   quantity: z.number(),
   netPnl: z.number(),
   fees: z.number().nonnegative(),
-  exitReason: z.enum(["stop-loss", "take-profit", "trailing-stop", "end-of-data"]),
+  exitReason: z.enum(["stop-loss", "take-profit", "trailing-stop", "signal-exit", "end-of-data"]),
 });
 
 export const validationMetricsSchema = z.object({

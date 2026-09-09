@@ -866,7 +866,7 @@ async function prepareValidationDataset(
       );
     }
 
-    const requiredCandles = minimumRequiredCandles(strategyConfig);
+    const requiredCandles = minimumExecutionCandleCount(strategyConfig);
     if (marketCandles.length < requiredCandles) {
       throw new ValidationWorkerError(
         "DATASET_INSUFFICIENT",
@@ -1087,6 +1087,10 @@ function runtimeFactors(
     rsi: number | null;
     atrPercent: number | null;
     volume24h: number;
+    breakoutHigh: number | null;
+    breakoutLow: number | null;
+    meanReversionZScore: number | null;
+    momentumPercent: number | null;
   },
   dailyPnl: number,
   equity: number,
@@ -1103,6 +1107,10 @@ function runtimeFactors(
       rsi: candle.rsi,
       atrPercent: candle.atrPercent,
       volume24h: candle.volume24h,
+      breakoutHigh: candle.breakoutHigh,
+      breakoutLow: candle.breakoutLow,
+      meanReversionZScore: candle.meanReversionZScore,
+      momentumPercent: candle.momentumPercent,
     },
     risk: { dailyPnl, equity },
   };
@@ -1178,14 +1186,6 @@ function finiteNumber(value: string, field: string, symbol: string): number {
     );
   }
   return parsed;
-}
-
-function minimumRequiredCandles(config: {
-  universe: { timeframe: keyof typeof timeframeMinutes };
-  signal: { emaSlowPeriod: number; rsiPeriod: number };
-}): number {
-  const volumeBars = Math.round(1_440 / timeframeMinutes[config.universe.timeframe]);
-  return Math.max(config.signal.emaSlowPeriod + 2, config.signal.rsiPeriod + 2, volumeBars + 2, 16);
 }
 
 function delay(milliseconds: number) {

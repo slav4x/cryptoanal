@@ -403,6 +403,7 @@ const environmentLabels: Record<AnalyticsEnvironment, string> = {
 };
 
 const exitReasonLabels: Record<string, string> = {
+  "signal-exit": "Сигнал возврата к средней",
   TAKE_PROFIT: "Take profit",
   STOP_LOSS: "Stop loss",
   MANUAL: "Ручное закрытие",

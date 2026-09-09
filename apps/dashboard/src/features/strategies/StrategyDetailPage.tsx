@@ -678,12 +678,9 @@ function configRows(config: StrategyConfigDto) {
   return [
     row("universe.symbols", "Universe", "Торговые пары", config.universe.symbols.join(", ")),
     row("universe.timeframe", "Universe", "Таймфрейм", config.universe.timeframe),
+    row("signal.family", "Signal", "Семейство", signalFamilyLabels[config.signal.family]),
     row("signal.direction", "Signal", "Направление", directionLabels[config.signal.direction]),
-    row("signal.emaFastPeriod", "Signal", "Быстрая EMA", config.signal.emaFastPeriod),
-    row("signal.emaSlowPeriod", "Signal", "Медленная EMA", config.signal.emaSlowPeriod),
-    row("signal.rsiPeriod", "Signal", "Период RSI", config.signal.rsiPeriod),
-    row("signal.rsiOversold", "Signal", "RSI oversold", config.signal.rsiOversold),
-    row("signal.rsiOverbought", "Signal", "RSI overbought", config.signal.rsiOverbought),
+    ...signalConfigRows(config),
     row(
       "filters.minimumVolume24hUsdt",
       "Filters",
@@ -720,6 +717,61 @@ function configRows(config: StrategyConfigDto) {
       "Активные дни",
       config.schedule.activeDays.map((day) => dayLabels[day]).join(", "),
     ),
+  ];
+}
+
+function signalConfigRows(config: StrategyConfigDto) {
+  if (config.signal.family === "breakout") {
+    return [
+      row(
+        "signal.breakoutLookbackPeriod",
+        "Signal",
+        "Период диапазона",
+        config.signal.breakoutLookbackPeriod,
+      ),
+    ];
+  }
+  if (config.signal.family === "mean-reversion") {
+    return [
+      row(
+        "signal.meanReversionLookbackPeriod",
+        "Signal",
+        "Период средней",
+        config.signal.meanReversionLookbackPeriod,
+      ),
+      row(
+        "signal.meanReversionEntryZScore",
+        "Signal",
+        "Порог отклонения",
+        `${config.signal.meanReversionEntryZScore}σ`,
+      ),
+      row("signal.rsiPeriod", "Signal", "Период RSI", config.signal.rsiPeriod),
+      row("signal.rsiOversold", "Signal", "RSI oversold", config.signal.rsiOversold),
+      row("signal.rsiOverbought", "Signal", "RSI overbought", config.signal.rsiOverbought),
+    ];
+  }
+  if (config.signal.family === "momentum") {
+    return [
+      row(
+        "signal.momentumLookbackPeriod",
+        "Signal",
+        "Период импульса",
+        config.signal.momentumLookbackPeriod,
+      ),
+      row(
+        "signal.momentumThresholdPercent",
+        "Signal",
+        "Порог импульса",
+        `${config.signal.momentumThresholdPercent}%`,
+      ),
+    ];
+  }
+  return [
+    row("signal.emaFastPeriod", "Signal", "Быстрая EMA", config.signal.emaFastPeriod),
+    row("signal.emaSlowPeriod", "Signal", "Медленная EMA", config.signal.emaSlowPeriod),
+    row("signal.rsiPeriod", "Signal", "Период RSI", config.signal.rsiPeriod),
+    row("signal.rsiOversold", "Signal", "RSI oversold", config.signal.rsiOversold),
+    row("signal.rsiOverbought", "Signal", "RSI overbought", config.signal.rsiOverbought),
   ];
 }
 
@@ -804,6 +856,12 @@ const directionLabels = {
   long: "Только long",
   short: "Только short",
   both: "Long и short",
+} as const;
+const signalFamilyLabels = {
+  "ema-crossover": "EMA crossover",
+  breakout: "Пробой диапазона",
+  "mean-reversion": "Возврат к средней",
+  momentum: "Momentum",
 } as const;
 const dayLabels = {
   mon: "Пн",

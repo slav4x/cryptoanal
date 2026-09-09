@@ -11,12 +11,18 @@ export type ExecutionCandle = {
 export type ExecutionStrategyConfig = {
   universe: { timeframe: "5m" | "15m" | "30m" | "1h" | "4h" };
   signal: {
+    family: "ema-crossover" | "breakout" | "mean-reversion" | "momentum";
     direction: "long" | "short" | "both";
     emaFastPeriod: number;
     emaSlowPeriod: number;
     rsiPeriod: number;
     rsiOversold: number;
     rsiOverbought: number;
+    breakoutLookbackPeriod: number;
+    meanReversionLookbackPeriod: number;
+    meanReversionEntryZScore: number;
+    momentumLookbackPeriod: number;
+    momentumThresholdPercent: number;
   };
   filters: {
     minimumVolume24hUsdt: number;
@@ -43,8 +49,15 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
   previousEmaFast: number | null;
   previousEmaSlow: number | null;
   rsi: number | null;
+  previousRsi: number | null;
   atrPercent: number | null;
   volume24h: number;
+  breakoutHigh: number | null;
+  breakoutLow: number | null;
+  meanReversionZScore: number | null;
+  previousMeanReversionZScore: number | null;
+  momentumPercent: number | null;
+  previousMomentumPercent: number | null;
 };
 
 export type ExecutionPosition = {
@@ -71,7 +84,7 @@ export type PendingExecutionSignal = {
 export type ExecutionMarketRegime = "bull" | "bear" | "neutral" | "unknown";
 export type ExecutionTradingSession = "asia" | "europe" | "us" | "off-hours" | "unknown";
 
-export type AutomaticExitReason = "stop-loss" | "take-profit" | "trailing-stop";
+export type AutomaticExitReason = "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit";
 export type ExecutionExitReason = AutomaticExitReason | "end-of-data" | "manual";
 
 export type ExecutionSettlement<Reason extends ExecutionExitReason = ExecutionExitReason> = {
@@ -103,6 +116,23 @@ export function enrichExecutionCandles(
   const slow = emaSeries(closes, config.signal.emaSlowPeriod);
   const rsi = rsiSeries(closes, config.signal.rsiPeriod);
   const atr = atrSeries(ordered, 14);
+  const breakoutHigh = rollingExtremeSeries(
+    ordered,
+    config.signal.breakoutLookbackPeriod,
+    (candle) => candle.high,
+    (candidate, current) => candidate >= current,
+  );
+  const breakoutLow = rollingExtremeSeries(
+    ordered,
+    config.signal.breakoutLookbackPeriod,
+    (candle) => candle.low,
+    (candidate, current) => candidate <= current,
+  );
+  const meanReversionZScore = rollingZScoreSeries(
+    closes,
+    config.signal.meanReversionLookbackPeriod,
+  );
+  const momentumPercent = momentumSeries(closes, config.signal.momentumLookbackPeriod);
   const volumeBars = Math.max(1, Math.round(1_440 / timeframeMinutes[config.universe.timeframe]));
   let rollingVolume = 0;
 
@@ -116,9 +146,16 @@ export function enrichExecutionCandles(
       previousEmaFast: index > 0 ? (fast[index - 1] ?? null) : null,
       previousEmaSlow: index > 0 ? (slow[index - 1] ?? null) : null,
       rsi: rsi[index] ?? null,
+      previousRsi: index > 0 ? (rsi[index - 1] ?? null) : null,
       atrPercent:
         atr[index] === null || candle.close === 0 ? null : (atr[index]! / candle.close) * 100,
       volume24h: rollingVolume,
+      breakoutHigh: breakoutHigh[index] ?? null,
+      breakoutLow: breakoutLow[index] ?? null,
+      meanReversionZScore: meanReversionZScore[index] ?? null,
+      previousMeanReversionZScore: index > 0 ? (meanReversionZScore[index - 1] ?? null) : null,
+      momentumPercent: momentumPercent[index] ?? null,
+      previousMomentumPercent: index > 0 ? (momentumPercent[index - 1] ?? null) : null,
     };
   });
 }
@@ -128,6 +165,10 @@ export function getExecutionSignal(
   config: ExecutionStrategyConfig,
 ): PendingExecutionSignal | null {
   if (!canSignal(candle, config)) return null;
+  if (config.signal.family === "breakout") return getBreakoutSignal(candle, config);
+  if (config.signal.family === "mean-reversion") return getMeanReversionSignal(candle, config);
+  if (config.signal.family === "momentum") return getMomentumSignal(candle, config);
+
   const crossedUp =
     candle.previousEmaFast! <= candle.previousEmaSlow! && candle.emaFast! > candle.emaSlow!;
   const crossedDown =
@@ -147,6 +188,73 @@ export function getExecutionSignal(
     return { side: "short", signalPrice: candle.close };
   }
   return null;
+}
+
+function getBreakoutSignal(
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+): PendingExecutionSignal | null {
+  if (
+    candle.breakoutHigh !== null &&
+    candle.close > candle.breakoutHigh &&
+    allowsDirection(config, "long")
+  ) {
+    return { side: "long", signalPrice: candle.close };
+  }
+  if (
+    candle.breakoutLow !== null &&
+    candle.close < candle.breakoutLow &&
+    allowsDirection(config, "short")
+  ) {
+    return { side: "short", signalPrice: candle.close };
+  }
+  return null;
+}
+
+function getMeanReversionSignal(
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+): PendingExecutionSignal | null {
+  const current = candle.meanReversionZScore!;
+  const previous = candle.previousMeanReversionZScore!;
+  const threshold = config.signal.meanReversionEntryZScore;
+  if (
+    previous <= -threshold &&
+    current > -threshold &&
+    candle.previousRsi! <= config.signal.rsiOversold &&
+    allowsDirection(config, "long")
+  ) {
+    return { side: "long", signalPrice: candle.close };
+  }
+  if (
+    previous >= threshold &&
+    current < threshold &&
+    candle.previousRsi! >= config.signal.rsiOverbought &&
+    allowsDirection(config, "short")
+  ) {
+    return { side: "short", signalPrice: candle.close };
+  }
+  return null;
+}
+
+function getMomentumSignal(
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+): PendingExecutionSignal | null {
+  const current = candle.momentumPercent!;
+  const previous = candle.previousMomentumPercent!;
+  const threshold = config.signal.momentumThresholdPercent;
+  if (previous < threshold && current >= threshold && allowsDirection(config, "long")) {
+    return { side: "long", signalPrice: candle.close };
+  }
+  if (previous > -threshold && current <= -threshold && allowsDirection(config, "short")) {
+    return { side: "short", signalPrice: candle.close };
+  }
+  return null;
+}
+
+function allowsDirection(config: ExecutionStrategyConfig, side: "long" | "short"): boolean {
+  return config.signal.direction === "both" || config.signal.direction === side;
 }
 
 export function openExecutionPosition(
@@ -249,6 +357,14 @@ export function evaluateExecutionExit(
       );
     }
   }
+  if (
+    config.signal.family === "mean-reversion" &&
+    candle.meanReversionZScore !== null &&
+    ((position.side === "long" && candle.meanReversionZScore >= 0) ||
+      (position.side === "short" && candle.meanReversionZScore <= 0))
+  ) {
+    return settleExecutionPosition(position, candle.close, candle.openTime, "signal-exit", config);
+  }
   return null;
 }
 
@@ -330,7 +446,21 @@ export function getExecutionTradingSession(date: Date): ExecutionTradingSession 
 
 export function minimumExecutionCandleCount(config: ExecutionStrategyConfig): number {
   const volumeBars = Math.round(1_440 / timeframeMinutes[config.universe.timeframe]);
-  return Math.max(config.signal.emaSlowPeriod + 2, config.signal.rsiPeriod + 2, volumeBars + 2, 16);
+  const familyLookback =
+    config.signal.family === "breakout"
+      ? config.signal.breakoutLookbackPeriod
+      : config.signal.family === "mean-reversion"
+        ? config.signal.meanReversionLookbackPeriod
+        : config.signal.family === "momentum"
+          ? config.signal.momentumLookbackPeriod
+          : config.signal.emaSlowPeriod;
+  return Math.max(
+    config.signal.emaSlowPeriod + 2,
+    config.signal.rsiPeriod + 2,
+    familyLookback + 2,
+    volumeBars + 2,
+    16,
+  );
 }
 
 export function getTradingDateKey(date: Date, timezone: string): string {
@@ -340,15 +470,7 @@ export function getTradingDateKey(date: Date, timezone: string): string {
 }
 
 function canSignal(candle: EnrichedExecutionCandle, config: ExecutionStrategyConfig): boolean {
-  if (
-    candle.emaFast === null ||
-    candle.previousEmaFast === null ||
-    candle.previousEmaSlow === null ||
-    candle.rsi === null ||
-    candle.atrPercent === null
-  ) {
-    return false;
-  }
+  if (candle.atrPercent === null) return false;
   if (candle.volume24h < config.filters.minimumVolume24hUsdt) return false;
   if (
     candle.atrPercent < config.filters.minimumAtrPercent ||
@@ -356,7 +478,90 @@ function canSignal(candle: EnrichedExecutionCandle, config: ExecutionStrategyCon
   ) {
     return false;
   }
-  return config.schedule.activeDays.includes(getWeekday(candle.openTime, config.schedule.timezone));
+  if (
+    config.schedule.activeDays.length < 7 &&
+    !config.schedule.activeDays.includes(getWeekday(candle.openTime, config.schedule.timezone))
+  ) {
+    return false;
+  }
+  if (config.signal.family === "breakout") {
+    return candle.breakoutHigh !== null && candle.breakoutLow !== null;
+  }
+  if (config.signal.family === "mean-reversion") {
+    return (
+      candle.meanReversionZScore !== null &&
+      candle.previousMeanReversionZScore !== null &&
+      candle.rsi !== null &&
+      candle.previousRsi !== null
+    );
+  }
+  if (config.signal.family === "momentum") {
+    return candle.momentumPercent !== null && candle.previousMomentumPercent !== null;
+  }
+  return (
+    candle.emaFast !== null &&
+    candle.emaSlow !== null &&
+    candle.previousEmaFast !== null &&
+    candle.previousEmaSlow !== null &&
+    candle.rsi !== null
+  );
+}
+
+function rollingExtremeSeries(
+  candles: ExecutionCandle[],
+  period: number,
+  select: (candle: ExecutionCandle) => number,
+  shouldReplace: (candidate: number, current: number) => boolean,
+): Array<number | null> {
+  const result = Array<number | null>(candles.length).fill(null);
+  const indices: number[] = [];
+  let head = 0;
+  for (let index = 0; index < candles.length; index += 1) {
+    while (head < indices.length && indices[head]! < index - period) head += 1;
+    if (index >= period && head < indices.length) {
+      result[index] = select(candles[indices[head]!]!);
+    }
+    const current = select(candles[index]!);
+    while (indices.length > head && shouldReplace(current, select(candles[indices.at(-1)!]!))) {
+      indices.pop();
+    }
+    indices.push(index);
+    if (head > 1_024 && head * 2 > indices.length) {
+      indices.splice(0, head);
+      head = 0;
+    }
+  }
+  return result;
+}
+
+function rollingZScoreSeries(values: number[], period: number): Array<number | null> {
+  const result = Array<number | null>(values.length).fill(null);
+  let sum = 0;
+  let sumSquares = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]!;
+    sum += value;
+    sumSquares += value * value;
+    if (index >= period) {
+      const removed = values[index - period]!;
+      sum -= removed;
+      sumSquares -= removed * removed;
+    }
+    if (index < period - 1) continue;
+    const mean = sum / period;
+    const variance = Math.max(0, sumSquares / period - mean * mean);
+    const deviation = Math.sqrt(variance);
+    result[index] = deviation === 0 ? 0 : (value - mean) / deviation;
+  }
+  return result;
+}
+
+function momentumSeries(values: number[], period: number): Array<number | null> {
+  return values.map((value, index) => {
+    if (index < period) return null;
+    const previous = values[index - period]!;
+    return previous === 0 ? null : (value / previous - 1) * 100;
+  });
 }
 
 function emaSeries(values: number[], period: number): Array<number | null> {

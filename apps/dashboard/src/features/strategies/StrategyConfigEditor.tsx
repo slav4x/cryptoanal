@@ -81,13 +81,20 @@ export function StrategyConfigEditor({ value, onChange }: Props) {
         >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <SelectField
+              id="strategy-signal-family"
+              label="Семейство сигналов"
+              value={value.signalFamily}
+              onChange={(fieldValue) => update("signalFamily", fieldValue)}
+              options={signalFamilyOptions}
+            />
+            <SelectField
               id="strategy-direction"
               label="Направление"
               value={value.direction}
               onChange={(fieldValue) => update("direction", fieldValue)}
               options={directionOptions}
             />
-            {signalFields.map(({ key, ...field }) => (
+            {signalFieldsFor(value.signalFamily).map(({ key, ...field }) => (
               <NumberField
                 key={key}
                 {...field}
@@ -362,13 +369,71 @@ const sections = [
   { id: "schedule", label: "Schedule" },
 ] as const;
 
-const signalFields = [
+const emaSignalFields = [
   { key: "emaFastPeriod", id: "ema-fast", label: "Быстрая EMA", min: "2", max: "200" },
   { key: "emaSlowPeriod", id: "ema-slow", label: "Медленная EMA", min: "3", max: "400" },
   { key: "rsiPeriod", id: "rsi-period", label: "Период RSI", min: "2", max: "100" },
   { key: "rsiOversold", id: "rsi-oversold", label: "RSI oversold", min: "1", max: "49" },
   { key: "rsiOverbought", id: "rsi-overbought", label: "RSI overbought", min: "51", max: "99" },
 ] as const satisfies ReadonlyArray<NumberFieldDefinition>;
+
+const breakoutSignalFields = [
+  {
+    key: "breakoutLookbackPeriod",
+    id: "breakout-lookback",
+    label: "Период диапазона",
+    min: "2",
+    max: "400",
+  },
+] as const satisfies ReadonlyArray<NumberFieldDefinition>;
+
+const meanReversionSignalFields = [
+  {
+    key: "meanReversionLookbackPeriod",
+    id: "mean-reversion-lookback",
+    label: "Период средней",
+    min: "5",
+    max: "400",
+  },
+  {
+    key: "meanReversionEntryZScore",
+    id: "mean-reversion-entry-z-score",
+    label: "Порог отклонения",
+    suffix: "σ",
+    min: "0.5",
+    max: "5",
+    step: "0.1",
+  },
+  { key: "rsiPeriod", id: "rsi-period", label: "Период RSI", min: "2", max: "100" },
+  { key: "rsiOversold", id: "rsi-oversold", label: "RSI oversold", min: "1", max: "49" },
+  { key: "rsiOverbought", id: "rsi-overbought", label: "RSI overbought", min: "51", max: "99" },
+] as const satisfies ReadonlyArray<NumberFieldDefinition>;
+
+const momentumSignalFields = [
+  {
+    key: "momentumLookbackPeriod",
+    id: "momentum-lookback",
+    label: "Период импульса",
+    min: "2",
+    max: "400",
+  },
+  {
+    key: "momentumThresholdPercent",
+    id: "momentum-threshold",
+    label: "Порог импульса",
+    suffix: "%",
+    min: "0.01",
+    max: "100",
+    step: "0.1",
+  },
+] as const satisfies ReadonlyArray<NumberFieldDefinition>;
+
+function signalFieldsFor(family: string): ReadonlyArray<NumberFieldDefinition> {
+  if (family === "breakout") return breakoutSignalFields;
+  if (family === "mean-reversion") return meanReversionSignalFields;
+  if (family === "momentum") return momentumSignalFields;
+  return emaSignalFields;
+}
 
 const filterFields = [
   {
@@ -494,6 +559,13 @@ const timeframeOptions = [
   { value: "30m", label: "30 минут" },
   { value: "1h", label: "1 час" },
   { value: "4h", label: "4 часа" },
+] as const;
+
+const signalFamilyOptions = [
+  { value: "ema-crossover", label: "EMA crossover" },
+  { value: "breakout", label: "Пробой диапазона" },
+  { value: "mean-reversion", label: "Возврат к средней" },
+  { value: "momentum", label: "Momentum" },
 ] as const;
 
 const directionOptions = [

@@ -5,12 +5,18 @@ export type ActiveDay = StrategyConfigDto["schedule"]["activeDays"][number];
 export type StrategyConfigDraft = {
   symbols: string;
   timeframe: string;
+  signalFamily: string;
   direction: string;
   emaFastPeriod: string;
   emaSlowPeriod: string;
   rsiPeriod: string;
   rsiOversold: string;
   rsiOverbought: string;
+  breakoutLookbackPeriod: string;
+  meanReversionLookbackPeriod: string;
+  meanReversionEntryZScore: string;
+  momentumLookbackPeriod: string;
+  momentumThresholdPercent: string;
   minimumVolume24hUsdt: string;
   minimumAtrPercent: string;
   maximumAtrPercent: string;
@@ -32,12 +38,18 @@ export type StrategyConfigDraft = {
 export const defaultStrategyConfigDraft: StrategyConfigDraft = {
   symbols: "",
   timeframe: "15m",
+  signalFamily: "ema-crossover",
   direction: "both",
   emaFastPeriod: "20",
   emaSlowPeriod: "50",
   rsiPeriod: "14",
   rsiOversold: "30",
   rsiOverbought: "70",
+  breakoutLookbackPeriod: "20",
+  meanReversionLookbackPeriod: "20",
+  meanReversionEntryZScore: "2",
+  momentumLookbackPeriod: "20",
+  momentumThresholdPercent: "2",
   minimumVolume24hUsdt: "10000000",
   minimumAtrPercent: "0.5",
   maximumAtrPercent: "8",
@@ -60,12 +72,18 @@ export function strategyConfigToDraft(config: StrategyConfigDto): StrategyConfig
   return {
     symbols: config.universe.symbols.join(", "),
     timeframe: config.universe.timeframe,
+    signalFamily: config.signal.family,
     direction: config.signal.direction,
     emaFastPeriod: String(config.signal.emaFastPeriod),
     emaSlowPeriod: String(config.signal.emaSlowPeriod),
     rsiPeriod: String(config.signal.rsiPeriod),
     rsiOversold: String(config.signal.rsiOversold),
     rsiOverbought: String(config.signal.rsiOverbought),
+    breakoutLookbackPeriod: String(config.signal.breakoutLookbackPeriod),
+    meanReversionLookbackPeriod: String(config.signal.meanReversionLookbackPeriod),
+    meanReversionEntryZScore: String(config.signal.meanReversionEntryZScore),
+    momentumLookbackPeriod: String(config.signal.momentumLookbackPeriod),
+    momentumThresholdPercent: String(config.signal.momentumThresholdPercent),
     minimumVolume24hUsdt: String(config.filters.minimumVolume24hUsdt),
     minimumAtrPercent: String(config.filters.minimumAtrPercent),
     maximumAtrPercent: String(config.filters.maximumAtrPercent),
@@ -100,12 +118,18 @@ export function draftToStrategyConfig(draft: StrategyConfigDraft): StrategyConfi
       timeframe: draft.timeframe as StrategyConfigDto["universe"]["timeframe"],
     },
     signal: {
+      family: draft.signalFamily as StrategyConfigDto["signal"]["family"],
       direction: draft.direction as StrategyConfigDto["signal"]["direction"],
       emaFastPeriod: toNumber(draft.emaFastPeriod),
       emaSlowPeriod: toNumber(draft.emaSlowPeriod),
       rsiPeriod: toNumber(draft.rsiPeriod),
       rsiOversold: toNumber(draft.rsiOversold),
       rsiOverbought: toNumber(draft.rsiOverbought),
+      breakoutLookbackPeriod: toNumber(draft.breakoutLookbackPeriod),
+      meanReversionLookbackPeriod: toNumber(draft.meanReversionLookbackPeriod),
+      meanReversionEntryZScore: toNumber(draft.meanReversionEntryZScore),
+      momentumLookbackPeriod: toNumber(draft.momentumLookbackPeriod),
+      momentumThresholdPercent: toNumber(draft.momentumThresholdPercent),
     },
     filters: {
       minimumVolume24hUsdt: toNumber(draft.minimumVolume24hUsdt),

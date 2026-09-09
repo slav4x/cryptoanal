@@ -550,6 +550,7 @@ const exitReasonLabels: Record<ValidationTradeResultDto["exitReason"], string> =
   "stop-loss": "Stop-loss",
   "take-profit": "Take-profit",
   "trailing-stop": "Trailing stop",
+  "signal-exit": "Выход по сигналу",
   "end-of-data": "Конец данных",
 };
 

@@ -15,7 +15,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.2.0";
+export const validationEngineVersion = "cryptoanal-validation@0.3.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -38,7 +38,7 @@ export type ValidationTrade = {
   quantity: number;
   netPnl: number;
   fees: number;
-  exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "end-of-data";
+  exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data";
 };
 
 export type ValidationMetrics = {

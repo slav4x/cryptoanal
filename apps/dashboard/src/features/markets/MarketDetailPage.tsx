@@ -60,6 +60,11 @@ export default function MarketDetailPage() {
   const marketChange = Number(data.market.change24hPercent ?? 0);
   const periodChange = Number(data.analysis.periodChangePercent ?? 0);
   const regime = regimeContent[data.analysis.regime];
+  const pairPositions =
+    ledgerQuery.data?.data.positions.filter((position) => position.symbol === data.market.symbol) ??
+    [];
+  const pairTrades =
+    ledgerQuery.data?.data.trades.filter((trade) => trade.symbol === data.market.symbol) ?? [];
 
   return (
     <div className="space-y-[18px]">
@@ -142,26 +147,25 @@ export default function MarketDetailPage() {
         <CardHeader className="flex-row items-center justify-between border-b">
           <div>
             <CardTitle>График · {data.market.symbol}</CardTitle>
-            <CardDescription>Реальные свечи Bybit, последние 18 часов.</CardDescription>
+            <CardDescription>
+              {data.candles.length} реальных 15-минутных свечей Bybit с торговыми событиями.
+            </CardDescription>
           </div>
           <Badge variant="secondary">15m</Badge>
         </CardHeader>
-        <CardContent className="px-2 pb-1 pt-3 sm:px-4">
-          <CandlestickChart candles={data.candles} symbol={data.market.symbol} />
+        <CardContent className="px-0 pb-0">
+          <CandlestickChart
+            candles={data.candles}
+            symbol={data.market.symbol}
+            positions={pairPositions}
+            trades={pairTrades}
+          />
         </CardContent>
       </Card>
 
       <PairTradingContext
-        positions={
-          ledgerQuery.data?.data.positions.filter(
-            (position) => position.symbol === data.market.symbol,
-          ) ?? []
-        }
-        trades={
-          ledgerQuery.data?.data.trades
-            .filter((trade) => trade.symbol === data.market.symbol)
-            .slice(0, 5) ?? []
-        }
+        positions={pairPositions}
+        trades={pairTrades.slice(0, 5)}
         loading={ledgerQuery.isPending}
         unavailable={ledgerQuery.isError}
       />

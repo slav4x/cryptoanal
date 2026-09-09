@@ -8,6 +8,15 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/lightweight-charts/")) return "vendor-lightweight-charts";
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(directory, "src"),

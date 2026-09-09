@@ -25,41 +25,22 @@ export function PairTradingContext({
   unavailable = false,
 }: PairTradingContextProps) {
   return (
-    <div className="grid gap-3 xl:grid-cols-2">
+    <div className="space-y-3">
       <Card>
-        <CardHeader className="border-b">
-          <CardTitle>Открытая позиция</CardTitle>
-          <CardDescription>Активный торговый контекст по выбранной паре.</CardDescription>
+        <CardHeader className="flex-row items-center justify-between border-b">
+          <div>
+            <CardTitle>Открытые позиции</CardTitle>
+            <CardDescription>Все активные стратегии по выбранной паре.</CardDescription>
+          </div>
+          <Badge variant="outline">{positions.length}</Badge>
         </CardHeader>
-        <CardContent>
+        <CardContent className={positions.length > 0 ? "px-0 pb-0" : undefined}>
           {loading ? <TradingContextSkeleton /> : null}
           {unavailable ? <Unavailable /> : null}
           {!loading && !unavailable && positions.length === 0 ? (
-            <NoData>Открытой позиции нет.</NoData>
+            <NoData>Открытых позиций нет.</NoData>
           ) : null}
-          {!loading
-            ? positions.map((position) => (
-                <div key={position.id} className="grid gap-x-8 sm:grid-cols-2">
-                  <ContextRow
-                    label="Сторона"
-                    value={position.side === "buy" ? "Лонг" : "Шорт"}
-                    badge={position.side === "buy" ? "profit" : "loss"}
-                  />
-                  <ContextRow label="Количество" value={formatPrice(position.quantity)} monospace />
-                  <ContextRow label="Вход" value={formatPrice(position.entryPrice)} monospace />
-                  <ContextRow label="Mark" value={formatPrice(position.markPrice)} monospace />
-                  <ContextRow
-                    label="Нереализованный PnL"
-                    value={formatMoney(position.unrealizedPnl)}
-                    tone={Number(position.unrealizedPnl) >= 0 ? "profit" : "loss"}
-                  />
-                  <ContextRow
-                    label="Стратегия"
-                    value={`${position.strategy.name} · v${position.strategy.version}`}
-                  />
-                </div>
-              ))
-            : null}
+          {!loading && positions.length > 0 ? <OpenPositionsTable positions={positions} /> : null}
         </CardContent>
       </Card>
 
@@ -132,6 +113,97 @@ export function PairTradingContext({
   );
 }
 
+function OpenPositionsTable({ positions }: { positions: PositionDto[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[1120px] border-collapse text-[13px]">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-[0.08em] text-stale">
+            <th scope="col" className="px-4 py-3 font-medium">
+              Открыта
+            </th>
+            <th scope="col" className="px-3 py-3 font-medium">
+              Сторона
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Количество
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Вход
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Mark
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Stop loss
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Take profit
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              PnL
+            </th>
+            <th scope="col" className="px-4 py-3 font-medium">
+              Стратегия
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((position) => (
+            <tr key={position.id} className="border-t border-row-border hover:bg-row-hover">
+              <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+                {formatDateTime(position.openedAt)}
+              </td>
+              <td className="px-3 py-3">
+                <Badge variant={position.side === "buy" ? "profit" : "loss"}>
+                  {position.side === "buy" ? "Лонг" : "Шорт"}
+                </Badge>
+              </td>
+              <PriceCell value={position.quantity} />
+              <PriceCell value={position.entryPrice} />
+              <PriceCell value={position.markPrice} />
+              <PriceCell value={position.stopPrice} tone="loss" />
+              <PriceCell value={position.takePrice} tone="profit" />
+              <td
+                className={cn(
+                  "whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums",
+                  Number(position.unrealizedPnl) >= 0 ? "text-profit" : "text-loss",
+                )}
+              >
+                {formatMoney(position.unrealizedPnl)}
+              </td>
+              <td className="max-w-[280px] px-4 py-3 text-muted-foreground">
+                <span className="line-clamp-2">
+                  {position.strategy.name} · v{position.strategy.version}
+                </span>
+                {position.trailingPrice ? (
+                  <span className="mt-1 block font-mono text-[11px] text-warning">
+                    Trailing {formatPrice(position.trailingPrice)}
+                  </span>
+                ) : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PriceCell({ value, tone }: { value: string | null; tone?: "profit" | "loss" }) {
+  return (
+    <td
+      className={cn(
+        "whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums",
+        tone === "profit" && "text-profit",
+        tone === "loss" && "text-loss",
+      )}
+    >
+      {formatPrice(value)}
+    </td>
+  );
+}
+
 function TradingContextSkeleton() {
   return (
     <div className="space-y-2 py-4">
@@ -142,44 +214,19 @@ function TradingContextSkeleton() {
   );
 }
 
-function ContextRow({
-  label,
-  value,
-  monospace = false,
-  badge,
-  tone,
-}: {
-  label: string;
-  value: string;
-  monospace?: boolean;
-  badge?: "profit" | "loss";
-  tone?: "profit" | "loss";
-}) {
-  return (
-    <div className="flex min-h-11 items-center justify-between gap-4 border-b border-row-border last:border-0">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      {badge ? (
-        <Badge variant={badge}>{value}</Badge>
-      ) : (
-        <span
-          className={cn(
-            "text-right text-sm",
-            monospace && "font-mono tabular-nums",
-            tone === "profit" && "text-profit",
-            tone === "loss" && "text-loss",
-          )}
-        >
-          {value}
-        </span>
-      )}
-    </div>
-  );
-}
-
 function NoData({ children }: { children: string }) {
   return <p className="py-12 text-center text-sm text-muted-foreground">{children}</p>;
 }
 
 function Unavailable() {
   return <p className="py-12 text-center text-sm text-loss">Торговый контекст недоступен.</p>;
+}
+
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

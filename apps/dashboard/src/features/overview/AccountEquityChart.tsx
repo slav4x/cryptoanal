@@ -1,121 +1,225 @@
 import type { AccountSnapshotPointDto, OverviewPeriod } from "@cryptoanal/contracts";
+import { Button, cn } from "@cryptoanal/ui";
+import {
+  AreaSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type AreaData,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { formatMetricMoney, formatPercent } from "../../shared/format";
 
 type AccountEquityChartProps = {
   points: AccountSnapshotPointDto[];
   period: OverviewPeriod;
 };
 
-const chartWidth = 900;
-const chartHeight = 190;
-const chartPadding = { top: 12, right: 68, bottom: 24, left: 8 };
+type EquityPoint = AreaData<UTCTimestamp> & {
+  source: AccountSnapshotPointDto;
+};
+
+const colors = {
+  background: "#141517",
+  border: "#232529",
+  grid: "#1b1d22",
+  text: "#686d76",
+  crosshair: "#888d97",
+  profit: "#39d98a",
+  loss: "#ff6577",
+} as const;
+
+const dateTimeFormatter = new Intl.DateTimeFormat("ru-RU", {
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 export function AccountEquityChart({ points, period }: AccountEquityChartProps) {
-  if (points.length === 0) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const fittedPeriodRef = useRef<OverviewPeriod | null>(null);
+  const pointMapRef = useRef<Map<UTCTimestamp, AccountSnapshotPointDto>>(new Map());
+  const [inspectedPoint, setInspectedPoint] = useState<AccountSnapshotPointDto | null>(null);
+
+  const chartData = useMemo<EquityPoint[]>(() => normalizePoints(points), [points]);
+  const hasData = chartData.length > 0;
+  const firstEquity = chartData[0]?.value ?? 0;
+  const latestPoint = chartData.at(-1)?.source ?? null;
+  const displayedPoint =
+    inspectedPoint &&
+    chartData.some((point) => point.source.observedAt === inspectedPoint.observedAt)
+      ? inspectedPoint
+      : latestPoint;
+  const displayedEquity = displayedPoint ? Number(displayedPoint.equity) : null;
+  const displayedDelta = displayedEquity === null ? null : displayedEquity - firstEquity;
+  const displayedPercent =
+    firstEquity === 0 || displayedDelta === null ? null : (displayedDelta / firstEquity) * 100;
+  const positivePeriod = chartData.length < 2 || chartData.at(-1)!.value >= chartData[0]!.value;
+
+  useEffect(() => {
+    pointMapRef.current = new Map(chartData.map((point) => [point.time, point.source] as const));
+  }, [chartData]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !hasData) return;
+
+    const chart = createChart(container, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: colors.background },
+        textColor: colors.text,
+        fontFamily: '"SFMono-Regular", "SF Mono", ui-monospace, Menlo, Consolas, monospace',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: colors.grid },
+        horzLines: { color: colors.grid },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: colors.crosshair, labelBackgroundColor: "#262931" },
+        horzLine: { color: colors.crosshair, labelBackgroundColor: "#262931" },
+      },
+      rightPriceScale: {
+        borderColor: colors.border,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      },
+      timeScale: {
+        borderColor: colors.border,
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 2,
+        minBarSpacing: 2,
+      },
+      localization: {
+        locale: "ru-RU",
+        priceFormatter: formatAxisMoney,
+      },
+      handleScroll: true,
+      handleScale: true,
+    });
+    const series = chart.addSeries(AreaSeries, {
+      lineColor: colors.profit,
+      topColor: "rgba(57, 217, 138, 0.22)",
+      bottomColor: "rgba(57, 217, 138, 0)",
+      lineWidth: 2,
+      priceLineVisible: true,
+      lastValueVisible: true,
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    });
+
+    chart.subscribeCrosshairMove((parameter) => {
+      if (typeof parameter.time !== "number") {
+        setInspectedPoint(null);
+        return;
+      }
+      setInspectedPoint(pointMapRef.current.get(parameter.time as UTCTimestamp) ?? null);
+    });
+
+    chartRef.current = chart;
+    seriesRef.current = series;
+    return () => {
+      fittedPeriodRef.current = null;
+      seriesRef.current = null;
+      chartRef.current = null;
+      chart.remove();
+    };
+  }, [hasData]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series || chartData.length === 0) return;
+
+    const lineColor = positivePeriod ? colors.profit : colors.loss;
+    series.applyOptions({
+      lineColor,
+      topColor: positivePeriod ? "rgba(57, 217, 138, 0.22)" : "rgba(255, 101, 119, 0.2)",
+      bottomColor: positivePeriod ? "rgba(57, 217, 138, 0)" : "rgba(255, 101, 119, 0)",
+    });
+    series.setData(chartData.map(({ time, value }) => ({ time, value })));
+    if (fittedPeriodRef.current !== period) {
+      fittedPeriodRef.current = period;
+      chart.timeScale().fitContent();
+    }
+  }, [chartData, period, positivePeriod]);
+
+  if (chartData.length === 0) {
     return (
-      <div className="grid h-[190px] place-items-center text-sm text-muted-foreground">
+      <div className="grid h-[320px] place-items-center text-sm text-muted-foreground">
         История капитала за выбранный период пока не накоплена.
       </div>
     );
   }
 
-  const values = points.map((point) => Number(point.equity));
-  const rawMinimum = Math.min(...values);
-  const rawMaximum = Math.max(...values);
-  const valuePadding = Math.max((rawMaximum - rawMinimum) * 0.12, rawMaximum * 0.0025, 1);
-  const minimum = rawMinimum - valuePadding;
-  const maximum = rawMaximum + valuePadding;
-  const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
-  const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
-  const xForIndex = (index: number) =>
-    chartPadding.left +
-    (points.length === 1 ? innerWidth : (index / (points.length - 1)) * innerWidth);
-  const yForValue = (value: number) =>
-    chartPadding.top + ((maximum - value) / (maximum - minimum)) * innerHeight;
-  const coordinates = values.map((value, index) => [xForIndex(index), yForValue(value)] as const);
-  const linePath = coordinates
-    .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`)
-    .join(" ");
-  const firstCoordinate = coordinates[0]!;
-  const lastCoordinate = coordinates.at(-1)!;
-  const areaPath = `${linePath} L ${lastCoordinate[0].toFixed(2)} ${(chartPadding.top + innerHeight).toFixed(2)} L ${firstCoordinate[0].toFixed(2)} ${(chartPadding.top + innerHeight).toFixed(2)} Z`;
-  const gridValues = Array.from(
-    { length: 4 },
-    (_, index) => maximum - ((maximum - minimum) * index) / 3,
-  );
-
   return (
     <div>
-      <svg
-        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-        className="h-[190px] w-full overflow-visible"
+      <div className="flex min-h-12 flex-wrap items-center justify-between gap-3 border-b border-row-border px-4 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+          <span className="font-mono text-muted-foreground">
+            {displayedPoint ? dateTimeFormatter.format(new Date(displayedPoint.observedAt)) : "—"}
+          </span>
+          <span className="font-mono tabular-nums text-secondary-foreground">
+            {formatMetricMoney(displayedPoint?.equity ?? null)}
+          </span>
+          {displayedDelta !== null ? (
+            <span
+              className={cn(
+                "font-mono tabular-nums",
+                displayedDelta >= 0 ? "text-profit" : "text-loss",
+              )}
+            >
+              {formatSignedMoney(displayedDelta)}
+              {displayedPercent === null ? "" : ` · ${formatPercent(String(displayedPercent))}`}
+            </span>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2.5 text-[11px] text-muted-foreground"
+          onClick={() => chartRef.current?.timeScale().fitContent()}
+        >
+          Весь период
+        </Button>
+      </div>
+      <div
+        ref={containerRef}
+        className="h-[320px] w-full"
         role="img"
-        aria-label={`Изменение капитала за ${periodLabels[period]}`}
-      >
-        <defs>
-          <linearGradient id="equity-area" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--chart-series-1)" stopOpacity="0.18" />
-            <stop offset="100%" stopColor="var(--chart-series-1)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-
-        {gridValues.map((value) => {
-          const y = yForValue(value);
-          return (
-            <g key={value}>
-              <line
-                x1={chartPadding.left}
-                x2={chartPadding.left + innerWidth}
-                y1={y}
-                y2={y}
-                stroke="var(--chart-grid)"
-                strokeWidth="1"
-              />
-              <text
-                x={chartPadding.left + innerWidth + 10}
-                y={y + 4}
-                fill="var(--chart-axis)"
-                fontFamily="var(--font-mono)"
-                fontSize="10"
-              >
-                {formatAxisMoney(value)}
-              </text>
-            </g>
-          );
-        })}
-
-        <path d={areaPath} fill="url(#equity-area)" />
-        <path
-          d={linePath}
-          fill="none"
-          stroke="var(--chart-series-1)"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2"
-        />
-        <circle cx={lastCoordinate[0]} cy={lastCoordinate[1]} r="3" fill="var(--chart-series-1)" />
-
-        <text
-          x={chartPadding.left}
-          y={chartHeight - 3}
-          fill="var(--chart-axis)"
-          fontFamily="var(--font-sans)"
-          fontSize="10"
-        >
-          {formatAxisDate(points[0]!.observedAt, period)}
-        </text>
-        <text
-          x={chartPadding.left + innerWidth}
-          y={chartHeight - 3}
-          fill="var(--chart-axis)"
-          fontFamily="var(--font-sans)"
-          fontSize="10"
-          textAnchor="end"
-        >
-          {formatAxisDate(points.at(-1)!.observedAt, period)}
-        </text>
-      </svg>
+        aria-label={`Интерактивный график капитала за ${periodLabels[period]}`}
+      />
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-row-border px-4 py-2 text-[10px] text-stale">
+        <span>Период: {periodLabels[period]}</span>
+        <span className="ml-auto">Колесо — масштаб · перетаскивание — история</span>
+      </div>
     </div>
   );
+}
+
+function normalizePoints(points: AccountSnapshotPointDto[]): EquityPoint[] {
+  const byTimestamp = new Map<number, AccountSnapshotPointDto>();
+  for (const point of points) {
+    const timestamp = Math.floor(new Date(point.observedAt).getTime() / 1_000);
+    if (Number.isFinite(timestamp)) byTimestamp.set(timestamp, point);
+  }
+
+  return [...byTimestamp.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([timestamp, source]) => ({
+      time: timestamp as UTCTimestamp,
+      value: Number(source.equity),
+      source,
+    }))
+    .filter((point) => Number.isFinite(point.value));
 }
 
 const periodLabels: Record<OverviewPeriod, string> = {
@@ -125,16 +229,15 @@ const periodLabels: Record<OverviewPeriod, string> = {
 };
 
 function formatAxisMoney(value: number): string {
-  return new Intl.NumberFormat("ru-RU", {
+  return value.toLocaleString("ru-RU", {
     notation: Math.abs(value) >= 100_000 ? "compact" : "standard",
-    maximumFractionDigits: 0,
-  }).format(value);
+    maximumFractionDigits: 2,
+  });
 }
 
-function formatAxisDate(value: string, period: OverviewPeriod): string {
-  return new Date(value).toLocaleString("ru-RU", {
-    ...(period === "24h"
-      ? { hour: "2-digit", minute: "2-digit" }
-      : { day: "2-digit", month: "short" }),
-  });
+function formatSignedMoney(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} USDT`;
 }

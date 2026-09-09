@@ -27,6 +27,7 @@ export default function OverviewPage() {
   const overviewQuery = useQuery({
     queryKey: ["overview", period],
     queryFn: () => fetchOverview(period),
+    placeholderData: (previousData) => previousData,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
@@ -223,8 +224,8 @@ export default function OverviewPage() {
             ))}
           </div>
         </CardHeader>
-        <CardContent className="pt-4">
-          <div className="mb-2 flex items-end justify-between gap-4">
+        <CardContent className="px-0 pb-0 pt-4">
+          <div className="mb-3 flex items-end justify-between gap-4 px-4">
             <div>
               <p className="text-[13px] text-muted-foreground">Текущий капитал</p>
               <p className="mt-1 font-mono text-[26px] font-medium tabular-nums">
@@ -233,7 +234,7 @@ export default function OverviewPage() {
             </div>
             <EquityDelta points={data.equitySeries} />
           </div>
-          <AccountEquityChart points={data.equitySeries} period={period} />
+          <AccountEquityChart points={data.equitySeries} period={data.period} />
         </CardContent>
       </Card>
 

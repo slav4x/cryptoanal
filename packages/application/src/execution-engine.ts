@@ -334,12 +334,7 @@ export function minimumExecutionCandleCount(config: ExecutionStrategyConfig): nu
 }
 
 export function getTradingDateKey(date: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: timezone,
-  }).formatToParts(date);
+  const parts = getDateKeyFormatter(timezone).formatToParts(date);
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
 }
@@ -429,10 +424,29 @@ function getWeekday(
   date: Date,
   timezone: string,
 ): ExecutionStrategyConfig["schedule"]["activeDays"][number] {
-  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: timezone })
-    .format(date)
-    .toLowerCase();
+  const weekday = getWeekdayFormatter(timezone).format(date).toLowerCase();
   return weekday.slice(0, 3) as ExecutionStrategyConfig["schedule"]["activeDays"][number];
+}
+
+function getDateKeyFormatter(timezone: string): Intl.DateTimeFormat {
+  const existing = dateKeyFormatters.get(timezone);
+  if (existing) return existing;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: timezone,
+  });
+  dateKeyFormatters.set(timezone, formatter);
+  return formatter;
+}
+
+function getWeekdayFormatter(timezone: string): Intl.DateTimeFormat {
+  const existing = weekdayFormatters.get(timezone);
+  if (existing) return existing;
+  const formatter = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: timezone });
+  weekdayFormatters.set(timezone, formatter);
+  return formatter;
 }
 
 function roundExecutionValue(value: number): number {
@@ -440,3 +454,5 @@ function roundExecutionValue(value: number): number {
 }
 
 const timeframeMinutes = { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 } as const;
+const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
+const weekdayFormatters = new Map<string, Intl.DateTimeFormat>();

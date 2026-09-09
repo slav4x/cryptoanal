@@ -187,6 +187,13 @@ Signal evaluation, sizing, costs, fill policy и exit rules — чистые д�
 Уникальный correlation id и transaction-level advisory lock не допускают повторного
 решения или исполнения при параллельных циклах и перезапуске worker.
 
+`signal.family` явно выбирает одну из четырёх независимых семантик: `ema-crossover`,
+`breakout`, `mean-reversion` или `momentum`. Breakout сравнивает close с предыдущим
+диапазоном без включения текущей свечи, momentum реагирует на пересечение порога
+lookback-return, mean-reversion входит только после возврата z-score из экстремальной зоны
+при подтверждении RSI и закрывается при достижении средней. Параметры других семейств
+остаются совместимыми defaults, но не участвуют в решении выбранного алгоритма.
+
 Pause блокирует только новые входы: открытые позиции продолжают получать mark, trailing
 и автоматические exits. Stop разрешён только без открытых позиций. Ручной exit проходит
 через ту же settlement semantics, после чего одной транзакцией создаются exit order,

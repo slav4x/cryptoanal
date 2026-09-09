@@ -26,8 +26,9 @@ Dashboard, runtime/validation, analytics, migration и backup-контуры з�
 работают database users, session auth, CSRF, membership isolation, создание/переключение
 workspaces, приглашения, управление участниками, encrypted exchange connections, проверка
 Bybit credentials, deployment binding, periodic verification, управление пользовательскими
-сессиями, смена и восстановление пароля, multi-workspace worker. Следующий продуктовый блок —
-оставшийся client hardening. Landing остаётся последним этапом.
+сессиями, смена и восстановление пароля, multi-workspace worker, а также четыре независимых
+семейства сигналов: EMA crossover, breakout, mean-reversion и momentum. Следующий
+продуктовый блок — оставшийся client hardening. Landing остаётся последним этапом.
 
 ## Требования
 
@@ -247,6 +248,11 @@ Worker обрабатывает только завершённые свечи �
 странице `/trades` по свежему market snapshot и имеет собственные idempotency receipt и
 audit event. Runtime и validation используют общие функции сигналов, risk sizing,
 комиссий, slippage и exit rules.
+
+Конфигурация явно выбирает `ema-crossover`, `breakout`, `mean-reversion` или `momentum`.
+Для каждого семейства редактор показывает только относящиеся к нему параметры, а runtime
+и validation рассчитывают один и тот же сигнал. Текущий development-портфель содержит 15
+изолированных dry-run accounts; приватные биржевые ордера по-прежнему не отправляются.
 
 Текущая execution policy использует 1× совокупную экспозицию: номинал одной позиции
 ограничен `equity / maxOpenPositions`. Явные leverage и max exposure появятся вместе с

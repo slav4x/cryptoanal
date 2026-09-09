@@ -41,7 +41,7 @@
 - [x] Start/pause/resume/stop commands, confirmations, idempotency и audit trail.
 - [x] Один активный deployment на изолированный dry-run account.
 - [x] Параллельные strategy deployments с автоматическими account ids и portfolio snapshot.
-- [ ] Добавить в execution/validation engine самостоятельные семейства сигналов для
+- [x] Добавить в execution/validation engine самостоятельные семейства сигналов для
       широкого сравнительного среза: breakout, mean-reversion и momentum.
 - [x] Worker execution loop для активного dry-run deployment.
 - [x] Manual close позиции как отдельная команда.

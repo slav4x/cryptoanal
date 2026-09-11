@@ -4,6 +4,8 @@
 
 ### Added
 
+- One shared Bybit public WebSocket stream with dynamic ticker/kline subscriptions, reconnects and REST history fallback.
+- A one-second realtime quote loop for dry-run entries and exact-price SL, TP and trailing-stop handling, with throttled mark persistence.
 - Parallel dry-run strategy execution with automatically isolated per-strategy accounts and an aggregated portfolio snapshot.
 - Independent EMA crossover, breakout, mean-reversion and momentum signal families in the shared runtime/validation engine.
 - Family-specific strategy editor controls, configuration snapshots and validation/runtime diagnostics.

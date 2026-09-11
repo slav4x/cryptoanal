@@ -181,11 +181,25 @@ Signal evaluation, sizing, costs, fill policy и exit rules — чистые д�
 а не через копирование большой функции.
 
 Текущая реализация находится в `packages/application/src/execution-engine.ts`: validation
-прогоняет через неё последовательность исторических свечей, а worker применяет те же
-правила к последней завершённой свече. Runtime cursor хранит последнюю обработанную
-свечу, pending signal и диагностическое состояние отдельно для каждой пары запуска.
-Уникальный correlation id и transaction-level advisory lock не допускают повторного
-решения или исполнения при параллельных циклах и перезапуске worker.
+прогоняет через неё последовательность исторических свечей, а worker разделяет исполнение
+на два контура. Bar-close loop рассчитывает индикаторы и сигналы только по подтверждённой
+закрытой свече. Quote loop раз в секунду читает последнюю ticker-котировку, исполняет
+ожидающий вход и проверяет SL, TP и trailing-stop по точной цене; промежуточные mark/PnL
+пишутся в БД не чаще одного раза в пять секунд. Оба контура используют общие sizing,
+slippage, fees и settlement functions, но получают цену через разные adapters: candle в
+validation и realtime quote в runtime.
+
+Public market adapter держит одно WebSocket-соединение к Bybit, каждые 30 секунд
+синхронизирует динамический набор ticker/kline subscriptions и переподключается после
+разрыва. В базу из stream попадают только kline с `confirm=true`. REST polling сохранён как
+fallback и периодически закрывает возможные пробелы в истории. При устаревшей или
+недоступной realtime quote сопровождение временно возвращается к консервативной OHLC
+семантике завершённой свечи.
+
+Runtime cursor хранит последнюю обработанную свечу, pending signal и диагностическое
+состояние отдельно для каждой пары запуска. Уникальный correlation id и transaction-level
+advisory lock не допускают повторного решения или исполнения при параллельных циклах и
+перезапуске worker.
 
 `signal.family` явно выбирает одну из четырёх независимых семантик: `ema-crossover`,
 `breakout`, `mean-reversion` или `momentum`. Breakout сравнивает close с предыдущим

@@ -45,6 +45,12 @@
       широкого сравнительного среза: breakout, mean-reversion и momentum.
 - [x] Worker execution loop для активного dry-run deployment.
 - [x] Manual close позиции как отдельная команда.
+- [x] Перевести public market data на один Bybit WebSocket с динамическими ticker/kline
+      subscriptions и REST fallback для восстановления истории.
+- [x] Разделить runtime на bar-close signal loop и быстрый quote loop: realtime mark price,
+      точные SL/TP/trailing-stop и вход сразу после подтверждённого закрытия сигнальной свечи.
+- [x] Проверить отдельные 5m-кандидаты на backtest и walk-forward; не запускать варианты,
+      которые не проходят существующие gates.
 
 ## Этап 4 — Validation Center
 

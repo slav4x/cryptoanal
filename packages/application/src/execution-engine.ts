@@ -81,6 +81,12 @@ export type PendingExecutionSignal = {
   signalPrice: number;
 };
 
+export type ExecutionQuote = {
+  symbol: string;
+  price: number;
+  observedAt: Date;
+};
+
 export type ExecutionMarketRegime = "bull" | "bear" | "neutral" | "unknown";
 export type ExecutionTradingSession = "asia" | "europe" | "us" | "off-hours" | "unknown";
 
@@ -279,6 +285,88 @@ export function openExecutionPosition(
     config.entry.orderType === "limit"
       ? limitPrice
       : referencePrice * (side === "long" ? 1 + slippageRate : 1 - slippageRate);
+  return createExecutionPosition({
+    signal,
+    symbol: candle.symbol,
+    referencePrice,
+    entryPrice,
+    openedAt: candle.openTime,
+    entryRegime: getExecutionMarketRegime(candle),
+    entrySession: getExecutionTradingSession(candle.openTime),
+    equity,
+    maximumNotional,
+    feeBps:
+      config.entry.orderType === "limit" ? config.costs.makerFeeBps : config.costs.takerFeeBps,
+    config,
+  });
+}
+
+export function openExecutionPositionAtQuote(
+  signal: PendingExecutionSignal,
+  quote: ExecutionQuote,
+  entryRegime: ExecutionMarketRegime,
+  equity: number,
+  maximumNotional: number,
+  config: ExecutionStrategyConfig,
+): ExecutionPosition | null {
+  const limitOffset = config.entry.limitOffsetBps / 10_000;
+  const limitPrice =
+    signal.signalPrice * (signal.side === "long" ? 1 - limitOffset : 1 + limitOffset);
+  if (
+    config.entry.orderType === "limit" &&
+    ((signal.side === "long" && quote.price > limitPrice) ||
+      (signal.side === "short" && quote.price < limitPrice))
+  ) {
+    return null;
+  }
+  const referencePrice = config.entry.orderType === "limit" ? limitPrice : quote.price;
+  const slippageRate = config.costs.slippageBps / 10_000;
+  const entryPrice =
+    config.entry.orderType === "limit"
+      ? limitPrice
+      : referencePrice * (signal.side === "long" ? 1 + slippageRate : 1 - slippageRate);
+  return createExecutionPosition({
+    signal,
+    symbol: quote.symbol,
+    referencePrice,
+    entryPrice,
+    openedAt: quote.observedAt,
+    entryRegime,
+    entrySession: getExecutionTradingSession(quote.observedAt),
+    equity,
+    maximumNotional,
+    feeBps:
+      config.entry.orderType === "limit" ? config.costs.makerFeeBps : config.costs.takerFeeBps,
+    config,
+  });
+}
+
+function createExecutionPosition({
+  signal,
+  symbol,
+  referencePrice,
+  entryPrice,
+  openedAt,
+  entryRegime,
+  entrySession,
+  equity,
+  maximumNotional,
+  feeBps,
+  config,
+}: {
+  signal: PendingExecutionSignal;
+  symbol: string;
+  referencePrice: number;
+  entryPrice: number;
+  openedAt: Date;
+  entryRegime: ExecutionMarketRegime;
+  entrySession: ExecutionTradingSession;
+  equity: number;
+  maximumNotional: number;
+  feeBps: number;
+  config: ExecutionStrategyConfig;
+}): ExecutionPosition | null {
+  const side = signal.side;
   const stopDistance = entryPrice * (config.exit.stopLossPercent / 100);
   const riskAmount = Math.max(0, equity) * (config.risk.riskPerTradePercent / 100);
   const riskSizedQuantity = stopDistance > 0 ? riskAmount / stopDistance : 0;
@@ -294,14 +382,12 @@ export function openExecutionPosition(
     (side === "long"
       ? 1 + config.exit.takeProfitPercent / 100
       : 1 - config.exit.takeProfitPercent / 100);
-  const feeBps =
-    config.entry.orderType === "limit" ? config.costs.makerFeeBps : config.costs.takerFeeBps;
   return {
-    symbol: candle.symbol,
+    symbol,
     side,
-    entryRegime: getExecutionMarketRegime(candle),
-    entrySession: getExecutionTradingSession(candle.openTime),
-    openedAt: candle.openTime,
+    entryRegime,
+    entrySession,
+    openedAt,
     entryPrice,
     quantity,
     stopPrice,
@@ -357,15 +443,79 @@ export function evaluateExecutionExit(
       );
     }
   }
-  if (
-    config.signal.family === "mean-reversion" &&
-    candle.meanReversionZScore !== null &&
-    ((position.side === "long" && candle.meanReversionZScore >= 0) ||
-      (position.side === "short" && candle.meanReversionZScore <= 0))
-  ) {
-    return settleExecutionPosition(position, candle.close, candle.openTime, "signal-exit", config);
+  return evaluateExecutionSignalExit(position, candle, config);
+}
+
+export function evaluateExecutionPriceExit(
+  position: ExecutionPosition,
+  quote: ExecutionQuote,
+  config: ExecutionStrategyConfig,
+): ExecutionSettlement<Exclude<AutomaticExitReason, "signal-exit">> | null {
+  if (position.side === "long") {
+    if (quote.price <= position.stopPrice) {
+      return settleExecutionPosition(position, quote.price, quote.observedAt, "stop-loss", config);
+    }
+    if (position.trailingPrice !== null && quote.price <= position.trailingPrice) {
+      return settleExecutionPosition(
+        position,
+        quote.price,
+        quote.observedAt,
+        "trailing-stop",
+        config,
+      );
+    }
+    if (quote.price >= position.takePrice) {
+      return settleExecutionPosition(
+        position,
+        position.takePrice,
+        quote.observedAt,
+        "take-profit",
+        config,
+      );
+    }
+  } else {
+    if (quote.price >= position.stopPrice) {
+      return settleExecutionPosition(position, quote.price, quote.observedAt, "stop-loss", config);
+    }
+    if (position.trailingPrice !== null && quote.price >= position.trailingPrice) {
+      return settleExecutionPosition(
+        position,
+        quote.price,
+        quote.observedAt,
+        "trailing-stop",
+        config,
+      );
+    }
+    if (quote.price <= position.takePrice) {
+      return settleExecutionPosition(
+        position,
+        position.takePrice,
+        quote.observedAt,
+        "take-profit",
+        config,
+      );
+    }
   }
   return null;
+}
+
+export function evaluateExecutionSignalExit(
+  position: ExecutionPosition,
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+  closedAt = candle.openTime,
+): ExecutionSettlement<"signal-exit"> | null {
+  if (
+    config.signal.family !== "mean-reversion" ||
+    candle.meanReversionZScore === null ||
+    !(
+      (position.side === "long" && candle.meanReversionZScore >= 0) ||
+      (position.side === "short" && candle.meanReversionZScore <= 0)
+    )
+  ) {
+    return null;
+  }
+  return settleExecutionPosition(position, candle.close, closedAt, "signal-exit", config);
 }
 
 export function updateExecutionTrailing(
@@ -383,6 +533,28 @@ export function updateExecutionTrailing(
     };
   }
   const bestPrice = Math.min(position.bestPrice, candle.low);
+  return {
+    ...position,
+    bestPrice,
+    trailingPrice: bestPrice * (1 + config.exit.trailingStopPercent / 100),
+  };
+}
+
+export function updateExecutionTrailingAtPrice(
+  position: ExecutionPosition,
+  price: number,
+  config: ExecutionStrategyConfig,
+): ExecutionPosition {
+  if (config.exit.trailingStopPercent <= 0) return { ...position };
+  if (position.side === "long") {
+    const bestPrice = Math.max(position.bestPrice, price);
+    return {
+      ...position,
+      bestPrice,
+      trailingPrice: bestPrice * (1 - config.exit.trailingStopPercent / 100),
+    };
+  }
+  const bestPrice = Math.min(position.bestPrice, price);
   return {
     ...position,
     bestPrice,

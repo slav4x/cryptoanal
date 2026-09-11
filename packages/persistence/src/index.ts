@@ -115,6 +115,8 @@ export {
   RuntimePositionStatusConflictError,
   RuntimeStateConflictError,
   type PersistRuntimeCycleInput,
+  type PersistRuntimeQuoteInput,
+  type PersistRealtimeEntryInput,
   type RuntimeCyclePosition,
   type RuntimeCycleSettlement,
 } from "./runtime-repository";

@@ -74,6 +74,43 @@ export type PersistRuntimeCycleInput = {
   positionAction: RuntimePositionAction;
 };
 
+export type PersistRuntimeQuoteInput = {
+  workspaceId: string;
+  deploymentId: string;
+  executionRunId: string;
+  strategyVersionId: string;
+  positionId: string;
+  symbol: string;
+  quotePrice: string;
+  quoteAt: Date;
+  factors: Prisma.InputJsonValue;
+  action:
+    | {
+        kind: "update";
+        markPrice: string;
+        unrealizedPnl: string;
+        bestPrice: string;
+        trailingPrice: string | null;
+      }
+    | { kind: "close"; settlement: RuntimeCycleSettlement };
+};
+
+export type PersistRealtimeEntryInput = {
+  workspaceId: string;
+  deploymentId: string;
+  executionRunId: string;
+  strategyVersionId: string;
+  symbol: string;
+  expectedCandleAt: Date;
+  quoteAt: Date;
+  quotePrice: string;
+  unrealizedPnl: string;
+  maxOpenPositions: number;
+  entryOrderType: "MARKET" | "LIMIT";
+  position: RuntimeCyclePosition;
+  factors: Prisma.InputJsonValue;
+};
+
 export class RuntimeStateConflictError extends Error {}
 export class RuntimePositionNotFoundError extends Error {}
 export class RuntimePositionStatusConflictError extends Error {}
@@ -219,6 +256,307 @@ export class RuntimeRepository {
         new Prisma.Decimal(initialBalance).add(trades._sum.netPnl ?? 0),
       )
       .toNumber();
+  }
+
+  public listRecentAccountTrades(workspaceId: string, exchangeAccountId: string, since: Date) {
+    return this.prisma.trade.findMany({
+      where: {
+        workspaceId,
+        environment: "DRY_RUN",
+        executionRun: { deployment: { exchangeAccountId } },
+        closedAt: { gte: since },
+      },
+      select: { closedAt: true, netPnl: true },
+    });
+  }
+
+  public listRealtimePositions(workspaceId: string) {
+    return this.prisma.position.findMany({
+      where: {
+        workspaceId,
+        status: "OPEN",
+        executionRun: {
+          status: "RUNNING",
+          deployment: { status: { in: ["RUNNING", "PAUSED"] } },
+        },
+      },
+      orderBy: { openedAt: "asc" },
+      select: {
+        id: true,
+        workspaceId: true,
+        executionRunId: true,
+        strategyVersionId: true,
+        symbol: true,
+        side: true,
+        openedAt: true,
+        entryPrice: true,
+        quantity: true,
+        stopPrice: true,
+        takePrice: true,
+        trailingPrice: true,
+        bestPrice: true,
+        entryFee: true,
+        entrySlippage: true,
+        entryRegime: true,
+        entrySession: true,
+        strategyVersion: { select: { config: true } },
+        executionRun: {
+          select: {
+            deployment: { select: { id: true, status: true } },
+          },
+        },
+      },
+    });
+  }
+
+  public async persistRealtimeQuote(input: PersistRuntimeQuoteInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw(Prisma.sql`
+        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
+      `);
+      const position = await transaction.position.findFirst({
+        where: {
+          id: input.positionId,
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          strategyVersionId: input.strategyVersionId,
+          symbol: input.symbol,
+          status: "OPEN",
+        },
+        select: {
+          id: true,
+          side: true,
+          quantity: true,
+          entryPrice: true,
+          entryFee: true,
+          entryRegime: true,
+          entrySession: true,
+          openedAt: true,
+          executionRun: {
+            select: {
+              status: true,
+              deployment: { select: { id: true, status: true } },
+            },
+          },
+        },
+      });
+      if (!position) return { applied: false, closed: false };
+      if (
+        position.executionRun.status !== "RUNNING" ||
+        position.executionRun.deployment.id !== input.deploymentId ||
+        (position.executionRun.deployment.status !== "RUNNING" &&
+          position.executionRun.deployment.status !== "PAUSED")
+      ) {
+        return { applied: false, closed: false };
+      }
+
+      if (input.action.kind === "update") {
+        await transaction.position.update({
+          where: { id: position.id },
+          data: {
+            markPrice: input.action.markPrice,
+            unrealizedPnl: input.action.unrealizedPnl,
+            bestPrice: input.action.bestPrice,
+            trailingPrice: input.action.trailingPrice,
+          },
+        });
+        return { applied: true, closed: false };
+      }
+
+      const correlationId = `runtime-quote:${position.id}:${input.quoteAt.toISOString()}`;
+      const trade = await persistClosedPosition(
+        transaction,
+        {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          strategyVersionId: input.strategyVersionId,
+          positionId: position.id,
+          symbol: input.symbol,
+          side: position.side,
+          quantity: position.quantity.toFixed(),
+          entryPrice: position.entryPrice.toFixed(),
+          entryFee: position.entryFee.toFixed(),
+          entryRegime: position.entryRegime,
+          entrySession: position.entrySession,
+          openedAt: position.openedAt,
+          correlationId,
+        },
+        input.action.settlement,
+      );
+      await transaction.decision.create({
+        data: {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          strategyVersionId: input.strategyVersionId,
+          positionId: position.id,
+          tradeId: trade.id,
+          symbol: input.symbol,
+          action: "CLOSE",
+          reasonCode: input.action.settlement.exitReason.toUpperCase().replaceAll("-", "_"),
+          summary: `Позиция закрыта по realtime quote: ${input.action.settlement.exitReason}`,
+          factors: input.factors,
+          marketSnapshotRef: `market-ticker:${input.symbol}:${input.quoteAt.toISOString()}`,
+          correlationId,
+          decidedAt: input.quoteAt,
+        },
+      });
+      return { applied: true, closed: true };
+    });
+  }
+
+  public async persistRealtimeEntry(input: PersistRealtimeEntryInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw(Prisma.sql`
+        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
+      `);
+      const [deployment, executionRun, cursor, currentPosition] = await Promise.all([
+        transaction.deployment.findFirst({
+          where: { id: input.deploymentId, workspaceId: input.workspaceId },
+          select: { status: true },
+        }),
+        transaction.executionRun.findFirst({
+          where: {
+            id: input.executionRunId,
+            workspaceId: input.workspaceId,
+            deploymentId: input.deploymentId,
+          },
+          select: { status: true },
+        }),
+        transaction.runtimeCursor.findUnique({
+          where: {
+            executionRunId_symbol: {
+              executionRunId: input.executionRunId,
+              symbol: input.symbol,
+            },
+          },
+          select: { lastEvaluatedAt: true, pendingSignal: true },
+        }),
+        transaction.position.findFirst({
+          where: {
+            workspaceId: input.workspaceId,
+            executionRunId: input.executionRunId,
+            symbol: input.symbol,
+            status: "OPEN",
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (
+        deployment?.status !== "RUNNING" ||
+        executionRun?.status !== "RUNNING" ||
+        !cursor ||
+        !cursor.pendingSignal ||
+        cursor.lastEvaluatedAt?.getTime() !== input.expectedCandleAt.getTime() ||
+        currentPosition
+      ) {
+        return { applied: false, capacityReached: false };
+      }
+      const openPositions = await transaction.position.count({
+        where: {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          status: "OPEN",
+        },
+      });
+      if (openPositions >= input.maxOpenPositions) {
+        return { applied: false, capacityReached: true };
+      }
+
+      const correlationId = `runtime-entry:${input.executionRunId}:${input.symbol}:${input.quoteAt.toISOString()}`;
+      const position = await transaction.position.create({
+        data: {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          strategyVersionId: input.strategyVersionId,
+          symbol: input.symbol,
+          environment: "DRY_RUN",
+          side: input.position.side,
+          entryRegime: input.position.entryRegime,
+          entrySession: input.position.entrySession,
+          status: "OPEN",
+          quantity: input.position.quantity,
+          entryPrice: input.position.entryPrice,
+          stopPrice: input.position.stopPrice,
+          takePrice: input.position.takePrice,
+          trailingPrice: input.position.trailingPrice,
+          bestPrice: input.position.bestPrice,
+          entryFee: input.position.entryFee,
+          entrySlippage: input.position.entrySlippage,
+          markPrice: input.quotePrice,
+          unrealizedPnl: input.unrealizedPnl,
+          openedAt: input.position.openedAt,
+        },
+        select: { id: true },
+      });
+      await createFilledOrder(transaction, {
+        workspaceId: input.workspaceId,
+        executionRunId: input.executionRunId,
+        positionId: position.id,
+        symbol: input.symbol,
+        clientOrderId: `${correlationId}:entry`,
+        side: input.position.side,
+        type: input.entryOrderType,
+        quantity: input.position.quantity,
+        price: input.position.entryPrice,
+        fee: input.position.entryFee,
+        filledAt: input.position.openedAt,
+      });
+      const decision = await transaction.decision.create({
+        data: {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          strategyVersionId: input.strategyVersionId,
+          positionId: position.id,
+          symbol: input.symbol,
+          action: "OPEN",
+          reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
+          summary: `Сигнал исполнен по realtime quote: ${input.position.side === "BUY" ? "long" : "short"}`,
+          factors: input.factors,
+          marketSnapshotRef: `market-ticker:${input.symbol}:${input.quoteAt.toISOString()}`,
+          correlationId,
+          decidedAt: input.quoteAt,
+        },
+        select: { id: true },
+      });
+      await transaction.runtimeCursor.update({
+        where: {
+          executionRunId_symbol: {
+            executionRunId: input.executionRunId,
+            symbol: input.symbol,
+          },
+        },
+        data: { pendingSignal: Prisma.DbNull, lastDecisionId: decision.id },
+      });
+      return { applied: true, capacityReached: false };
+    });
+  }
+
+  public listRealtimePendingEntries(workspaceId: string) {
+    return this.prisma.runtimeCursor.findMany({
+      where: {
+        workspaceId,
+        pendingSignal: { not: Prisma.DbNull },
+        executionRun: {
+          status: "RUNNING",
+          deployment: { status: "RUNNING" },
+        },
+      },
+      select: {
+        symbol: true,
+        lastEvaluatedAt: true,
+        pendingSignal: true,
+        executionRun: {
+          select: {
+            id: true,
+            strategyVersionId: true,
+            strategyVersion: { select: { config: true } },
+            deployment: {
+              select: { id: true, workspaceId: true, exchangeAccountId: true },
+            },
+          },
+        },
+      },
+    });
   }
 
   public async persistCycle(input: PersistRuntimeCycleInput) {

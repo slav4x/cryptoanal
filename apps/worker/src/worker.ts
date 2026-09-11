@@ -2,6 +2,8 @@ import {
   enrichExecutionCandles,
   evaluateHealth,
   evaluateExecutionExit,
+  evaluateExecutionPriceExit,
+  evaluateExecutionSignalExit,
   executionUnrealizedPnl,
   getExecutionSignal,
   getExecutionMarketRegime,
@@ -9,9 +11,13 @@ import {
   getTradingDateKey,
   minimumExecutionCandleCount,
   openExecutionPosition,
+  openExecutionPositionAtQuote,
   runValidationEngine,
   updateExecutionTrailing,
+  updateExecutionTrailingAtPrice,
+  type ExecutionMarketRegime,
   type ExecutionPosition,
+  type ExecutionQuote,
   type ExecutionSettlement,
   type PendingExecutionSignal,
   type ValidationCandle,
@@ -28,6 +34,7 @@ import {
   BybitPrivateApiUnavailableError,
   BybitPrivateClient,
   BybitPublicMarketClient,
+  BybitPublicStreamClient,
   describeBybitCredentialRejection,
   evaluateBybitPermissions,
 } from "@cryptoanal/exchange-bybit";
@@ -66,11 +73,15 @@ const workspaceRepository = new WorkspaceRepository(prisma);
 const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
 const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
 const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
+const marketStreamClient = new BybitPublicStreamClient(config.BYBIT_PUBLIC_WS_URL);
 const privateClients = {
   DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL),
   LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL),
 } as const;
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
+const marketStreamAbortController = new AbortController();
+const latestQuotes = new Map<string, ExecutionQuote>();
+const lastPositionMarkPersistedAt = new Map<string, number>();
 
 let stopping = false;
 
@@ -123,32 +134,7 @@ async function marketDataLoop() {
 async function candleDataLoop() {
   while (!stopping) {
     try {
-      const symbols = await marketDataRepository.listEnabledSymbols();
-      const requirements = new Map<string, { symbol: string; interval: string; limit: number }>();
-      for (const symbol of symbols) {
-        requirements.set(`${symbol}:15`, { symbol, interval: "15", limit: 200 });
-      }
-      const workspaceIds = await workspaceRepository.listOperationalIds();
-      const runtimeTargets = (
-        await Promise.all(
-          workspaceIds.map((workspaceId) => runtimeRepository.listActiveTargets(workspaceId)),
-        )
-      ).flat();
-      for (const target of runtimeTargets) {
-        const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
-        const interval = bybitIntervals[strategyConfig.universe.timeframe];
-        const limit = Math.min(1_000, minimumExecutionCandleCount(strategyConfig) + 1);
-        for (const symbol of strategyConfig.universe.symbols) {
-          const key = `${symbol}:${interval}`;
-          const current = requirements.get(key);
-          requirements.set(key, {
-            symbol,
-            interval,
-            limit: Math.max(current?.limit ?? 0, limit),
-          });
-        }
-      }
-      const requestedSeries = [...requirements.values()];
+      const requestedSeries = await listRequiredMarketSeries();
       const results = await Promise.allSettled(
         requestedSeries.map((series) =>
           marketClient.getLinearKlines(series.symbol, series.interval, series.limit),
@@ -173,6 +159,67 @@ async function candleDataLoop() {
 
     await new Promise((resolve) => setTimeout(resolve, config.CANDLE_POLL_INTERVAL_MS));
   }
+}
+
+async function marketStreamLoop() {
+  await marketStreamClient.run(
+    {
+      getSubscriptions: async () => {
+        const enabledSymbols = await marketDataRepository.listEnabledSymbols();
+        const series = await listRequiredMarketSeries();
+        return {
+          tickerSymbols: [...new Set([...enabledSymbols, ...series.map(({ symbol }) => symbol)])],
+          klines: series.map(({ symbol, interval }) => ({ symbol, interval })),
+        };
+      },
+      onQuote: (quote) => {
+        const price = Number(quote.price);
+        if (!Number.isFinite(price) || price <= 0) return;
+        latestQuotes.set(quote.symbol, {
+          symbol: quote.symbol,
+          price,
+          observedAt: quote.observedAt,
+        });
+      },
+      onClosedCandle: async (candle) => {
+        await marketDataRepository.saveCandles([candle]);
+      },
+      onConnected: () => logger.info("Bybit public market stream connected"),
+      onDisconnected: (code, reason) =>
+        logger.warn({ code, reason }, "Bybit public market stream disconnected"),
+      onError: (error) => logger.warn({ err: error }, "Bybit public market stream error"),
+    },
+    marketStreamAbortController.signal,
+  );
+}
+
+async function listRequiredMarketSeries() {
+  const symbols = await marketDataRepository.listEnabledSymbols();
+  const requirements = new Map<string, { symbol: string; interval: string; limit: number }>();
+  for (const symbol of symbols) {
+    requirements.set(`${symbol}:15`, { symbol, interval: "15", limit: 200 });
+  }
+  const workspaceIds = await workspaceRepository.listOperationalIds();
+  const runtimeTargets = (
+    await Promise.all(
+      workspaceIds.map((workspaceId) => runtimeRepository.listActiveTargets(workspaceId)),
+    )
+  ).flat();
+  for (const target of runtimeTargets) {
+    const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
+    const interval = bybitIntervals[strategyConfig.universe.timeframe];
+    const limit = Math.min(1_000, minimumExecutionCandleCount(strategyConfig) + 1);
+    for (const symbol of strategyConfig.universe.symbols) {
+      const key = `${symbol}:${interval}`;
+      const current = requirements.get(key);
+      requirements.set(key, {
+        symbol,
+        interval,
+        limit: Math.max(current?.limit ?? 0, limit),
+      });
+    }
+  }
+  return [...requirements.values()];
 }
 
 async function accountSnapshotLoop() {
@@ -409,6 +456,167 @@ async function runtimeLoop() {
   }
 }
 
+async function runtimeQuoteLoop() {
+  while (!stopping) {
+    const workspaceIds = await listOperationalWorkspaceIds("runtime quote");
+    for (const workspaceId of workspaceIds) {
+      try {
+        const [positions, pendingEntries] = await Promise.all([
+          runtimeRepository.listRealtimePositions(workspaceId),
+          runtimeRepository.listRealtimePendingEntries(workspaceId),
+        ]);
+        for (const position of positions) {
+          try {
+            await processRealtimePosition(position);
+          } catch (error) {
+            logger.error(
+              { err: error, workspaceId, positionId: position.id, symbol: position.symbol },
+              "Realtime position update failed",
+            );
+          }
+        }
+        for (const pending of pendingEntries) {
+          try {
+            await processRealtimeEntry(pending);
+          } catch (error) {
+            logger.error(
+              {
+                err: error,
+                workspaceId,
+                executionRunId: pending.executionRun.id,
+                symbol: pending.symbol,
+              },
+              "Realtime pending entry failed",
+            );
+          }
+        }
+      } catch (error) {
+        logger.error({ err: error, workspaceId }, "Realtime quote cycle failed");
+      }
+    }
+    await delay(config.RUNTIME_QUOTE_INTERVAL_MS);
+  }
+}
+
+async function processRealtimePosition(
+  target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
+) {
+  const quote = getFreshQuote(target.symbol);
+  if (!quote || quote.observedAt < target.openedAt) return;
+  const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
+  const position = deserializeExecutionPosition(target);
+  const settlement = evaluateExecutionPriceExit(position, quote, strategyConfig);
+  const updated = settlement
+    ? position
+    : updateExecutionTrailingAtPrice(position, quote.price, strategyConfig);
+  const lastPersistedAt = lastPositionMarkPersistedAt.get(target.id) ?? 0;
+  if (
+    !settlement &&
+    quote.observedAt.getTime() - lastPersistedAt < config.RUNTIME_MARK_PERSIST_INTERVAL_MS
+  ) {
+    return;
+  }
+  const result = await runtimeRepository.persistRealtimeQuote({
+    workspaceId: target.workspaceId,
+    deploymentId: target.executionRun.deployment.id,
+    executionRunId: target.executionRunId,
+    strategyVersionId: target.strategyVersionId,
+    positionId: target.id,
+    symbol: target.symbol,
+    quotePrice: String(quote.price),
+    quoteAt: quote.observedAt,
+    factors: realtimeQuoteFactors(quote),
+    action: settlement
+      ? { kind: "close", settlement: serializeSettlement(settlement) }
+      : {
+          kind: "update",
+          markPrice: String(quote.price),
+          unrealizedPnl: String(executionUnrealizedPnl(updated, quote.price)),
+          bestPrice: String(updated.bestPrice),
+          trailingPrice: updated.trailingPrice === null ? null : String(updated.trailingPrice),
+        },
+  });
+  if (result.applied) {
+    lastPositionMarkPersistedAt.set(target.id, quote.observedAt.getTime());
+  }
+  if (result.closed) {
+    lastPositionMarkPersistedAt.delete(target.id);
+    logger.info(
+      { positionId: target.id, symbol: target.symbol, reason: settlement?.exitReason },
+      "Position closed from realtime quote",
+    );
+  }
+}
+
+async function processRealtimeEntry(
+  target: Awaited<ReturnType<RuntimeRepository["listRealtimePendingEntries"]>>[number],
+) {
+  const pending = parseRealtimePendingSignal(target.pendingSignal);
+  if (!pending || !target.lastEvaluatedAt) return;
+  const quote = getFreshQuote(target.symbol);
+  if (!quote || quote.observedAt < pending.detectedAt || quote.observedAt > pending.expiresAt) {
+    return;
+  }
+  const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
+  const recentTrades = await runtimeRepository.listRecentAccountTrades(
+    target.executionRun.deployment.workspaceId,
+    target.executionRun.deployment.exchangeAccountId,
+    new Date(Date.now() - 48 * 60 * 60 * 1_000),
+  );
+  const tradingDay = getTradingDateKey(quote.observedAt, strategyConfig.schedule.timezone);
+  const dailyPnl = recentTrades
+    .filter(
+      (trade) => getTradingDateKey(trade.closedAt, strategyConfig.schedule.timezone) === tradingDay,
+    )
+    .reduce((sum, trade) => sum + trade.netPnl.toNumber(), 0);
+  const lossLimit =
+    config.DRY_RUN_INITIAL_BALANCE * (strategyConfig.risk.maxDailyLossPercent / 100);
+  if (dailyPnl <= -lossLimit) return;
+  const equity = await runtimeRepository.getDryRunEquity(
+    target.executionRun.deployment.workspaceId,
+    target.executionRun.deployment.exchangeAccountId,
+    String(config.DRY_RUN_INITIAL_BALANCE),
+  );
+  const position = openExecutionPositionAtQuote(
+    pending,
+    quote,
+    pending.entryRegime,
+    equity,
+    Math.max(0, equity) / strategyConfig.risk.maxOpenPositions,
+    strategyConfig,
+  );
+  if (!position) return;
+  const result = await runtimeRepository.persistRealtimeEntry({
+    workspaceId: target.executionRun.deployment.workspaceId,
+    deploymentId: target.executionRun.deployment.id,
+    executionRunId: target.executionRun.id,
+    strategyVersionId: target.executionRun.strategyVersionId,
+    symbol: target.symbol,
+    expectedCandleAt: target.lastEvaluatedAt,
+    quoteAt: quote.observedAt,
+    quotePrice: String(quote.price),
+    unrealizedPnl: String(executionUnrealizedPnl(position, quote.price)),
+    maxOpenPositions: strategyConfig.risk.maxOpenPositions,
+    entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
+    position: serializePosition(position),
+    factors: realtimeQuoteFactors(quote),
+  });
+  if (result.applied) {
+    logger.info(
+      { executionRunId: target.executionRun.id, symbol: target.symbol },
+      "Pending signal filled from realtime quote",
+    );
+  }
+}
+
+function getFreshQuote(symbol: string) {
+  const quote = latestQuotes.get(symbol);
+  if (!quote || quote.observedAt.getTime() < Date.now() - config.RUNTIME_QUOTE_MAX_AGE_MS) {
+    return null;
+  }
+  return quote;
+}
+
 async function watchdogLoop() {
   await delay(1_000);
   while (!stopping) {
@@ -513,8 +721,10 @@ async function processRuntimeTarget(
         strategyConfig,
       );
       const candle = candles.at(-1)!;
+      const candleClosedAt = new Date(candle.openTime.getTime() + intervalMs);
       const existingPosition = state.position ? deserializeExecutionPosition(state.position) : null;
       const pendingSignal = parsePendingSignal(state.cursor?.pendingSignal ?? null);
+      const realtimePendingSignal = parseRealtimePendingSignal(state.cursor?.pendingSignal ?? null);
       const equity = await runtimeRepository.getDryRunEquity(
         target.workspaceId,
         target.exchangeAccountId,
@@ -543,11 +753,14 @@ async function processRuntimeTarget(
             : "Условий для действия нет",
         factors: runtimeFactors(candle, dailyPnl, equity),
       };
-      let pendingSignalAfter: PendingExecutionSignal | null = null;
+      let pendingSignalAfter: RuntimePendingSignal | null = null;
       let positionRemainsOpen = existingPosition !== null;
 
       if (existingPosition && state.position) {
-        const settlement = evaluateExecutionExit(existingPosition, candle, strategyConfig);
+        const freshQuote = getFreshQuote(symbol);
+        const settlement = freshQuote
+          ? evaluateExecutionSignalExit(existingPosition, candle, strategyConfig, candleClosedAt)
+          : evaluateExecutionExit(existingPosition, candle, strategyConfig);
         if (settlement) {
           positionAction = {
             kind: "close",
@@ -562,23 +775,25 @@ async function processRuntimeTarget(
           };
           positionRemainsOpen = false;
         } else {
-          const updated = updateExecutionTrailing(existingPosition, candle, strategyConfig);
-          positionAction = {
-            kind: "update",
-            positionId: state.position.id,
-            markPrice: String(candle.close),
-            unrealizedPnl: String(executionUnrealizedPnl(updated, candle.close)),
-            bestPrice: String(updated.bestPrice),
-            trailingPrice: updated.trailingPrice === null ? null : String(updated.trailingPrice),
-          };
+          if (!freshQuote) {
+            const updated = updateExecutionTrailing(existingPosition, candle, strategyConfig);
+            positionAction = {
+              kind: "update",
+              positionId: state.position.id,
+              markPrice: String(candle.close),
+              unrealizedPnl: String(executionUnrealizedPnl(updated, candle.close)),
+              bestPrice: String(updated.bestPrice),
+              trailingPrice: updated.trailingPrice === null ? null : String(updated.trailingPrice),
+            };
+          }
           decision = {
             action: "HOLD",
             reasonCode: "POSITION_MANAGED",
-            summary: "Позиция остаётся открытой, защитные уровни обновлены",
+            summary: "Позиция остаётся открытой; защитные уровни контролирует quote loop",
             factors: runtimeFactors(candle, dailyPnl, equity),
           };
         }
-      } else if (pendingSignal && entriesAllowed) {
+      } else if (pendingSignal && !realtimePendingSignal && entriesAllowed) {
         const opened = openExecutionPosition(
           pendingSignal,
           candle,
@@ -616,7 +831,7 @@ async function processRuntimeTarget(
           };
           positionRemainsOpen = false;
         }
-      } else if (pendingSignal && !entriesAllowed) {
+      } else if (pendingSignal && !realtimePendingSignal && !entriesAllowed) {
         decision = {
           action: "SKIP",
           reasonCode: target.status === "PAUSED" ? "DEPLOYMENT_PAUSED" : "DAILY_LOSS_LIMIT",
@@ -630,14 +845,54 @@ async function processRuntimeTarget(
       }
 
       if (!positionRemainsOpen && target.status === "RUNNING") {
-        pendingSignalAfter = getExecutionSignal(candle, strategyConfig);
-        if (pendingSignalAfter && positionAction.kind === "none") {
-          decision = {
-            action: "OPEN",
-            reasonCode: "ENTRY_SIGNAL_PENDING",
-            summary: `Зафиксирован ${pendingSignalAfter.side} сигнал для следующей свечи`,
-            factors: runtimeFactors(candle, dailyPnl, equity),
-          };
+        const signal = getExecutionSignal(candle, strategyConfig);
+        if (signal && entriesAllowed) {
+          const quote = getFreshQuote(symbol);
+          const opened =
+            quote && quote.observedAt >= candleClosedAt
+              ? openExecutionPositionAtQuote(
+                  signal,
+                  quote,
+                  getExecutionMarketRegime(candle),
+                  equity,
+                  Math.max(0, equity) / strategyConfig.risk.maxOpenPositions,
+                  strategyConfig,
+                )
+              : null;
+          if (opened && positionAction.kind === "none") {
+            positionAction = {
+              kind: "open",
+              position: serializePosition(opened),
+              markPrice: String(quote!.price),
+              unrealizedPnl: String(executionUnrealizedPnl(opened, quote!.price)),
+              immediateSettlement: null,
+            };
+            decision = {
+              action: "OPEN",
+              reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
+              summary: `Открыта ${opened.side} позиция сразу после закрытия сигнальной свечи`,
+              factors: {
+                ...runtimeFactors(candle, dailyPnl, equity),
+                executionQuote: realtimeQuoteFactors(quote!),
+              },
+            };
+            positionRemainsOpen = true;
+          } else {
+            pendingSignalAfter = createRealtimePendingSignal(
+              signal,
+              candleClosedAt,
+              new Date(candleClosedAt.getTime() + intervalMs),
+              getExecutionMarketRegime(candle),
+            );
+            if (positionAction.kind === "none") {
+              decision = {
+                action: "OPEN",
+                reasonCode: "ENTRY_SIGNAL_PENDING",
+                summary: `Зафиксирован ${signal.side} сигнал; ожидается realtime quote`,
+                factors: runtimeFactors(candle, dailyPnl, equity),
+              };
+            }
+          }
         }
       }
 
@@ -967,6 +1222,7 @@ function readDatasetSymbols(value: unknown): string[] {
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
+  marketStreamAbortController.abort();
   logger.info({ signal }, "Shutting down worker");
   await prisma.workerHeartbeat.deleteMany({ where: { workerId: { in: [workerId, watchdogId] } } });
   await prisma.$disconnect();
@@ -1073,6 +1329,71 @@ function parsePendingSignal(value: unknown): PendingExecutionSignal | null {
   if ((side !== "long" && side !== "short") || typeof signalPrice !== "number") return null;
   if (!Number.isFinite(signalPrice) || signalPrice <= 0) return null;
   return { side, signalPrice };
+}
+
+type RuntimePendingSignal = PendingExecutionSignal & {
+  mode: "realtime";
+  detectedAt: string;
+  expiresAt: string;
+  entryRegime: ExecutionMarketRegime;
+};
+
+function createRealtimePendingSignal(
+  signal: PendingExecutionSignal,
+  detectedAt: Date,
+  expiresAt: Date,
+  entryRegime: ExecutionMarketRegime,
+): RuntimePendingSignal {
+  return {
+    ...signal,
+    mode: "realtime",
+    detectedAt: detectedAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    entryRegime,
+  };
+}
+
+function parseRealtimePendingSignal(value: unknown):
+  | (PendingExecutionSignal & {
+      detectedAt: Date;
+      expiresAt: Date;
+      entryRegime: ExecutionMarketRegime;
+    })
+  | null {
+  const signal = parsePendingSignal(value);
+  if (!signal || !value || Array.isArray(value) || typeof value !== "object") return null;
+  if (
+    !("mode" in value) ||
+    value.mode !== "realtime" ||
+    !("detectedAt" in value) ||
+    typeof value.detectedAt !== "string" ||
+    !("expiresAt" in value) ||
+    typeof value.expiresAt !== "string" ||
+    !("entryRegime" in value) ||
+    (value.entryRegime !== "bull" &&
+      value.entryRegime !== "bear" &&
+      value.entryRegime !== "neutral" &&
+      value.entryRegime !== "unknown")
+  ) {
+    return null;
+  }
+  const detectedAt = new Date(value.detectedAt);
+  const expiresAt = new Date(value.expiresAt);
+  if (
+    !Number.isFinite(detectedAt.getTime()) ||
+    !Number.isFinite(expiresAt.getTime()) ||
+    expiresAt <= detectedAt
+  ) {
+    return null;
+  }
+  return { ...signal, detectedAt, expiresAt, entryRegime: value.entryRegime };
+}
+
+function realtimeQuoteFactors(quote: ExecutionQuote) {
+  return {
+    source: "bybit-public-websocket",
+    quote: { price: quote.price, observedAt: quote.observedAt.toISOString() },
+  };
 }
 
 function runtimeFactors(
@@ -1243,9 +1564,11 @@ await Promise.all([
   heartbeatLoop(),
   marketDataLoop(),
   candleDataLoop(),
+  marketStreamLoop(),
   accountSnapshotLoop(),
   validationJobLoop(),
   exchangeVerificationLoop(),
   runtimeLoop(),
+  runtimeQuoteLoop(),
   watchdogLoop(),
 ]);

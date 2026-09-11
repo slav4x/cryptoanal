@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { createHmac, randomUUID } from "node:crypto";
+import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
 
 const tickerResponseSchema = z.object({
@@ -29,6 +30,32 @@ const klineResponseSchema = z.object({
       z.tuple([z.string(), z.string(), z.string(), z.string(), z.string(), z.string(), z.string()]),
     ),
   }),
+});
+
+const streamTickerSchema = z.object({
+  topic: z.string().startsWith("tickers."),
+  ts: z.number(),
+  data: z.union([
+    z.object({ symbol: z.string(), lastPrice: z.string().optional() }).passthrough(),
+    z.array(z.object({ symbol: z.string(), lastPrice: z.string().optional() }).passthrough()),
+  ]),
+});
+
+const streamKlineSchema = z.object({
+  topic: z.string().startsWith("kline."),
+  data: z.array(
+    z.object({
+      start: z.number(),
+      interval: z.string(),
+      open: z.string(),
+      high: z.string(),
+      low: z.string(),
+      close: z.string(),
+      volume: z.string(),
+      turnover: z.string(),
+      confirm: z.boolean(),
+    }),
+  ),
 });
 
 const apiKeyInformationResultSchema = z
@@ -66,6 +93,26 @@ export type BybitMarketCandle = {
   close: string;
   volume: string;
   turnover: string;
+};
+
+export type BybitRealtimeQuote = {
+  symbol: string;
+  price: string;
+  observedAt: Date;
+};
+
+export type BybitPublicStreamSubscriptions = {
+  tickerSymbols: string[];
+  klines: Array<{ symbol: string; interval: string }>;
+};
+
+export type BybitPublicStreamHandlers = {
+  getSubscriptions: () => Promise<BybitPublicStreamSubscriptions>;
+  onQuote: (quote: BybitRealtimeQuote) => void | Promise<void>;
+  onClosedCandle: (candle: BybitMarketCandle) => void | Promise<void>;
+  onConnected?: (() => void) | undefined;
+  onDisconnected?: ((code: number, reason: string) => void) | undefined;
+  onError?: ((error: Error) => void) | undefined;
 };
 
 export type BybitApiKeyInformation = {
@@ -367,6 +414,153 @@ export class BybitPublicMarketClient {
   }
 }
 
+export class BybitPublicStreamClient {
+  public constructor(
+    private readonly url: string,
+    private readonly subscriptionRefreshMs = 30_000,
+    private readonly reconnectDelayMs = 2_000,
+  ) {}
+
+  public async run(handlers: BybitPublicStreamHandlers, signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      try {
+        await this.runConnection(handlers, signal);
+      } catch (error) {
+        handlers.onError?.(asError(error));
+      }
+      if (!signal.aborted) await abortableDelay(this.reconnectDelayMs, signal);
+    }
+  }
+
+  private runConnection(handlers: BybitPublicStreamHandlers, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(this.url);
+      const activeTopics = new Set<string>();
+      let opened = false;
+      let settled = false;
+      let synchronizing = false;
+      let heartbeat: NodeJS.Timeout | undefined;
+      let subscriptionRefresh: NodeJS.Timeout | undefined;
+
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (heartbeat) clearInterval(heartbeat);
+        if (subscriptionRefresh) clearInterval(subscriptionRefresh);
+        signal.removeEventListener("abort", onAbort);
+        if (error) reject(error);
+        else resolve();
+      };
+      const sendTopics = (op: "subscribe" | "unsubscribe", topics: string[]) => {
+        if (topics.length === 0 || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ req_id: randomUUID(), op, args: topics }));
+      };
+      const synchronizeSubscriptions = async () => {
+        if (synchronizing || socket.readyState !== WebSocket.OPEN) return;
+        synchronizing = true;
+        try {
+          const subscriptions = await handlers.getSubscriptions();
+          const desiredTopics = new Set([
+            ...subscriptions.tickerSymbols.map((symbol) => `tickers.${symbol}`),
+            ...subscriptions.klines.map(({ symbol, interval }) => `kline.${interval}.${symbol}`),
+          ]);
+          const additions = [...desiredTopics].filter((topic) => !activeTopics.has(topic));
+          const removals = [...activeTopics].filter((topic) => !desiredTopics.has(topic));
+          sendTopics("subscribe", additions);
+          sendTopics("unsubscribe", removals);
+          for (const topic of additions) activeTopics.add(topic);
+          for (const topic of removals) activeTopics.delete(topic);
+        } catch (error) {
+          handlers.onError?.(asError(error));
+        } finally {
+          synchronizing = false;
+        }
+      };
+      const onAbort = () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, "worker stopping");
+          return;
+        }
+        if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+        settle();
+      };
+
+      socket.on("open", () => {
+        opened = true;
+        handlers.onConnected?.();
+        void synchronizeSubscriptions();
+        heartbeat = setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: "ping" }));
+        }, 20_000);
+        subscriptionRefresh = setInterval(
+          () => void synchronizeSubscriptions(),
+          this.subscriptionRefreshMs,
+        );
+      });
+      socket.on("message", (raw) => {
+        this.handleMessage(raw, handlers);
+      });
+      socket.on("error", (error) => {
+        if (!opened) settle(asError(error));
+        else handlers.onError?.(asError(error));
+      });
+      socket.on("close", (code, reason) => {
+        handlers.onDisconnected?.(code, reason.toString());
+        settle();
+      });
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  }
+
+  private handleMessage(raw: RawData, handlers: BybitPublicStreamHandlers) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw.toString());
+    } catch {
+      handlers.onError?.(new Error("Bybit stream returned invalid JSON"));
+      return;
+    }
+
+    const ticker = streamTickerSchema.safeParse(payload);
+    if (ticker.success) {
+      const values = Array.isArray(ticker.data.data) ? ticker.data.data : [ticker.data.data];
+      for (const value of values) {
+        if (!value.lastPrice) continue;
+        invokeHandler(
+          handlers.onQuote,
+          { symbol: value.symbol, price: value.lastPrice, observedAt: new Date(ticker.data.ts) },
+          handlers.onError,
+        );
+      }
+      return;
+    }
+
+    const kline = streamKlineSchema.safeParse(payload);
+    if (!kline.success) return;
+    const [, , topicSymbol] = kline.data.topic.split(".");
+    if (!topicSymbol) return;
+    for (const value of kline.data.data) {
+      if (!value.confirm) continue;
+      invokeHandler(
+        handlers.onClosedCandle,
+        {
+          symbol: topicSymbol,
+          interval: value.interval,
+          openTime: new Date(value.start),
+          open: value.open,
+          high: value.high,
+          low: value.low,
+          close: value.close,
+          volume: value.volume,
+          turnover: value.turnover,
+        },
+        handlers.onError,
+      );
+    }
+  }
+}
+
 const definitiveCredentialErrorCodes = new Set([
   -2015, 33004, 10003, 10004, 10005, 10007, 10008, 10009, 10010, 10024, 10027,
 ]);
@@ -383,4 +577,35 @@ function sanitizeBybitMessage(message: string, apiKey: string, apiSecret: string
     .join("")
     .trim()
     .slice(0, 240);
+}
+
+function invokeHandler<T>(
+  handler: (value: T) => void | Promise<void>,
+  value: T,
+  onError: ((error: Error) => void) | undefined,
+) {
+  try {
+    Promise.resolve(handler(value)).catch((error: unknown) => onError?.(asError(error)));
+  } catch (error) {
+    onError?.(asError(error));
+  }
+}
+
+function asError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timeout = setTimeout(resolve, milliseconds);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }

@@ -32,7 +32,7 @@ import { PerformanceChart } from "./PerformanceChart";
 import { PnlCalendar } from "./PnlCalendar";
 
 export default function AnalyticsPage() {
-  const [filters, setFilters] = useState<AnalyticsQueryDto>({ period: "30d" });
+  const [filters, setFilters] = useState<AnalyticsQueryDto>({ period: "24h" });
   const analyticsQuery = useQuery({
     queryKey: ["analytics", filters],
     queryFn: () => fetchAnalytics(filters),
@@ -192,7 +192,7 @@ export default function AnalyticsPage() {
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <PerformanceChart points={data.equitySeries} />
+          <PerformanceChart points={data.equitySeries} period={data.filters.period} />
         </CardContent>
       </Card>
 
@@ -203,7 +203,7 @@ export default function AnalyticsPage() {
             <CardDescription>Отклонение от предыдущего максимума капитала.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <DrawdownChart points={data.equitySeries} />
+            <DrawdownChart points={data.equitySeries} period={data.filters.period} />
           </CardContent>
         </Card>
         <Card>
@@ -396,10 +396,9 @@ function formatRatio(value: number | null): string {
 }
 
 const periodOptions: Array<{ value: AnalyticsPeriod; label: string }> = [
+  { value: "24h", label: "24 часа" },
   { value: "7d", label: "7 дней" },
   { value: "30d", label: "30 дней" },
-  { value: "90d", label: "90 дней" },
-  { value: "all", label: "Всё время" },
 ];
 
 const environmentLabels: Record<AnalyticsEnvironment, string> = {

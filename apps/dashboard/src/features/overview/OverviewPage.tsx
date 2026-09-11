@@ -23,7 +23,7 @@ import { formatMetricMoney, formatMoney, formatPercent, formatPrice } from "../.
 import { AccountEquityChart } from "./AccountEquityChart";
 
 export default function OverviewPage() {
-  const [period, setPeriod] = useState<OverviewPeriod>("7d");
+  const [period, setPeriod] = useState<OverviewPeriod>("24h");
   const overviewQuery = useQuery({
     queryKey: ["overview", period],
     queryFn: () => fetchOverview(period),

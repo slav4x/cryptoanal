@@ -1,4 +1,4 @@
-import type { AnalyticsDto } from "@cryptoanal/contracts";
+import type { AnalyticsDto, AnalyticsPeriod } from "@cryptoanal/contracts";
 import { Button, cn } from "@cryptoanal/ui";
 import {
   AreaSeries,
@@ -15,6 +15,7 @@ import { formatMetricMoney } from "../../shared/format";
 
 type PerformanceChartProps = {
   points: AnalyticsDto["equitySeries"];
+  period: AnalyticsPeriod;
 };
 
 type AnalyticsEquityPoint = AnalyticsDto["equitySeries"][number];
@@ -37,11 +38,11 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ru-RU", {
   minute: "2-digit",
 });
 
-export function PerformanceChart({ points }: PerformanceChartProps) {
+export function PerformanceChart({ points, period }: PerformanceChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
-  const fittedRangeRef = useRef<string | null>(null);
+  const fittedPeriodRef = useRef<AnalyticsPeriod | null>(null);
   const pointMapRef = useRef<Map<UTCTimestamp, AnalyticsEquityPoint>>(new Map());
   const [inspectedPoint, setInspectedPoint] = useState<AnalyticsEquityPoint | null>(null);
   const chartData = useMemo(() => normalizePoints(points), [points]);
@@ -49,7 +50,6 @@ export function PerformanceChart({ points }: PerformanceChartProps) {
   const latestPoint = chartData.at(-1)?.source ?? null;
   const displayedPoint = isPointInSeries(inspectedPoint, chartData) ? inspectedPoint : latestPoint;
   const positivePeriod = chartData.length < 2 || chartData.at(-1)!.value >= chartData[0]!.value;
-  const rangeKey = chartRangeKey(chartData);
 
   useEffect(() => {
     pointMapRef.current = new Map(chartData.map((point) => [point.time, point.source] as const));
@@ -112,7 +112,7 @@ export function PerformanceChart({ points }: PerformanceChartProps) {
     chartRef.current = chart;
     seriesRef.current = series;
     return () => {
-      fittedRangeRef.current = null;
+      fittedPeriodRef.current = null;
       seriesRef.current = null;
       chartRef.current = null;
       chart.remove();
@@ -130,11 +130,11 @@ export function PerformanceChart({ points }: PerformanceChartProps) {
       bottomColor: positivePeriod ? "rgba(57, 217, 138, 0)" : "rgba(255, 101, 119, 0)",
     });
     series.setData(chartData.map(({ time, value }) => ({ time, value })));
-    if (fittedRangeRef.current !== rangeKey) {
-      fittedRangeRef.current = rangeKey;
-      chart.timeScale().fitContent();
+    if (fittedPeriodRef.current !== period) {
+      fittedPeriodRef.current = period;
+      setPeriodViewport(chart, period);
     }
-  }, [chartData, positivePeriod, rangeKey]);
+  }, [chartData, period, positivePeriod]);
 
   if (!hasData) {
     return (
@@ -173,9 +173,12 @@ export function PerformanceChart({ points }: PerformanceChartProps) {
           variant="ghost"
           size="sm"
           className="h-7 px-2.5 text-[11px] text-muted-foreground"
-          onClick={() => chartRef.current?.timeScale().fitContent()}
+          onClick={() => {
+            const chart = chartRef.current;
+            if (chart) setPeriodViewport(chart, period);
+          }}
         >
-          Весь период
+          Период
         </Button>
       </div>
       <div
@@ -217,10 +220,6 @@ function isPointInSeries(
   );
 }
 
-function chartRangeKey(points: EquityChartPoint[]) {
-  return `${points[0]?.time ?? "empty"}:${points.at(-1)?.time ?? "empty"}:${points.length}`;
-}
-
 function formatAxisMoney(value: number): string {
   return value.toLocaleString("ru-RU", {
     notation: Math.abs(value) >= 100_000 ? "compact" : "standard",
@@ -238,3 +237,23 @@ function formatSignedMoney(value: number): string {
 function formatPercent(value: number): string {
   return value.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+function setPeriodViewport(chart: IChartApi, period: AnalyticsPeriod) {
+  if (period === "all") {
+    chart.timeScale().fitContent();
+    return;
+  }
+
+  const to = Math.floor(Date.now() / 1_000) as UTCTimestamp;
+  chart.timeScale().setVisibleRange({
+    from: (to - periodDurationSeconds[period]) as UTCTimestamp,
+    to,
+  });
+}
+
+const periodDurationSeconds: Record<Exclude<AnalyticsPeriod, "all">, number> = {
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+  "30d": 30 * 24 * 60 * 60,
+  "90d": 90 * 24 * 60 * 60,
+};

@@ -502,12 +502,14 @@ const kindLabels: Record<JournalEntryKind, string> = {
   decision: "Решение",
 };
 const periodOptions: Array<{ value: JournalQueryDto["period"]; label: string }> = [
+  { value: "24h", label: "24 часа" },
   { value: "7d", label: "7 дней" },
   { value: "30d", label: "30 дней" },
   { value: "90d", label: "90 дней" },
   { value: "all", label: "Всё время" },
 ];
 const periodLabels = {
+  "24h": "24 часа",
   "7d": "7 дней",
   "30d": "30 дней",
   "90d": "90 дней",

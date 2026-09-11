@@ -390,7 +390,7 @@ export async function acceptInvitation(
   return response;
 }
 
-export function fetchOverview(period: OverviewPeriod = "7d"): Promise<ApiEnvelope<OverviewDto>> {
+export function fetchOverview(period: OverviewPeriod = "24h"): Promise<ApiEnvelope<OverviewDto>> {
   return request(`/api/v1/overview?period=${period}`, overviewEnvelopeSchema);
 }
 

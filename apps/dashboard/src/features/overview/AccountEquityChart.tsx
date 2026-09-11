@@ -147,7 +147,7 @@ export function AccountEquityChart({ points, period }: AccountEquityChartProps) 
     series.setData(chartData.map(({ time, value }) => ({ time, value })));
     if (fittedPeriodRef.current !== period) {
       fittedPeriodRef.current = period;
-      chart.timeScale().fitContent();
+      setPeriodViewport(chart, period);
     }
   }, [chartData, period, positivePeriod]);
 
@@ -186,9 +186,12 @@ export function AccountEquityChart({ points, period }: AccountEquityChartProps) 
           variant="ghost"
           size="sm"
           className="h-7 px-2.5 text-[11px] text-muted-foreground"
-          onClick={() => chartRef.current?.timeScale().fitContent()}
+          onClick={() => {
+            const chart = chartRef.current;
+            if (chart) setPeriodViewport(chart, period);
+          }}
         >
-          Весь период
+          Период
         </Button>
       </div>
       <div
@@ -241,3 +244,17 @@ function formatSignedMoney(value: number): string {
     maximumFractionDigits: 2,
   })} USDT`;
 }
+
+function setPeriodViewport(chart: IChartApi, period: OverviewPeriod) {
+  const to = Math.floor(Date.now() / 1_000) as UTCTimestamp;
+  chart.timeScale().setVisibleRange({
+    from: (to - periodDurationSeconds[period]) as UTCTimestamp,
+    to,
+  });
+}
+
+const periodDurationSeconds: Record<OverviewPeriod, number> = {
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+  "30d": 30 * 24 * 60 * 60,
+};

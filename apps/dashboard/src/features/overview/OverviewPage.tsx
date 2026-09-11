@@ -415,7 +415,7 @@ function EquityDelta({
 }) {
   if (points.length < 2) return <span className="text-xs text-stale">накапливаем историю</span>;
 
-  const startsAt = Date.now() - overviewPeriodDurationMs[period];
+  const startsAt = new Date(points.at(-1)!.observedAt).getTime() - overviewPeriodDurationMs[period];
   const firstPoint = findPointAtOrBefore(points, startsAt) ?? points[0]!;
   const first = Number(firstPoint.equity);
   const last = Number(points.at(-1)!.equity);

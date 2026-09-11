@@ -254,7 +254,7 @@ function setPeriodViewport(chart: IChartApi, period: OverviewPeriod) {
 }
 
 function getPeriodStartEquity(points: EquityPoint[], period: OverviewPeriod) {
-  const startsAt = Math.floor(Date.now() / 1_000) - periodDurationSeconds[period];
+  const startsAt = Number(points.at(-1)?.time ?? 0) - periodDurationSeconds[period];
   let value = points[0]?.value ?? 0;
   for (const point of points) {
     if (Number(point.time) > startsAt) break;

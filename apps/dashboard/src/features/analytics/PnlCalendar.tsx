@@ -55,7 +55,7 @@ export function PnlCalendar({ days, period }: PnlCalendarProps) {
 const weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 function createVisibleDates(period: AnalyticsPeriod, days: AnalyticsDto["dailyPnl"]): Date[] {
-  const maximumDays = period === "24h" || period === "7d" ? 7 : period === "30d" ? 35 : 91;
+  const maximumDays = period === "24h" ? 1 : period === "7d" ? 7 : period === "30d" ? 35 : 91;
   const latestDataDate = days.at(-1)?.date;
   const end = latestDataDate ? new Date(`${latestDataDate}T00:00:00.000Z`) : startOfTodayUtc();
   const start = new Date(end);

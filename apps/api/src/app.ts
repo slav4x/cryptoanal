@@ -1075,7 +1075,6 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         workspace.id,
         {
           startsAt: new Date(Date.now() - periodConfig.durationMs),
-          bucketSeconds: periodConfig.bucketSeconds,
         },
         `${config.DRY_RUN_ACCOUNT_ID}:portfolio`,
       );
@@ -2184,8 +2183,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     async (request) => {
       const workspace = requireWorkspace(request);
       const filters = request.query;
+      const analyticsEndsAt = new Date();
+      const analyticsStartsAt = getAnalyticsStartsAt(filters.period, analyticsEndsAt);
       const dataset = await analyticsRepository.getPerformanceDataset(workspace.id, {
-        startsAt: getAnalyticsStartsAt(filters.period),
+        startsAt: analyticsStartsAt,
         environment: filters.environment ? analyticsTradingEnvironment[filters.environment] : null,
         strategyId: filters.strategyId ?? null,
         symbol: filters.symbol ?? null,
@@ -2196,6 +2197,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           environment: tradingEnvironment[trade.environment],
         })),
         config.DRY_RUN_INITIAL_BALANCE,
+        analyticsStartsAt ? { startsAt: analyticsStartsAt, endsAt: analyticsEndsAt } : undefined,
       );
 
       return {
@@ -3367,12 +3369,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 }
 
 const overviewPeriodConfig = {
-  "24h": { durationMs: 24 * 60 * 60 * 1_000, bucketSeconds: 15 * 60 },
-  "7d": { durationMs: 7 * 24 * 60 * 60 * 1_000, bucketSeconds: 2 * 60 * 60 },
-  "30d": { durationMs: 30 * 24 * 60 * 60 * 1_000, bucketSeconds: 8 * 60 * 60 },
+  "24h": { durationMs: 24 * 60 * 60 * 1_000 },
+  "7d": { durationMs: 7 * 24 * 60 * 60 * 1_000 },
+  "30d": { durationMs: 30 * 24 * 60 * 60 * 1_000 },
 } as const;
 
 const analyticsPeriodDurationMs = {
+  "24h": 24 * 60 * 60 * 1_000,
   "7d": 7 * 24 * 60 * 60 * 1_000,
   "30d": 30 * 24 * 60 * 60 * 1_000,
   "90d": 90 * 24 * 60 * 60 * 1_000,
@@ -3404,9 +3407,12 @@ function getActivityStartsAt(period: keyof typeof activityPeriodDurationMs): Dat
   return durationMs === null ? null : new Date(Date.now() - durationMs);
 }
 
-function getAnalyticsStartsAt(period: keyof typeof analyticsPeriodDurationMs): Date | null {
+function getAnalyticsStartsAt(
+  period: keyof typeof analyticsPeriodDurationMs,
+  endsAt = new Date(),
+): Date | null {
   const durationMs = analyticsPeriodDurationMs[period];
-  return durationMs === null ? null : new Date(Date.now() - durationMs);
+  return durationMs === null ? null : new Date(endsAt.getTime() - durationMs);
 }
 
 function createHealthThresholds(config: ServerConfig) {

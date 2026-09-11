@@ -91,6 +91,7 @@ export type PerformanceAnalytics = {
 export function buildPerformanceAnalytics(
   sourceTrades: PerformanceTrade[],
   initialCapital: number,
+  range?: { startsAt: Date; endsAt: Date },
 ): PerformanceAnalytics {
   const trades = [...sourceTrades].sort(
     (left, right) =>
@@ -104,10 +105,12 @@ export function buildPerformanceAnalytics(
   let cumulativeNetPnl = 0;
   let peakEquity = initialCapital;
   let maxDrawdownPercent = 0;
-  const equitySeries: PerformanceAnalytics["equitySeries"] = trades[0]
+  const initialObservedAt =
+    range?.startsAt ?? (trades[0] ? new Date(trades[0].openedAt.getTime() - 1) : null);
+  const equitySeries: PerformanceAnalytics["equitySeries"] = initialObservedAt
     ? [
         {
-          observedAt: new Date(trades[0].openedAt.getTime() - 1),
+          observedAt: initialObservedAt,
           equity: round(initialCapital),
           cumulativeNetPnl: 0,
           drawdownPercent: 0,
@@ -125,6 +128,14 @@ export function buildPerformanceAnalytics(
       equity: round(equity),
       cumulativeNetPnl: round(cumulativeNetPnl),
       drawdownPercent: round(drawdownPercent),
+    });
+  }
+  if (range && equitySeries.at(-1)?.observedAt.getTime() !== range.endsAt.getTime()) {
+    equitySeries.push({
+      observedAt: range.endsAt,
+      equity: round(initialCapital + cumulativeNetPnl),
+      cumulativeNetPnl: round(cumulativeNetPnl),
+      drawdownPercent: equitySeries.at(-1)?.drawdownPercent ?? 0,
     });
   }
 

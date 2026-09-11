@@ -201,7 +201,7 @@ export const exchangeConnectionCreatedSchema = z.object({
 
 export const overviewPeriodSchema = z.enum(["24h", "7d", "30d"]);
 export const overviewQuerySchema = z.object({
-  period: overviewPeriodSchema.default("7d"),
+  period: overviewPeriodSchema.default("24h"),
 });
 
 export const accountSnapshotPointSchema = z.object({
@@ -313,12 +313,12 @@ export const positionSchema = z.object({
   }),
 });
 
-export const analyticsPeriodSchema = z.enum(["7d", "30d", "90d", "all"]);
+export const analyticsPeriodSchema = z.enum(["24h", "7d", "30d", "90d", "all"]);
 export const analyticsEnvironmentSchema = z.enum(["dry-run", "demo", "live"]);
 export const marketRegimeSchema = z.enum(["bull", "bear", "neutral", "unknown"]);
 export const tradingSessionSchema = z.enum(["asia", "europe", "us", "off-hours", "unknown"]);
 export const analyticsQuerySchema = z.object({
-  period: analyticsPeriodSchema.default("30d"),
+  period: analyticsPeriodSchema.default("24h"),
   environment: analyticsEnvironmentSchema.optional(),
   strategyId: z.uuid().optional(),
   symbol: z

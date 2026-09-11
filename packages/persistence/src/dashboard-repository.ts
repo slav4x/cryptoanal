@@ -13,7 +13,7 @@ export class DashboardRepository {
 
   public async getOverview(
     workspaceId: string,
-    equityWindow: { startsAt: Date; bucketSeconds: number },
+    equityWindow: { startsAt: Date },
     portfolioAccountId: string,
   ) {
     const startOfUtcDay = new Date();
@@ -137,37 +137,21 @@ export class DashboardRepository {
     exchangeAccountId,
     environment,
     startsAt,
-    bucketSeconds,
   }: {
     workspaceId: string;
     exchangeAccountId: string;
     environment: "DRY_RUN" | "DEMO" | "LIVE";
     startsAt: Date;
-    bucketSeconds: number;
   }) {
     const rows = await this.prisma.$queryRaw<
       Array<{ equity: Prisma.Decimal; observedAt: Date }>
     >(Prisma.sql`
-      WITH samples AS (
-        SELECT
-          "equity",
-          "observedAt",
-          FLOOR(EXTRACT(EPOCH FROM ("observedAt" - ${startsAt})) / ${bucketSeconds}) AS bucket
-        FROM "AccountSnapshot"
-        WHERE "workspaceId" = ${workspaceId}
-          AND "exchangeAccountId" = ${exchangeAccountId}
-          AND "environment" = CAST(${environment} AS "TradingEnvironment")
-          AND "observedAt" >= ${startsAt}
-      )
       SELECT "equity", "observedAt"
-      FROM (
-        SELECT DISTINCT ON (bucket)
-          "equity",
-          "observedAt",
-          bucket
-        FROM samples
-        ORDER BY bucket, "observedAt" DESC
-      ) AS buckets
+      FROM "AccountSnapshot"
+      WHERE "workspaceId" = ${workspaceId}
+        AND "exchangeAccountId" = ${exchangeAccountId}
+        AND "environment" = CAST(${environment} AS "TradingEnvironment")
+        AND "observedAt" >= ${startsAt}
       ORDER BY "observedAt" ASC
     `);
 

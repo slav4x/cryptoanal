@@ -91,7 +91,7 @@ export type PerformanceAnalytics = {
 export function buildPerformanceAnalytics(
   sourceTrades: PerformanceTrade[],
   initialCapital: number,
-  range?: { startsAt: Date; endsAt: Date },
+  range?: { startsAt?: Date; endsAt: Date },
 ): PerformanceAnalytics {
   const trades = [...sourceTrades].sort(
     (left, right) =>
@@ -130,7 +130,11 @@ export function buildPerformanceAnalytics(
       drawdownPercent: round(drawdownPercent),
     });
   }
-  if (range && equitySeries.at(-1)?.observedAt.getTime() !== range.endsAt.getTime()) {
+  if (
+    range &&
+    equitySeries.length > 0 &&
+    equitySeries.at(-1)?.observedAt.getTime() !== range.endsAt.getTime()
+  ) {
     equitySeries.push({
       observedAt: range.endsAt,
       equity: round(initialCapital + cumulativeNetPnl),

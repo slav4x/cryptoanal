@@ -1070,12 +1070,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     async (request) => {
       const workspace = requireWorkspace(request);
       const period = request.query.period;
-      const periodConfig = overviewPeriodConfig[period];
       const overview = await repository.getOverview(
         workspace.id,
-        {
-          startsAt: new Date(Date.now() - periodConfig.durationMs),
-        },
         `${config.DRY_RUN_ACCOUNT_ID}:portfolio`,
       );
       const now = Date.now();
@@ -2197,7 +2193,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           environment: tradingEnvironment[trade.environment],
         })),
         config.DRY_RUN_INITIAL_BALANCE,
-        analyticsStartsAt ? { startsAt: analyticsStartsAt, endsAt: analyticsEndsAt } : undefined,
+        {
+          ...(analyticsStartsAt ? { startsAt: analyticsStartsAt } : {}),
+          endsAt: analyticsEndsAt,
+        },
       );
 
       return {
@@ -3367,12 +3366,6 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
   return app;
 }
-
-const overviewPeriodConfig = {
-  "24h": { durationMs: 24 * 60 * 60 * 1_000 },
-  "7d": { durationMs: 7 * 24 * 60 * 60 * 1_000 },
-  "30d": { durationMs: 30 * 24 * 60 * 60 * 1_000 },
-} as const;
 
 const analyticsPeriodDurationMs = {
   "24h": 24 * 60 * 60 * 1_000,

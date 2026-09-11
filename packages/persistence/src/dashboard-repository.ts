@@ -11,11 +11,7 @@ export class DashboardRepository {
     });
   }
 
-  public async getOverview(
-    workspaceId: string,
-    equityWindow: { startsAt: Date },
-    portfolioAccountId: string,
-  ) {
+  public async getOverview(workspaceId: string, portfolioAccountId: string) {
     const startOfUtcDay = new Date();
     startOfUtcDay.setUTCHours(0, 0, 0, 0);
 
@@ -99,7 +95,6 @@ export class DashboardRepository {
           workspaceId,
           exchangeAccountId: account.exchangeAccountId,
           environment: account.environment,
-          ...equityWindow,
         })
       : [];
 
@@ -136,12 +131,10 @@ export class DashboardRepository {
     workspaceId,
     exchangeAccountId,
     environment,
-    startsAt,
   }: {
     workspaceId: string;
     exchangeAccountId: string;
     environment: "DRY_RUN" | "DEMO" | "LIVE";
-    startsAt: Date;
   }) {
     const rows = await this.prisma.$queryRaw<
       Array<{ equity: Prisma.Decimal; observedAt: Date }>
@@ -151,7 +144,6 @@ export class DashboardRepository {
       WHERE "workspaceId" = ${workspaceId}
         AND "exchangeAccountId" = ${exchangeAccountId}
         AND "environment" = CAST(${environment} AS "TradingEnvironment")
-        AND "observedAt" >= ${startsAt}
       ORDER BY "observedAt" ASC
     `);
 

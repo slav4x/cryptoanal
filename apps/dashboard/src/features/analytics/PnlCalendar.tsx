@@ -100,14 +100,16 @@ export function PnlCalendar({ days }: PnlCalendarProps) {
               title={`${date.toLocaleDateString("ru-RU", { timeZone: "UTC" })}: ${formatSignedPnl(pnl)} · ${formatTradeCount(trades)}`}
             >
               <div className="min-w-0">
-                <p className="truncate text-[11px] font-medium text-secondary-foreground">
+                <p className="whitespace-nowrap text-[11px] font-medium text-secondary-foreground">
                   {dayFormatter.format(date)}
                 </p>
-                <p className="mt-0.5 truncate text-[10px] text-stale">{formatTradeCount(trades)}</p>
+                <p className="mt-0.5 whitespace-nowrap text-[10px] text-stale">
+                  {formatTradeCount(trades)}
+                </p>
               </div>
               <p
                 className={cn(
-                  "truncate font-mono text-[10px] tabular-nums text-stale",
+                  "whitespace-nowrap font-mono text-[11px] tabular-nums text-stale",
                   hasResult && pnl >= 0 && "text-profit",
                   hasResult && pnl < 0 && "text-loss",
                 )}

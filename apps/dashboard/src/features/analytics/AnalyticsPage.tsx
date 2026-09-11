@@ -197,7 +197,7 @@ export default function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 xl:grid-cols-2">
+      <div className="space-y-3">
         <Card>
           <CardHeader className="border-b">
             <CardTitle>Просадка</CardTitle>

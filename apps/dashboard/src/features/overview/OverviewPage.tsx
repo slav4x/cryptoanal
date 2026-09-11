@@ -231,7 +231,7 @@ export default function OverviewPage() {
                 {formatMetricMoney(data.account?.equity ?? null)}
               </p>
             </div>
-            <EquityDelta points={data.equitySeries} />
+            <EquityDelta points={data.equitySeries} period={period} />
           </div>
           <AccountEquityChart points={data.equitySeries} period={period} />
         </CardContent>
@@ -406,10 +406,18 @@ export default function OverviewPage() {
   );
 }
 
-function EquityDelta({ points }: { points: Array<{ equity: string }> }) {
+function EquityDelta({
+  points,
+  period,
+}: {
+  points: Array<{ equity: string; observedAt: string }>;
+  period: OverviewPeriod;
+}) {
   if (points.length < 2) return <span className="text-xs text-stale">накапливаем историю</span>;
 
-  const first = Number(points[0]!.equity);
+  const startsAt = Date.now() - overviewPeriodDurationMs[period];
+  const firstPoint = findPointAtOrBefore(points, startsAt) ?? points[0]!;
+  const first = Number(firstPoint.equity);
   const last = Number(points.at(-1)!.equity);
   const delta = last - first;
   const percent = first === 0 ? null : (delta / first) * 100;
@@ -433,11 +441,26 @@ function EquityDelta({ points }: { points: Array<{ equity: string }> }) {
   );
 }
 
+function findPointAtOrBefore<T extends { observedAt: string }>(points: T[], timestamp: number) {
+  let match: T | undefined;
+  for (const point of points) {
+    if (new Date(point.observedAt).getTime() > timestamp) break;
+    match = point;
+  }
+  return match;
+}
+
 const overviewPeriods: Array<{ value: OverviewPeriod; label: string }> = [
   { value: "24h", label: "24 часа" },
   { value: "7d", label: "7 дней" },
   { value: "30d", label: "30 дней" },
 ];
+
+const overviewPeriodDurationMs: Record<OverviewPeriod, number> = {
+  "24h": 24 * 60 * 60 * 1_000,
+  "7d": 7 * 24 * 60 * 60 * 1_000,
+  "30d": 30 * 24 * 60 * 60 * 1_000,
+};
 
 const environmentLabels = {
   "dry-run": "Dry-run",

@@ -49,7 +49,7 @@ export function AccountEquityChart({ points, period }: AccountEquityChartProps) 
 
   const chartData = useMemo<EquityPoint[]>(() => normalizePoints(points), [points]);
   const hasData = chartData.length > 0;
-  const firstEquity = chartData[0]?.value ?? 0;
+  const firstEquity = getPeriodStartEquity(chartData, period);
   const latestPoint = chartData.at(-1)?.source ?? null;
   const displayedPoint =
     inspectedPoint &&
@@ -60,7 +60,7 @@ export function AccountEquityChart({ points, period }: AccountEquityChartProps) 
   const displayedDelta = displayedEquity === null ? null : displayedEquity - firstEquity;
   const displayedPercent =
     firstEquity === 0 || displayedDelta === null ? null : (displayedDelta / firstEquity) * 100;
-  const positivePeriod = chartData.length < 2 || chartData.at(-1)!.value >= chartData[0]!.value;
+  const positivePeriod = chartData.length < 2 || chartData.at(-1)!.value >= firstEquity;
 
   useEffect(() => {
     pointMapRef.current = new Map(chartData.map((point) => [point.time, point.source] as const));
@@ -154,7 +154,7 @@ export function AccountEquityChart({ points, period }: AccountEquityChartProps) 
   if (chartData.length === 0) {
     return (
       <div className="grid h-[320px] place-items-center text-sm text-muted-foreground">
-        История капитала за выбранный период пока не накоплена.
+        История капитала пока не накоплена.
       </div>
     );
   }
@@ -251,6 +251,16 @@ function setPeriodViewport(chart: IChartApi, period: OverviewPeriod) {
     from: (to - periodDurationSeconds[period]) as UTCTimestamp,
     to,
   });
+}
+
+function getPeriodStartEquity(points: EquityPoint[], period: OverviewPeriod) {
+  const startsAt = Math.floor(Date.now() / 1_000) - periodDurationSeconds[period];
+  let value = points[0]?.value ?? 0;
+  for (const point of points) {
+    if (Number(point.time) > startsAt) break;
+    value = point.value;
+  }
+  return value;
 }
 
 const periodDurationSeconds: Record<OverviewPeriod, number> = {

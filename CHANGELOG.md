@@ -116,6 +116,10 @@
 
 ### Changed
 
+- Overview и Analytics по умолчанию открывают последние 24 часа; переключатели 24h/7d/30d
+  задают точный начальный viewport, а ручной pan/zoom сохраняется до смены периода.
+- Overview equity API возвращает все доступные account snapshots выбранного периода без
+  потерь из-за серверной временной агрегации; Analytics добавляет границы периода к кривым.
 - Dashboard block descriptions and form actions now follow a consistent 14/13/12 px desktop typography hierarchy.
 - Select triggers keep long selected values on one line with ellipsis while preserving the dropdown indicator.
 - Dashboard inputs, textareas, field labels and table typography now use shared desktop geometry and interaction states.

@@ -87,7 +87,7 @@ pnpm dev
 
 Основные рабочие маршруты:
 
-- `/` — обзор с интерактивным графиком капитала за 24 часа, 7 дней и 30 дней;
+- `/` — обзор с интерактивным графиком капитала; по умолчанию 24 часа, доступны 7 и 30 дней;
 - `/markets` — список инструментов и watchlist;
 - `/markets/:symbol` — интерактивные реальные свечи, торговые отметки и уровни открытых
   позиций, техническая сводка и табличный торговый контекст пары;
@@ -102,7 +102,8 @@ pnpm dev
   пары, сделки и provenance;
 - `/validation/compare` — сравнение 2–4 завершённых запусков;
 - `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
-- `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов.
+- `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов;
+  по умолчанию выбран период 24 часа, доступны 7 и 30 дней.
 - `/analytics/health` — operational health, watchdog incidents и validation drift.
 - `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.
 - `/journal` — исследовательские записи, предметные связи и review sessions.
@@ -162,6 +163,11 @@ market regime и UTC-сессии входа. Regime и session фиксирую
 копируются в каноническую Trade при закрытии; старые записи получают `unknown`. Стартовая точка equity берётся из
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
+
+Период 24 часа используется по умолчанию и в Overview, и в Analytics. Переключение на
+7 или 30 дней загружает полный набор доступных точек выбранного окна и устанавливает его
+как начальный масштаб. После этого pan/zoom не сбрасываются при фоновом обновлении данных;
+кнопка «Период» возвращает выбранное временное окно.
 
 Health projection проверяет API/database, worker heartbeat, Bybit public connection,
 свежесть market/account данных, validation queue, runtime failures, rejected orders и outbox lag. Worker с

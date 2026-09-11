@@ -128,7 +128,7 @@ pnpm dev
 - `GET`/`POST /api/v1/exchange-connections`;
 - `PUT /api/v1/exchange-connections/:connectionId/credentials` и `DELETE .../:connectionId`;
 - `POST /api/v1/exchange-connections/:connectionId/verify` — проверка ключа и permissions;
-- `GET /api/v1/overview?period=24h|7d|30d`;
+- `GET /api/v1/overview`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
 - `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`;
@@ -143,7 +143,7 @@ pnpm dev
 - `POST /api/v1/strategies/:strategyId/deployments`;
 - `POST /api/v1/deployments/:deploymentId/commands`;
 - `POST /api/v1/positions/:positionId/close`;
-- `GET /api/v1/analytics?period=7d|30d|90d|all&environment=&strategyId=&symbol=`;
+- `GET /api/v1/analytics?period=24h|7d|30d|90d|all&environment=&strategyId=&symbol=`;
 - `GET /api/v1/health`.
 - `GET /api/v1/activity?period=24h|7d|30d|all&action=&strategyId=&symbol=&reasonCode=&cursor=`.
 - `GET /api/v1/journal?period=7d|30d|90d|all&kind=&strategyId=&symbol=&tag=&cursor=`;
@@ -164,10 +164,11 @@ market regime и UTC-сессии входа. Regime и session фиксирую
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
 
-Период 24 часа используется по умолчанию и в Overview, и в Analytics. Переключение на
-7 или 30 дней загружает полный набор доступных точек выбранного окна и устанавливает его
-как начальный масштаб. После этого pan/zoom не сбрасываются при фоновом обновлении данных;
-кнопка «Период» возвращает выбранное временное окно.
+Графики Overview и Analytics всегда получают полную доступную историю. Масштаб 24 часа
+используется по умолчанию; переключение на 7 или 30 дней меняет только ширину видимого
+окна, не фильтрует исходные точки и не вызывает повторную загрузку из-за масштаба. Старую
+историю можно просматривать горизонтальным pan; ручной pan/zoom не сбрасывается при
+фоновом обновлении, а кнопка «Период» возвращает выбранную ширину окна.
 
 Health projection проверяет API/database, worker heartbeat, Bybit public connection,
 свежесть market/account данных, validation queue, runtime failures, rejected orders и outbox lag. Worker с

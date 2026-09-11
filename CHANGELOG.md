@@ -13,6 +13,7 @@
 - Position and trade overlays with entry/exit markers, current SL/TP/trailing levels and independently switchable layers.
 - Interactive Overview equity chart with pan, zoom, crosshair values and period reset.
 - Interactive Analytics equity and drawdown charts with crosshair inspection, pan, zoom and range reset.
+- Monthly PnL calendar with previous/next navigation, daily trade count and signed USDT result.
 - Radix-based shadcn-compatible Select primitives with keyboard navigation, portal content and empty-value support.
 - Reuse of exact immutable historical dataset snapshots across backtest and walk-forward runs.
 - Parallel strategy experiment record with accepted and rejected configurations.

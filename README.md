@@ -102,7 +102,8 @@ pnpm dev
   пары, сделки и provenance;
 - `/validation/compare` — сравнение 2–4 завершённых запусков;
 - `/runtime` — dry-run deployments, execution runs и подтверждаемые runtime-команды.
-- `/analytics` — performance, equity, drawdown, PnL-календарь и разрезы результатов;
+- `/analytics` — performance, equity, drawdown, месячный PnL-календарь с навигацией и
+  разрезы результатов;
   по умолчанию выбран период 24 часа, доступны 7 и 30 дней.
 - `/analytics/health` — operational health, watchdog incidents и validation drift.
 - `/activity` — лента OPEN/CLOSE/HOLD/SKIP/ERROR с причинами и факторами решения.

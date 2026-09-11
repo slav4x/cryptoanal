@@ -71,7 +71,6 @@ import {
   type JournalQueryDto,
   type InvitationAcceptDto,
   type InvitationDetailsDto,
-  type OverviewPeriod,
   type OverviewDto,
   type PlaybookCreateDto,
   type PlaybookMutationDto,
@@ -390,8 +389,8 @@ export async function acceptInvitation(
   return response;
 }
 
-export function fetchOverview(period: OverviewPeriod = "24h"): Promise<ApiEnvelope<OverviewDto>> {
-  return request(`/api/v1/overview?period=${period}`, overviewEnvelopeSchema);
+export function fetchOverview(): Promise<ApiEnvelope<OverviewDto>> {
+  return request("/api/v1/overview", overviewEnvelopeSchema);
 }
 
 export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<AnalyticsDto>> {

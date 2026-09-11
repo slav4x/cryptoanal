@@ -1,8 +1,8 @@
 import type {
   AnalyticsBreakdownDto,
   AnalyticsEnvironment,
-  AnalyticsPeriod,
   AnalyticsQueryDto,
+  OverviewPeriod,
 } from "@cryptoanal/contracts";
 import {
   Badge,
@@ -32,10 +32,11 @@ import { PerformanceChart } from "./PerformanceChart";
 import { PnlCalendar } from "./PnlCalendar";
 
 export default function AnalyticsPage() {
-  const [filters, setFilters] = useState<AnalyticsQueryDto>({ period: "24h" });
+  const [filters, setFilters] = useState<Omit<AnalyticsQueryDto, "period">>({});
+  const [chartPeriod, setChartPeriod] = useState<OverviewPeriod>("24h");
   const analyticsQuery = useQuery({
     queryKey: ["analytics", filters],
-    queryFn: () => fetchAnalytics(filters),
+    queryFn: () => fetchAnalytics({ ...filters, period: "all" }),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
@@ -80,10 +81,10 @@ export default function AnalyticsPage() {
       <Card>
         <CardContent className="grid gap-3 pt-4 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
           <FilterSelect
-            label="Период"
-            value={filters.period}
+            label="Масштаб графиков"
+            value={chartPeriod}
             options={periodOptions}
-            onChange={(period) => setFilters((current) => ({ ...current, period }))}
+            onChange={setChartPeriod}
           />
           <FilterSelect
             label="Контур"
@@ -192,7 +193,7 @@ export default function AnalyticsPage() {
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <PerformanceChart points={data.equitySeries} period={data.filters.period} />
+          <PerformanceChart points={data.equitySeries} period={chartPeriod} />
         </CardContent>
       </Card>
 
@@ -203,7 +204,7 @@ export default function AnalyticsPage() {
             <CardDescription>Отклонение от предыдущего максимума капитала.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <DrawdownChart points={data.equitySeries} period={data.filters.period} />
+            <DrawdownChart points={data.equitySeries} period={chartPeriod} />
           </CardContent>
         </Card>
         <Card>
@@ -212,7 +213,7 @@ export default function AnalyticsPage() {
             <CardDescription>Результат закрытых сделок по дням.</CardDescription>
           </CardHeader>
           <CardContent className="pt-4">
-            <PnlCalendar days={data.dailyPnl} period={filters.period} />
+            <PnlCalendar days={data.dailyPnl} period={data.filters.period} />
           </CardContent>
         </Card>
       </div>
@@ -395,7 +396,7 @@ function formatRatio(value: number | null): string {
     : value.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-const periodOptions: Array<{ value: AnalyticsPeriod; label: string }> = [
+const periodOptions: Array<{ value: OverviewPeriod; label: string }> = [
   { value: "24h", label: "24 часа" },
   { value: "7d", label: "7 дней" },
   { value: "30d", label: "30 дней" },

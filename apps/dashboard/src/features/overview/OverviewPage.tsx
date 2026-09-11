@@ -25,9 +25,8 @@ import { AccountEquityChart } from "./AccountEquityChart";
 export default function OverviewPage() {
   const [period, setPeriod] = useState<OverviewPeriod>("24h");
   const overviewQuery = useQuery({
-    queryKey: ["overview", period],
-    queryFn: () => fetchOverview(period),
-    placeholderData: (previousData) => previousData,
+    queryKey: ["overview"],
+    queryFn: fetchOverview,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
@@ -234,7 +233,7 @@ export default function OverviewPage() {
             </div>
             <EquityDelta points={data.equitySeries} />
           </div>
-          <AccountEquityChart points={data.equitySeries} period={data.period} />
+          <AccountEquityChart points={data.equitySeries} period={period} />
         </CardContent>
       </Card>
 

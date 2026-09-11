@@ -197,7 +197,7 @@ export default function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
+      <div className="grid gap-3 xl:grid-cols-2">
         <Card>
           <CardHeader className="border-b">
             <CardTitle>Просадка</CardTitle>
@@ -213,7 +213,7 @@ export default function AnalyticsPage() {
             <CardDescription>Результат закрытых сделок по дням.</CardDescription>
           </CardHeader>
           <CardContent className="pt-4">
-            <PnlCalendar days={data.dailyPnl} period={data.filters.period} />
+            <PnlCalendar days={data.dailyPnl} />
           </CardContent>
         </Card>
       </div>

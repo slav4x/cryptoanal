@@ -191,7 +191,7 @@ export default function AnalyticsPage() {
             {formatMetricMoney(summary.netPnl)}
           </span>
         </CardHeader>
-        <CardContent className="pt-4">
+        <CardContent className="p-0">
           <PerformanceChart points={data.equitySeries} />
         </CardContent>
       </Card>
@@ -202,7 +202,7 @@ export default function AnalyticsPage() {
             <CardTitle>Просадка</CardTitle>
             <CardDescription>Отклонение от предыдущего максимума капитала.</CardDescription>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="p-0">
             <DrawdownChart points={data.equitySeries} />
           </CardContent>
         </Card>

@@ -1,5 +1,6 @@
 import {
   calculateMarketAnalysis,
+  buildExperimentRanking,
   buildPerformanceAnalytics,
   evaluateHealth,
   canTransitionStrategyStatus,
@@ -42,6 +43,8 @@ import {
   exchangeConnectionCredentialsSchema,
   exchangeConnectionParamsSchema,
   exchangeConnectionsSchema,
+  experimentRankingQuerySchema,
+  experimentRankingSchema,
   healthSchema,
   healthDashboardSchema,
   journalEntryCreateSchema,
@@ -147,6 +150,7 @@ import {
   ExchangeConnectionInUseError,
   ExchangeConnectionRepository,
   ExchangeConnectionVerificationConflictError,
+  ExperimentRepository,
   HealthRepository,
   JournalCursorNotFoundError,
   JournalRepository,
@@ -240,6 +244,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   } as const;
   const authRepository = new AuthRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);
+  const experimentRepository = new ExperimentRepository(prisma);
   const activityRepository = new ActivityRepository(prisma);
   const healthRepository = new HealthRepository(prisma);
   const journalRepository = new JournalRepository(prisma);
@@ -2161,6 +2166,99 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
               ? "stale"
               : "unavailable",
         ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/experiments",
+    {
+      schema: {
+        querystring: experimentRankingQuerySchema,
+        response: {
+          200: apiEnvelopeSchema(experimentRankingSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const filters = request.query;
+      const dataset = await experimentRepository.getRankingDataset(workspace.id);
+      const ranking = buildExperimentRanking(
+        dataset.map((deployment) => {
+          const strategyConfig = strategyConfigSchema.parse(deployment.strategyVersion.config);
+          return {
+            id: deployment.id,
+            status: deploymentStatus[deployment.status],
+            environment: tradingEnvironment[deployment.environment],
+            exchangeAccountId: deployment.exchangeAccountId,
+            createdAt: deployment.createdAt,
+            startedAt: deployment.startedAt,
+            strategy: deployment.strategy,
+            strategyVersion: {
+              id: deployment.strategyVersion.id,
+              version: deployment.strategyVersion.version,
+              family: strategyConfig.signal.family,
+              timeframe: strategyConfig.universe.timeframe,
+              symbols: strategyConfig.universe.symbols,
+              riskPerTradePercent: strategyConfig.risk.riskPerTradePercent,
+              maxOpenPositions: strategyConfig.risk.maxOpenPositions,
+            },
+            trades: deployment.trades,
+            positions: deployment.positions.map((position) => ({
+              ...position,
+              side: orderSide[position.side],
+            })),
+          };
+        }),
+        config.DRY_RUN_INITIAL_BALANCE,
+        {
+          period: filters.period,
+          family: filters.family ?? null,
+          riskTier: filters.riskTier ?? null,
+          symbol: filters.symbol ?? null,
+        },
+      );
+
+      return {
+        data: {
+          filters: {
+            period: filters.period,
+            family: filters.family ?? null,
+            riskTier: filters.riskTier ?? null,
+            symbol: filters.symbol ?? null,
+          },
+          initialCapital: String(config.DRY_RUN_INITIAL_BALANCE),
+          summary: {
+            ...ranking.summary,
+            realizedPnl: String(ranking.summary.realizedPnl),
+            unrealizedPnl: String(ranking.summary.unrealizedPnl),
+            totalPnl: String(ranking.summary.totalPnl),
+            grossExposure: String(ranking.summary.grossExposure),
+          },
+          items: ranking.items.map((item) => ({
+            ...item,
+            startedAt: item.startedAt.toISOString(),
+            lastTradeAt: item.lastTradeAt?.toISOString() ?? null,
+            grossPnl: String(item.grossPnl),
+            realizedPnl: String(item.realizedPnl),
+            unrealizedPnl: String(item.unrealizedPnl),
+            totalPnl: String(item.totalPnl),
+            costs: String(item.costs),
+            expectancy: String(item.expectancy),
+            grossExposure: String(item.grossExposure),
+            longExposure: String(item.longExposure),
+            shortExposure: String(item.shortExposure),
+            checkpoints: item.checkpoints.map((checkpoint) => ({
+              ...checkpoint,
+              reachedAt: checkpoint.reachedAt?.toISOString() ?? null,
+              netPnl: checkpoint.netPnl === null ? null : String(checkpoint.netPnl),
+            })),
+          })),
+          filterOptions: ranking.options,
+        },
+        meta: createMeta(request.id, ranking.items.length > 0 ? "fresh" : "unavailable"),
       };
     },
   );

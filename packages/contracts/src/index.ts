@@ -965,6 +965,115 @@ export const deploymentsSchema = z.object({
   counts: z.record(deploymentStatusSchema, z.number().int().nonnegative()),
 });
 
+export const experimentPeriodSchema = z.enum(["24h", "7d", "30d", "all"]);
+export const experimentFamilySchema = z.enum([
+  "ema-crossover",
+  "breakout",
+  "mean-reversion",
+  "momentum",
+]);
+export const experimentRiskTierSchema = z.enum(["conservative", "balanced", "aggressive"]);
+export const experimentSampleStageSchema = z.enum([
+  "insufficient",
+  "preliminary",
+  "comparable",
+  "sufficient",
+]);
+
+export const experimentRankingQuerySchema = z.object({
+  period: experimentPeriodSchema.default("all"),
+  family: experimentFamilySchema.optional(),
+  riskTier: experimentRiskTierSchema.optional(),
+  symbol: z
+    .string()
+    .regex(/^[A-Z0-9]{4,24}$/)
+    .optional(),
+});
+
+const experimentCheckpointSchema = z.object({
+  targetTrades: z.union([z.literal(30), z.literal(100), z.literal(200)]),
+  reachedAt: z.iso.datetime().nullable(),
+  netPnl: z.string().nullable(),
+  returnPercent: z.number().nullable(),
+  maxDrawdownPercent: z.number().nonnegative().nullable(),
+  profitFactor: z.number().nonnegative().nullable(),
+});
+
+export const experimentRankingItemSchema = z.object({
+  rank: z.number().int().positive(),
+  deploymentId: z.uuid(),
+  status: deploymentStatusSchema,
+  environment: z.enum(["dry-run", "demo", "live"]),
+  exchangeAccountId: z.string(),
+  strategy: z.object({ id: z.uuid(), name: z.string() }),
+  strategyVersion: z.object({
+    id: z.uuid(),
+    version: z.number().int().positive(),
+    family: experimentFamilySchema,
+    timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
+    symbols: z.array(z.string()),
+    riskPerTradePercent: z.number().nonnegative(),
+    maxOpenPositions: z.number().int().positive(),
+  }),
+  riskTier: experimentRiskTierSchema,
+  startedAt: z.iso.datetime(),
+  runningDays: z.number().nonnegative(),
+  lastTradeAt: z.iso.datetime().nullable(),
+  trades: z.number().int().nonnegative(),
+  wins: z.number().int().nonnegative(),
+  losses: z.number().int().nonnegative(),
+  winRatePercent: z.number().nonnegative(),
+  grossPnl: z.string(),
+  realizedPnl: z.string(),
+  unrealizedPnl: z.string(),
+  totalPnl: z.string(),
+  returnPercent: z.number(),
+  costs: z.string(),
+  profitFactor: z.number().nonnegative().nullable(),
+  expectancy: z.string(),
+  maxDrawdownPercent: z.number().nonnegative(),
+  averageHoldingMinutes: z.number().nonnegative(),
+  openPositions: z.number().int().nonnegative(),
+  grossExposure: z.string(),
+  longExposure: z.string(),
+  shortExposure: z.string(),
+  sample: z.object({
+    trades: z.number().int().nonnegative(),
+    stage: experimentSampleStageSchema,
+    nextTarget: z.union([z.literal(30), z.literal(100), z.literal(200)]).nullable(),
+    progressPercent: z.number().min(0).max(100),
+  }),
+  checkpoints: z.array(experimentCheckpointSchema),
+});
+
+export const experimentRankingSchema = z.object({
+  filters: z.object({
+    period: experimentPeriodSchema,
+    family: experimentFamilySchema.nullable(),
+    riskTier: experimentRiskTierSchema.nullable(),
+    symbol: z.string().nullable(),
+  }),
+  initialCapital: z.string(),
+  summary: z.object({
+    experiments: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    trades: z.number().int().nonnegative(),
+    openPositions: z.number().int().nonnegative(),
+    realizedPnl: z.string(),
+    unrealizedPnl: z.string(),
+    totalPnl: z.string(),
+    returnPercent: z.number(),
+    grossExposure: z.string(),
+    comparable: z.number().int().nonnegative(),
+  }),
+  items: z.array(experimentRankingItemSchema),
+  filterOptions: z.object({
+    families: z.array(experimentFamilySchema),
+    riskTiers: z.array(experimentRiskTierSchema),
+    symbols: z.array(z.string()),
+  }),
+});
+
 export const deploymentCreateSchema = z.object({
   strategyVersionId: z.uuid(),
   exchangeConnectionId: z.uuid(),
@@ -1549,6 +1658,13 @@ export type DeploymentStatusDto = z.infer<typeof deploymentStatusSchema>;
 export type DeploymentCommandDto = z.infer<typeof deploymentCommandSchema>;
 export type DeploymentDto = z.infer<typeof deploymentSchema>;
 export type DeploymentsDto = z.infer<typeof deploymentsSchema>;
+export type ExperimentPeriodDto = z.infer<typeof experimentPeriodSchema>;
+export type ExperimentFamilyDto = z.infer<typeof experimentFamilySchema>;
+export type ExperimentRiskTierDto = z.infer<typeof experimentRiskTierSchema>;
+export type ExperimentSampleStageDto = z.infer<typeof experimentSampleStageSchema>;
+export type ExperimentRankingQueryDto = z.infer<typeof experimentRankingQuerySchema>;
+export type ExperimentRankingItemDto = z.infer<typeof experimentRankingItemSchema>;
+export type ExperimentRankingDto = z.infer<typeof experimentRankingSchema>;
 export type DeploymentCreateDto = z.infer<typeof deploymentCreateSchema>;
 export type DeploymentCommandInputDto = z.infer<typeof deploymentCommandInputSchema>;
 export type DeploymentMutationResultDto = z.infer<typeof deploymentMutationResultSchema>;

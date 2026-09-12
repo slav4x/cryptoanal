@@ -27,6 +27,7 @@ export {
   type ActivityFilters,
 } from "./activity-repository";
 export { AnalyticsRepository, type AnalyticsTradeFilters } from "./analytics-repository";
+export { ExperimentRepository } from "./experiment-repository";
 export { DashboardRepository } from "./dashboard-repository";
 export {
   JournalCursorNotFoundError,

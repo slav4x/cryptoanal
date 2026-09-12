@@ -145,6 +145,7 @@ pnpm dev
 - `POST /api/v1/deployments/:deploymentId/commands`;
 - `POST /api/v1/positions/:positionId/close`;
 - `GET /api/v1/analytics?period=24h|7d|30d|90d|all&environment=&strategyId=&symbol=`;
+- `GET /api/v1/experiments?period=24h|7d|30d|all&family=&riskTier=&symbol=`;
 - `GET /api/v1/health`.
 - `GET /api/v1/activity?period=24h|7d|30d|all&action=&strategyId=&symbol=&reasonCode=&cursor=`.
 - `GET /api/v1/journal?period=7d|30d|90d|all&kind=&strategyId=&symbol=&tag=&cursor=`;
@@ -164,6 +165,15 @@ market regime и UTC-сессии входа. Regime и session фиксирую
 копируются в каноническую Trade при закрытии; старые записи получают `unknown`. Стартовая точка equity берётся из
 `DRY_RUN_INITIAL_BALANCE`; это аналитическая база текущего development-контура, а не
 исторический account snapshot.
+
+Experiments объединяет каждый deployment и его immutable strategy version в отдельную
+строку сравнения. Проекция нормализует общий результат относительно одинакового
+`DRY_RUN_INITIAL_BALANCE`, отдельно показывает realized/unrealized PnL, текущую gross/long/short
+экспозицию, win rate, profit factor, expectancy, drawdown и издержки. Фильтры периода,
+семейства, уровня риска и пары применяются на сервере. Достаточность выборки считается по
+неизменяемому журналу закрытых сделок: до 30 — данных мало, 30–99 — предварительно,
+100–199 — можно сравнивать, 200+ — достаточная база. Контрольные точки 30/100/200
+восстанавливаются детерминированно вместе с метриками на момент их достижения.
 
 Графики Overview и Analytics всегда получают полную доступную историю. Масштаб 24 часа
 используется по умолчанию; переключение на 7 или 30 дней меняет только ширину видимого

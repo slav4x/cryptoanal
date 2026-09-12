@@ -66,6 +66,8 @@
 ## Этап 5 — Analytics
 
 - [x] Performance projections и breakdowns.
+- [x] Рейтинг параллельных экспериментов: normalized return, realized/unrealized PnL,
+      риск, экспозиция, фильтры и контроль достаточности выборки на 30/100/200 сделках.
 - [x] Equity, drawdown и PnL calendar.
 - [x] Распределения результата и времени в позиции.
 - [x] Trade provenance и breakdowns по market regime и UTC-session.

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Experiment ranking workspace with normalized return, realized/unrealized PnL, exposure,
+  risk and sample-size filters, plus deterministic 30/100/200-trade checkpoints.
 - One shared Bybit public WebSocket stream with dynamic ticker/kline subscriptions, reconnects and REST history fallback.
 - A one-second realtime quote loop for dry-run entries and exact-price SL, TP and trailing-stop handling, with throttled mark persistence.
 - Parallel dry-run strategy execution with automatically isolated per-strategy accounts and an aggregated portfolio snapshot.

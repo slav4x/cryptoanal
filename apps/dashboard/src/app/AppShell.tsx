@@ -25,6 +25,7 @@ import {
   RadioTower,
   Settings,
   ScrollText,
+  Trophy,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -40,6 +41,7 @@ const workspaceNavigation = [
   { label: "Стратегии", href: "/strategies", icon: Layers3, end: false },
   { label: "Валидация", href: "/validation", icon: FlaskConical, end: false },
   { label: "Запуск", href: "/runtime", icon: RadioTower, end: false },
+  { label: "Эксперименты", href: "/experiments", icon: Trophy, end: false },
   { label: "Аналитика", href: "/analytics", icon: ChartNoAxesCombined, end: true },
 ] satisfies NavigationItem[];
 

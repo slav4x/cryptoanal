@@ -18,6 +18,7 @@ const ValidationPage = lazy(() => import("../features/validation/ValidationPage"
 const ValidationRunPage = lazy(() => import("../features/validation/ValidationRunPage"));
 const ValidationComparePage = lazy(() => import("../features/validation/ValidationComparePage"));
 const RuntimePage = lazy(() => import("../features/runtime/RuntimePage"));
+const ExperimentsPage = lazy(() => import("../features/experiments/ExperimentsPage"));
 const AnalyticsPage = lazy(() => import("../features/analytics/AnalyticsPage"));
 const HealthPage = lazy(() => import("../features/health/HealthPage"));
 const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
@@ -167,6 +168,14 @@ function AuthenticatedRoutes() {
           element={
             <Suspense fallback={<RouteFallback />}>
               <RuntimePage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="experiments"
+          element={
+            <Suspense fallback={<RouteFallback />}>
+              <ExperimentsPage />
             </Suspense>
           }
         />

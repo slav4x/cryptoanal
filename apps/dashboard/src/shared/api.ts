@@ -12,6 +12,7 @@ import {
   deploymentsSchema,
   exchangeConnectionCreatedSchema,
   exchangeConnectionsSchema,
+  experimentRankingSchema,
   healthDashboardSchema,
   journalEntryCreatedSchema,
   journalSchema,
@@ -64,6 +65,8 @@ import {
   type ExchangeConnectionCreateDto,
   type ExchangeConnectionCredentialsDto,
   type ExchangeConnectionsDto,
+  type ExperimentRankingDto,
+  type ExperimentRankingQueryDto,
   type HealthDashboardDto,
   type JournalDto,
   type JournalEntryCreateDto,
@@ -186,6 +189,7 @@ const authPasswordChangedEnvelopeSchema = apiEnvelopeSchema(authPasswordChangedS
 const authRecoveryDetailsEnvelopeSchema = apiEnvelopeSchema(authRecoveryDetailsSchema);
 const authPasswordRecoveredEnvelopeSchema = apiEnvelopeSchema(authPasswordRecoveredSchema);
 const analyticsEnvelopeSchema = apiEnvelopeSchema(analyticsSchema);
+const experimentRankingEnvelopeSchema = apiEnvelopeSchema(experimentRankingSchema);
 const activityEnvelopeSchema = apiEnvelopeSchema(activitySchema);
 const healthDashboardEnvelopeSchema = apiEnvelopeSchema(healthDashboardSchema);
 const journalEnvelopeSchema = apiEnvelopeSchema(journalSchema);
@@ -399,6 +403,16 @@ export function fetchAnalytics(filters: AnalyticsQueryDto): Promise<ApiEnvelope<
   if (filters.strategyId) query.set("strategyId", filters.strategyId);
   if (filters.symbol) query.set("symbol", filters.symbol);
   return request(`/api/v1/analytics?${query.toString()}`, analyticsEnvelopeSchema);
+}
+
+export function fetchExperimentRanking(
+  filters: ExperimentRankingQueryDto,
+): Promise<ApiEnvelope<ExperimentRankingDto>> {
+  const query = new URLSearchParams({ period: filters.period });
+  if (filters.family) query.set("family", filters.family);
+  if (filters.riskTier) query.set("riskTier", filters.riskTier);
+  if (filters.symbol) query.set("symbol", filters.symbol);
+  return request(`/api/v1/experiments?${query.toString()}`, experimentRankingEnvelopeSchema);
 }
 
 export function fetchHealthDashboard(): Promise<ApiEnvelope<HealthDashboardDto>> {

@@ -156,6 +156,23 @@ export function StrategyConfigEditor({ value, onChange }: Props) {
           description="Защитный стоп, фиксация прибыли и сопровождение позиции."
         >
           <NumberGrid fields={exitFields} value={value} update={update} />
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-[10px] border border-row-border p-3">
+            <input
+              type="checkbox"
+              checked={value.exitOnSignalReversal}
+              onChange={(event) => update("exitOnSignalReversal", event.target.checked)}
+              className="mt-0.5 size-4 accent-primary"
+              disabled={value.signalFamily !== "ema-crossover"}
+            />
+            <span>
+              <span className="block text-xs font-medium text-secondary-foreground">
+                Закрывать по обратному EMA-сигналу
+              </span>
+              <span className="mt-1 block text-[11px] leading-4 text-stale">
+                Позиция закрывается на завершённой свече при пересечении EMA против её стороны.
+              </span>
+            </span>
+          </label>
         </FormSection>
 
         <FormSection
@@ -526,6 +543,24 @@ const exitFields = [
     min: "0",
     max: "100",
     step: "0.01",
+  },
+  {
+    key: "breakEvenActivationR",
+    id: "break-even-activation",
+    label: "Безубыток после",
+    suffix: "R",
+    min: "0",
+    max: "10",
+    step: "0.1",
+  },
+  {
+    key: "trailingActivationR",
+    id: "trailing-activation",
+    label: "Активация trailing после",
+    suffix: "R",
+    min: "0",
+    max: "10",
+    step: "0.1",
   },
 ] as const satisfies ReadonlyArray<NumberFieldDefinition>;
 

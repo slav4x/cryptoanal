@@ -4,6 +4,9 @@
 
 ### Added
 
+- Configurable cost-adjusted break-even activation, delayed trailing-stop activation and
+  reverse EMA crossover exits in the shared validation/runtime execution engine.
+- Continuous favorable-price tracking for open positions even when trailing-stop is disabled.
 - Experiment ranking workspace with normalized return, realized/unrealized PnL, exposure,
   risk and sample-size filters, plus deterministic 30/100/200-trade checkpoints.
 - One shared Bybit public WebSocket stream with dynamic ticker/kline subscriptions, reconnects and REST history fallback.

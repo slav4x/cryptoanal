@@ -717,6 +717,28 @@ function configRows(config: StrategyConfigDto) {
     row("exit.stopLossPercent", "Exit", "Stop loss", `${config.exit.stopLossPercent}%`),
     row("exit.takeProfitPercent", "Exit", "Take profit", `${config.exit.takeProfitPercent}%`),
     row("exit.trailingStopPercent", "Exit", "Trailing stop", `${config.exit.trailingStopPercent}%`),
+    row(
+      "exit.breakEvenActivationR",
+      "Exit",
+      "Безубыток после",
+      config.exit.breakEvenActivationR > 0 ? `${config.exit.breakEvenActivationR}R` : "Выключен",
+    ),
+    row(
+      "exit.trailingActivationR",
+      "Exit",
+      "Активация trailing",
+      config.exit.trailingStopPercent > 0
+        ? config.exit.trailingActivationR > 0
+          ? `${config.exit.trailingActivationR}R`
+          : "Сразу"
+        : "Выключен",
+    ),
+    row(
+      "exit.exitOnSignalReversal",
+      "Exit",
+      "Обратный EMA-сигнал",
+      config.exit.exitOnSignalReversal ? "Закрывать" : "Игнорировать",
+    ),
     row("costs.makerFeeBps", "Costs", "Maker fee", `${config.costs.makerFeeBps} bps`),
     row("costs.takerFeeBps", "Costs", "Taker fee", `${config.costs.takerFeeBps} bps`),
     row("costs.slippageBps", "Costs", "Проскальзывание", `${config.costs.slippageBps} bps`),

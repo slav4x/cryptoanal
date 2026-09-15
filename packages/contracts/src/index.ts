@@ -614,6 +614,9 @@ export const strategyConfigSchema = z
       stopLossPercent: z.number().positive().max(100),
       takeProfitPercent: z.number().positive().max(500),
       trailingStopPercent: z.number().min(0).max(100),
+      breakEvenActivationR: z.number().min(0).max(10).default(0),
+      trailingActivationR: z.number().min(0).max(10).default(0),
+      exitOnSignalReversal: z.boolean().default(false),
     }),
     costs: z.object({
       makerFeeBps: z.number().min(0).max(100),

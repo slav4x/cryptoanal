@@ -35,7 +35,14 @@ export type ExecutionStrategyConfig = {
     maxDailyLossPercent: number;
   };
   entry: { orderType: "market" | "limit"; limitOffsetBps: number };
-  exit: { stopLossPercent: number; takeProfitPercent: number; trailingStopPercent: number };
+  exit: {
+    stopLossPercent: number;
+    takeProfitPercent: number;
+    trailingStopPercent: number;
+    breakEvenActivationR: number;
+    trailingActivationR: number;
+    exitOnSignalReversal: boolean;
+  };
   costs: { makerFeeBps: number; takerFeeBps: number; slippageBps: number };
   schedule: {
     timezone: string;
@@ -505,17 +512,34 @@ export function evaluateExecutionSignalExit(
   config: ExecutionStrategyConfig,
   closedAt = candle.openTime,
 ): ExecutionSettlement<"signal-exit"> | null {
-  if (
-    config.signal.family !== "mean-reversion" ||
-    candle.meanReversionZScore === null ||
-    !(
+  if (config.signal.family === "mean-reversion" && candle.meanReversionZScore !== null) {
+    const returnedToMean =
       (position.side === "long" && candle.meanReversionZScore >= 0) ||
-      (position.side === "short" && candle.meanReversionZScore <= 0)
-    )
+      (position.side === "short" && candle.meanReversionZScore <= 0);
+    if (returnedToMean) {
+      return settleExecutionPosition(position, candle.close, closedAt, "signal-exit", config);
+    }
+  }
+
+  if (
+    config.signal.family !== "ema-crossover" ||
+    !config.exit.exitOnSignalReversal ||
+    candle.emaFast === null ||
+    candle.emaSlow === null ||
+    candle.previousEmaFast === null ||
+    candle.previousEmaSlow === null
   ) {
     return null;
   }
-  return settleExecutionPosition(position, candle.close, closedAt, "signal-exit", config);
+  const crossedUp =
+    candle.previousEmaFast <= candle.previousEmaSlow && candle.emaFast > candle.emaSlow;
+  const crossedDown =
+    candle.previousEmaFast >= candle.previousEmaSlow && candle.emaFast < candle.emaSlow;
+  const reversed =
+    (position.side === "long" && crossedDown) || (position.side === "short" && crossedUp);
+  return reversed
+    ? settleExecutionPosition(position, candle.close, closedAt, "signal-exit", config)
+    : null;
 }
 
 export function updateExecutionTrailing(
@@ -523,21 +547,11 @@ export function updateExecutionTrailing(
   candle: EnrichedExecutionCandle,
   config: ExecutionStrategyConfig,
 ): ExecutionPosition {
-  if (config.exit.trailingStopPercent <= 0) return { ...position };
-  if (position.side === "long") {
-    const bestPrice = Math.max(position.bestPrice, candle.high);
-    return {
-      ...position,
-      bestPrice,
-      trailingPrice: bestPrice * (1 - config.exit.trailingStopPercent / 100),
-    };
-  }
-  const bestPrice = Math.min(position.bestPrice, candle.low);
-  return {
-    ...position,
-    bestPrice,
-    trailingPrice: bestPrice * (1 + config.exit.trailingStopPercent / 100),
-  };
+  return updateExecutionProtection(
+    position,
+    position.side === "long" ? candle.high : candle.low,
+    config,
+  );
 }
 
 export function updateExecutionTrailingAtPrice(
@@ -545,21 +559,65 @@ export function updateExecutionTrailingAtPrice(
   price: number,
   config: ExecutionStrategyConfig,
 ): ExecutionPosition {
-  if (config.exit.trailingStopPercent <= 0) return { ...position };
-  if (position.side === "long") {
-    const bestPrice = Math.max(position.bestPrice, price);
-    return {
-      ...position,
-      bestPrice,
-      trailingPrice: bestPrice * (1 - config.exit.trailingStopPercent / 100),
-    };
+  return updateExecutionProtection(position, price, config);
+}
+
+function updateExecutionProtection(
+  position: ExecutionPosition,
+  observedPrice: number,
+  config: ExecutionStrategyConfig,
+): ExecutionPosition {
+  const bestPrice =
+    position.side === "long"
+      ? Math.max(position.bestPrice, observedPrice)
+      : Math.min(position.bestPrice, observedPrice);
+  const initialRisk = position.entryPrice * (config.exit.stopLossPercent / 100);
+  const favorableMove = (bestPrice - position.entryPrice) * (position.side === "long" ? 1 : -1);
+  const reachedR = initialRisk > 0 ? favorableMove / initialRisk : 0;
+  let stopPrice = position.stopPrice;
+  let trailingPrice = position.trailingPrice;
+
+  if (config.exit.breakEvenActivationR > 0 && reachedR >= config.exit.breakEvenActivationR) {
+    const breakEvenPrice = executionBreakEvenPrice(position, config);
+    stopPrice =
+      position.side === "long"
+        ? Math.max(stopPrice, breakEvenPrice)
+        : Math.min(stopPrice, breakEvenPrice);
   }
-  const bestPrice = Math.min(position.bestPrice, price);
-  return {
-    ...position,
-    bestPrice,
-    trailingPrice: bestPrice * (1 + config.exit.trailingStopPercent / 100),
-  };
+
+  const trailingActive =
+    config.exit.trailingStopPercent > 0 &&
+    (config.exit.trailingActivationR <= 0 || reachedR >= config.exit.trailingActivationR);
+  if (trailingActive) {
+    const candidate =
+      bestPrice *
+      (position.side === "long"
+        ? 1 - config.exit.trailingStopPercent / 100
+        : 1 + config.exit.trailingStopPercent / 100);
+    trailingPrice =
+      trailingPrice === null
+        ? candidate
+        : position.side === "long"
+          ? Math.max(trailingPrice, candidate)
+          : Math.min(trailingPrice, candidate);
+  }
+
+  return { ...position, bestPrice, stopPrice, trailingPrice };
+}
+
+function executionBreakEvenPrice(
+  position: ExecutionPosition,
+  config: ExecutionStrategyConfig,
+): number {
+  const entryCostsPerUnit = position.entryFee / position.quantity;
+  const takerRate = config.costs.takerFeeBps / 10_000;
+  const slippageRate = config.costs.slippageBps / 10_000;
+  if (position.side === "long") {
+    const settledPrice = (position.entryPrice + entryCostsPerUnit) / (1 - takerRate);
+    return settledPrice / (1 - slippageRate);
+  }
+  const settledPrice = (position.entryPrice - entryCostsPerUnit) / (1 + takerRate);
+  return settledPrice / (1 + slippageRate);
 }
 
 export function settleExecutionPosition<Reason extends ExecutionExitReason>(

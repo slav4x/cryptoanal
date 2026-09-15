@@ -28,6 +28,9 @@ export type StrategyConfigDraft = {
   stopLossPercent: string;
   takeProfitPercent: string;
   trailingStopPercent: string;
+  breakEvenActivationR: string;
+  trailingActivationR: string;
+  exitOnSignalReversal: boolean;
   makerFeeBps: string;
   takerFeeBps: string;
   slippageBps: string;
@@ -61,6 +64,9 @@ export const defaultStrategyConfigDraft: StrategyConfigDraft = {
   stopLossPercent: "2",
   takeProfitPercent: "4",
   trailingStopPercent: "0",
+  breakEvenActivationR: "0",
+  trailingActivationR: "0",
+  exitOnSignalReversal: false,
   makerFeeBps: "2",
   takerFeeBps: "5.5",
   slippageBps: "3",
@@ -95,6 +101,9 @@ export function strategyConfigToDraft(config: StrategyConfigDto): StrategyConfig
     stopLossPercent: String(config.exit.stopLossPercent),
     takeProfitPercent: String(config.exit.takeProfitPercent),
     trailingStopPercent: String(config.exit.trailingStopPercent),
+    breakEvenActivationR: String(config.exit.breakEvenActivationR),
+    trailingActivationR: String(config.exit.trailingActivationR),
+    exitOnSignalReversal: config.exit.exitOnSignalReversal,
     makerFeeBps: String(config.costs.makerFeeBps),
     takerFeeBps: String(config.costs.takerFeeBps),
     slippageBps: String(config.costs.slippageBps),
@@ -149,6 +158,9 @@ export function draftToStrategyConfig(draft: StrategyConfigDraft): StrategyConfi
       stopLossPercent: toNumber(draft.stopLossPercent),
       takeProfitPercent: toNumber(draft.takeProfitPercent),
       trailingStopPercent: toNumber(draft.trailingStopPercent),
+      breakEvenActivationR: toNumber(draft.breakEvenActivationR),
+      trailingActivationR: toNumber(draft.trailingActivationR),
+      exitOnSignalReversal: draft.exitOnSignalReversal,
     },
     costs: {
       makerFeeBps: toNumber(draft.makerFeeBps),

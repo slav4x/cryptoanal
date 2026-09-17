@@ -167,6 +167,8 @@
 
 ### Fixed
 
+- Bybit public and private REST clients can use an optional HTTP CONNECT proxy when direct
+  TLS access to exchange endpoints is blocked, while the realtime WebSocket stays direct.
 - Route changes now reset document scroll, while Overview period changes retain the current position and rendered page.
 - Validation no longer overflows the JavaScript call stack when processing large candle datasets.
 - Technical validation failures return the strategy to draft so it can be corrected and queued again.

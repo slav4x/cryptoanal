@@ -1,7 +1,20 @@
 import Decimal from "decimal.js";
 import { createHmac, randomUUID } from "node:crypto";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
+
+type BybitFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function createBybitFetch(proxyUrl?: string): BybitFetch {
+  if (!proxyUrl) return globalThis.fetch;
+  const dispatcher = new ProxyAgent(proxyUrl);
+  return (input, init) =>
+    undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+      ...(init as Parameters<typeof undiciFetch>[1]),
+      dispatcher,
+    }) as unknown as Promise<Response>;
+}
 
 const tickerResponseSchema = z.object({
   retCode: z.number(),
@@ -172,10 +185,15 @@ export class BybitPrivateApiUnavailableError extends Error {
 }
 
 export class BybitPrivateClient {
+  private readonly fetchImpl: BybitFetch;
+
   public constructor(
     private readonly baseUrl: string,
     private readonly receiveWindowMs = 5_000,
-  ) {}
+    proxyUrl?: string,
+  ) {
+    this.fetchImpl = createBybitFetch(proxyUrl);
+  }
 
   public async getApiKeyInformation(
     apiKey: string,
@@ -201,7 +219,7 @@ export class BybitPrivateClient {
 
     let response: Response;
     try {
-      response = await fetch(url, requestInit);
+      response = await this.fetchImpl(url, requestInit);
     } catch (error) {
       const timedOut =
         signal?.aborted === true || (error instanceof Error && error.name === "TimeoutError");
@@ -274,7 +292,14 @@ export class BybitPrivateClient {
 }
 
 export class BybitPublicMarketClient {
-  public constructor(private readonly baseUrl: string) {}
+  private readonly fetchImpl: BybitFetch;
+
+  public constructor(
+    private readonly baseUrl: string,
+    proxyUrl?: string,
+  ) {
+    this.fetchImpl = createBybitFetch(proxyUrl);
+  }
 
   public async getLinearTickers(signal?: AbortSignal): Promise<BybitMarketTicker[]> {
     const url = new URL("/v5/market/tickers", this.baseUrl);
@@ -285,7 +310,7 @@ export class BybitPublicMarketClient {
     };
     if (signal) requestInit.signal = signal;
 
-    const response = await fetch(url, requestInit);
+    const response = await this.fetchImpl(url, requestInit);
 
     if (!response.ok) {
       throw new Error(`Bybit tickers request failed with HTTP ${response.status}`);
@@ -388,7 +413,7 @@ export class BybitPublicMarketClient {
     };
     if (signal) requestInit.signal = signal;
 
-    const response = await fetch(url, requestInit);
+    const response = await this.fetchImpl(url, requestInit);
     if (!response.ok) {
       throw new Error(`Bybit kline request failed with HTTP ${response.status}`);
     }

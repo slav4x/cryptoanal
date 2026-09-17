@@ -239,8 +239,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
   const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
   const bybitPrivateClients = {
-    DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL),
-    LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL),
+    DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL, undefined, config.BYBIT_PROXY_URL),
+    LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL, undefined, config.BYBIT_PROXY_URL),
   } as const;
   const authRepository = new AuthRepository(prisma);
   const analyticsRepository = new AnalyticsRepository(prisma);

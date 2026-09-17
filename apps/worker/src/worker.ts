@@ -72,11 +72,14 @@ const healthRepository = new HealthRepository(prisma);
 const workspaceRepository = new WorkspaceRepository(prisma);
 const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
 const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
-const marketClient = new BybitPublicMarketClient(config.BYBIT_PUBLIC_BASE_URL);
+const marketClient = new BybitPublicMarketClient(
+  config.BYBIT_PUBLIC_BASE_URL,
+  config.BYBIT_PROXY_URL,
+);
 const marketStreamClient = new BybitPublicStreamClient(config.BYBIT_PUBLIC_WS_URL);
 const privateClients = {
-  DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL),
-  LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL),
+  DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL, undefined, config.BYBIT_PROXY_URL),
+  LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL, undefined, config.BYBIT_PROXY_URL),
 } as const;
 const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 const marketStreamAbortController = new AbortController();

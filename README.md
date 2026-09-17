@@ -368,6 +368,9 @@ pnpm auth:create-recovery --email owner@example.com
 Private Bybit verification использует `BYBIT_DEMO_BASE_URL` для demo,
 `BYBIT_LIVE_BASE_URL` для live и timeout `BYBIT_PRIVATE_REQUEST_TIMEOUT_MS`. Региональный
 mainnet-домен при необходимости задаётся через server environment, без изменений frontend.
+Если сеть блокирует TLS к REST-доменам Bybit, `BYBIT_PROXY_URL` направляет только REST
+запросы public/private клиентов через HTTP CONNECT proxy. Для локального Docker и Happ
+используется `http://host.docker.internal:10820`; public WebSocket остаётся прямым.
 
 После успешной ручной проверки worker перепроверяет connection каждые
 `EXCHANGE_VERIFICATION_INTERVAL_HOURS` часов. Claim защищён lease; временная ошибка

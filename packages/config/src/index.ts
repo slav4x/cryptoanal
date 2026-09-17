@@ -40,6 +40,7 @@ const serverConfigSchema = z
     BYBIT_PUBLIC_WS_URL: z.url().default("wss://stream.bybit.com/v5/public/linear"),
     BYBIT_DEMO_BASE_URL: z.url().default("https://api-demo.bybit.com"),
     BYBIT_LIVE_BASE_URL: z.url().default("https://api.bybit.com"),
+    BYBIT_PROXY_URL: z.url().optional(),
     BYBIT_PRIVATE_REQUEST_TIMEOUT_MS: z.coerce
       .number()
       .int()

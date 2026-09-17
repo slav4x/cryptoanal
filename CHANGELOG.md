@@ -167,6 +167,8 @@
 
 ### Fixed
 
+- Dashboard nginx now refreshes Docker DNS for the API service instead of keeping a stale
+  container address and returning `502 Bad Gateway` after API recreation.
 - Bybit public and private REST clients can use an optional HTTP CONNECT proxy when direct
   TLS access to exchange endpoints is blocked, while the realtime WebSocket stays direct.
 - Route changes now reset document scroll, while Overview period changes retain the current position and rendered page.

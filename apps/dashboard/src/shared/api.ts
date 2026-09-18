@@ -18,6 +18,9 @@ import {
   journalSchema,
   invitationDetailsSchema,
   marketDetailSchema,
+  marketCatalogSchema,
+  marketUniverseAddedSchema,
+  marketUniverseRemovedSchema,
   marketsSchema,
   mutationAcceptedSchema,
   overviewSchema,
@@ -58,6 +61,9 @@ import {
   type ActivityDto,
   type ActivityQueryDto,
   type MarketDetailDto,
+  type MarketCatalogDto,
+  type MarketUniverseAddedDto,
+  type MarketUniverseRemovedDto,
   type DeploymentCommandInputDto,
   type DeploymentCreateDto,
   type DeploymentMutationResultDto,
@@ -202,6 +208,9 @@ const overviewEnvelopeSchema = apiEnvelopeSchema(overviewSchema);
 const playbooksEnvelopeSchema = apiEnvelopeSchema(playbooksSchema);
 const playbookMutationEnvelopeSchema = apiEnvelopeSchema(playbookMutationSchema);
 const marketsEnvelopeSchema = apiEnvelopeSchema(marketsSchema);
+const marketCatalogEnvelopeSchema = apiEnvelopeSchema(marketCatalogSchema);
+const marketUniverseAddedEnvelopeSchema = apiEnvelopeSchema(marketUniverseAddedSchema);
+const marketUniverseRemovedEnvelopeSchema = apiEnvelopeSchema(marketUniverseRemovedSchema);
 const marketDetailEnvelopeSchema = apiEnvelopeSchema(marketDetailSchema);
 const watchlistStateEnvelopeSchema = apiEnvelopeSchema(watchlistStateSchema);
 const tradingLedgerEnvelopeSchema = apiEnvelopeSchema(tradingLedgerSchema);
@@ -583,6 +592,27 @@ export function fetchActivity(
 
 export function fetchMarkets(): Promise<ApiEnvelope<MarketsDto>> {
   return request("/api/v1/markets", marketsEnvelopeSchema);
+}
+
+export function fetchMarketCatalog(): Promise<ApiEnvelope<MarketCatalogDto>> {
+  return request("/api/v1/market-catalog", marketCatalogEnvelopeSchema);
+}
+
+export function addMarkets(instrumentIds: string[]): Promise<ApiEnvelope<MarketUniverseAddedDto>> {
+  return request("/api/v1/markets", marketUniverseAddedEnvelopeSchema, {
+    method: "POST",
+    body: JSON.stringify({ instrumentIds }),
+  });
+}
+
+export function removeMarket(symbol: string): Promise<ApiEnvelope<MarketUniverseRemovedDto>> {
+  return request(
+    `/api/v1/markets/${encodeURIComponent(symbol)}`,
+    marketUniverseRemovedEnvelopeSchema,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export function fetchMarketDetail(symbol: string): Promise<ApiEnvelope<MarketDetailDto>> {

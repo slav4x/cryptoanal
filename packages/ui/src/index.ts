@@ -2,6 +2,16 @@ export { Badge, type BadgeProps } from "./components/badge";
 export { Button, type ButtonProps } from "./components/button";
 export { buttonVariants } from "./components/button-variants";
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/card";
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "./components/dialog";
 export { EmptyState } from "./components/empty-state";
 export { ErrorState } from "./components/error-state";
 export { FieldLabel } from "./components/field-label";

@@ -88,7 +88,8 @@ pnpm dev
 Основные рабочие маршруты:
 
 - `/` — обзор с интерактивным графиком капитала; по умолчанию 24 часа, доступны 7 и 30 дней;
-- `/markets` — список инструментов и watchlist;
+- `/markets` — workspace-scoped список инструментов, watchlist и управление доступными
+  Bybit-парами через активное биржевое подключение;
 - `/markets/:symbol` — интерактивные реальные свечи, торговые отметки и уровни открытых
   позиций, техническая сводка и табличный торговый контекст пары;
 - `/trades` — открытые позиции и история завершённых сделок;
@@ -131,6 +132,10 @@ pnpm dev
 - `POST /api/v1/exchange-connections/:connectionId/verify` — проверка ключа и permissions;
 - `GET /api/v1/overview`;
 - `GET /api/v1/markets` и `GET /api/v1/markets/:symbol`;
+- `GET /api/v1/market-catalog` — доступные Bybit linear perpetual инструменты и их
+  торговые ограничения; каталог доступен только при активном Bybit connection;
+- `POST /api/v1/markets` и `DELETE /api/v1/markets/:symbol` — owner-only управление
+  market universe текущего workspace;
 - `PUT /api/v1/watchlist/:symbol` и `DELETE /api/v1/watchlist/:symbol`;
 - `GET /api/v1/trades` и `GET /api/v1/trades/:tradeId`;
 - `GET /api/v1/strategies` и `POST /api/v1/strategies`;

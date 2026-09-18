@@ -4,6 +4,12 @@
 
 ### Added
 
+- Workspace-scoped market universe with owner-only add/remove commands, audit events and
+  safe removal guards for active deployments and open positions.
+- Bybit linear perpetual instrument catalog with search-ready metadata, exchange provenance
+  and trading constraints such as tick size, quantity step and minimum order values.
+- Market management dialog with multi-select addition, connection-aware empty states and
+  dynamic worker subscriptions for newly added or removed pairs.
 - Configurable cost-adjusted break-even activation, delayed trailing-stop activation and
   reverse EMA crossover exits in the shared validation/runtime execution engine.
 - Continuous favorable-price tracking for open positions even when trailing-stop is disabled.

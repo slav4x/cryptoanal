@@ -52,7 +52,11 @@ import {
   journalQuerySchema,
   journalSchema,
   marketDetailSchema,
+  marketCatalogSchema,
   marketSymbolParamsSchema,
+  marketUniverseAddSchema,
+  marketUniverseAddedSchema,
+  marketUniverseRemovedSchema,
   marketsSchema,
   overviewQuerySchema,
   overviewSchema,
@@ -113,6 +117,7 @@ import {
   BybitCredentialsRejectedError,
   BybitPrivateApiUnavailableError,
   BybitPrivateClient,
+  BybitPublicMarketClient,
   describeBybitCredentialRejection,
   evaluateBybitPermissions,
 } from "@cryptoanal/exchange-bybit";
@@ -155,6 +160,10 @@ import {
   JournalCursorNotFoundError,
   JournalRepository,
   JournalTargetNotFoundError,
+  MarketUniverseInstrumentConflictError,
+  MarketUniverseMarketInUseError,
+  MarketUniverseMarketNotFoundError,
+  MarketUniverseRepository,
   PlaybookLinkNotFoundError,
   PlaybookNameConflictError,
   PlaybookNotFoundError,
@@ -238,6 +247,31 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const repository = new DashboardRepository(prisma);
   const credentialCipher = new CredentialCipher(config.EXCHANGE_CREDENTIALS_KEY);
   const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
+  const marketUniverseRepository = new MarketUniverseRepository(prisma);
+  const bybitPublicMarketClient = new BybitPublicMarketClient(
+    config.BYBIT_PUBLIC_BASE_URL,
+    config.BYBIT_PROXY_URL,
+  );
+  let bybitMarketCatalogCache:
+    | {
+        expiresAt: number;
+        items: Awaited<ReturnType<typeof bybitPublicMarketClient.getLinearInstruments>>;
+      }
+    | undefined;
+  const getBybitMarketCatalog = async () => {
+    if (bybitMarketCatalogCache && bybitMarketCatalogCache.expiresAt > Date.now()) {
+      return bybitMarketCatalogCache.items;
+    }
+    const items = (await bybitPublicMarketClient.getLinearInstruments()).filter(
+      (instrument) =>
+        instrument.status === "Trading" &&
+        instrument.contractType === "LinearPerpetual" &&
+        instrument.quoteAsset === "USDT" &&
+        instrument.settleAsset === "USDT",
+    );
+    bybitMarketCatalogCache = { expiresAt: Date.now() + 5 * 60_000, items };
+    return items;
+  };
   const bybitPrivateClients = {
     DEMO: new BybitPrivateClient(config.BYBIT_DEMO_BASE_URL, undefined, config.BYBIT_PROXY_URL),
     LIVE: new BybitPrivateClient(config.BYBIT_LIVE_BASE_URL, undefined, config.BYBIT_PROXY_URL),
@@ -2395,8 +2429,15 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           symbol: instrument.symbol,
           baseAsset: instrument.baseAsset,
           quoteAsset: instrument.quoteAsset,
+          settleAsset: instrument.settleAsset,
           exchange: instrument.exchange,
           instrumentType: instrument.instrumentType,
+          contractType: instrument.contractType,
+          status: instrument.status,
+          tickSize: instrument.tickSize?.toFixed() ?? null,
+          qtyStep: instrument.qtyStep?.toFixed() ?? null,
+          minOrderQty: instrument.minOrderQty?.toFixed() ?? null,
+          minNotional: instrument.minNotional?.toFixed() ?? null,
           watchlisted: instrument.watchlistItems.length > 0,
           price: snapshot?.price.toFixed() ?? null,
           change24hPercent: snapshot?.change24hPercent?.toFixed() ?? null,
@@ -2413,6 +2454,119 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           items.some((item) => item.freshness === "fresh") ? "fresh" : "unavailable",
         ),
       };
+    },
+  );
+
+  app.get(
+    "/api/v1/market-catalog",
+    {
+      schema: {
+        response: {
+          200: apiEnvelopeSchema(marketCatalogSchema),
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const environments = await exchangeConnectionRepository.listActiveEnvironments(
+        workspace.id,
+        "bybit",
+      );
+      if (environments.length === 0) {
+        return {
+          data: {
+            source: { exchange: "bybit" as const, connected: false, environments: [] },
+            items: [],
+          },
+          meta: createMeta(request.id, "unavailable"),
+        };
+      }
+
+      const [catalog, addedSymbols] = await Promise.all([
+        getBybitMarketCatalog(),
+        marketUniverseRepository.listSymbols(workspace.id),
+      ]);
+      const added = new Set(addedSymbols);
+      return {
+        data: {
+          source: {
+            exchange: "bybit" as const,
+            connected: true,
+            environments: environments.map(
+              (environment) => environment.toLowerCase() as "demo" | "live",
+            ),
+          },
+          items: catalog.map((instrument) => ({
+            id: marketCatalogId(instrument.symbol),
+            ...instrument,
+            exchange: "bybit" as const,
+            instrumentType: "linear-perpetual" as const,
+            added: added.has(instrument.symbol),
+          })),
+        },
+        meta: createMeta(request.id, "fresh"),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/markets",
+    {
+      schema: {
+        body: marketUniverseAddSchema,
+        response: {
+          200: apiEnvelopeSchema(marketUniverseAddedSchema),
+          400: errorEnvelopeSchema,
+          403: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      const environments = await exchangeConnectionRepository.listActiveEnvironments(
+        workspace.id,
+        "bybit",
+      );
+      if (environments.length === 0) {
+        throw new ApiError(
+          409,
+          "EXCHANGE_CONNECTION_REQUIRED",
+          "Сначала добавьте и подтвердите подключение Bybit",
+        );
+      }
+
+      const catalog = await getBybitMarketCatalog();
+      const catalogById = new Map(
+        catalog.map((instrument) => [marketCatalogId(instrument.symbol), instrument]),
+      );
+      const instruments = request.body.instrumentIds.map((id) => catalogById.get(id));
+      if (instruments.some((instrument) => instrument === undefined)) {
+        throw new ApiError(
+          400,
+          "MARKET_CATALOG_CHANGED",
+          "Список инструментов Bybit изменился. Обновите каталог и повторите",
+        );
+      }
+
+      try {
+        const result = await marketUniverseRepository.addMarkets({
+          workspaceId: workspace.id,
+          actorId: context.actorId,
+          requestId: request.id,
+          instruments: instruments.map((instrument) => ({
+            ...instrument!,
+            exchange: "bybit" as const,
+            instrumentType: "linear-perpetual" as const,
+          })),
+        });
+        return { data: result, meta: createMeta(request.id, "fresh") };
+      } catch (error) {
+        throwMarketUniverseApiError(error);
+      }
     },
   );
 
@@ -3118,8 +3272,15 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             symbol: instrument.symbol,
             baseAsset: instrument.baseAsset,
             quoteAsset: instrument.quoteAsset,
+            settleAsset: instrument.settleAsset,
             exchange: instrument.exchange,
             instrumentType: instrument.instrumentType,
+            contractType: instrument.contractType,
+            status: instrument.status,
+            tickSize: instrument.tickSize?.toFixed() ?? null,
+            qtyStep: instrument.qtyStep?.toFixed() ?? null,
+            minOrderQty: instrument.minOrderQty?.toFixed() ?? null,
+            minNotional: instrument.minNotional?.toFixed() ?? null,
             watchlisted: instrument.watchlistItems.length > 0,
             price: snapshot?.price.toFixed() ?? null,
             change24hPercent: snapshot?.change24hPercent?.toFixed() ?? null,
@@ -3154,6 +3315,40 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
   );
 
+  app.delete(
+    "/api/v1/markets/:symbol",
+    {
+      schema: {
+        params: marketSymbolParamsSchema,
+        response: {
+          200: apiEnvelopeSchema(marketUniverseRemovedSchema),
+          403: errorEnvelopeSchema,
+          404: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+          503: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      try {
+        await marketUniverseRepository.removeMarket({
+          workspaceId: workspace.id,
+          actorId: context.actorId,
+          requestId: request.id,
+          symbol: request.params.symbol,
+        });
+        return {
+          data: { symbol: request.params.symbol, removed: true as const },
+          meta: createMeta(request.id, "fresh"),
+        };
+      } catch (error) {
+        throwMarketUniverseApiError(error);
+      }
+    },
+  );
+
   app.put(
     "/api/v1/watchlist/:symbol",
     {
@@ -3168,7 +3363,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
     async (request) => {
       const workspace = requireWorkspace(request);
-      if (!(await repository.hasEnabledMarket(request.params.symbol))) {
+      if (!(await repository.hasEnabledMarket(workspace.id, request.params.symbol))) {
         throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
       }
       await repository.setWatchlisted(workspace.id, request.params.symbol, true);
@@ -3193,7 +3388,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
     },
     async (request) => {
       const workspace = requireWorkspace(request);
-      if (!(await repository.hasEnabledMarket(request.params.symbol))) {
+      if (!(await repository.hasEnabledMarket(workspace.id, request.params.symbol))) {
         throw new ApiError(404, "MARKET_NOT_FOUND", "Торговая пара не найдена");
       }
       await repository.setWatchlisted(workspace.id, request.params.symbol, false);
@@ -3902,6 +4097,23 @@ function throwExchangeConnectionApiError(error: unknown): never {
       "EXCHANGE_CONNECTION_VERIFICATION_CONFLICT",
       "Credentials изменились во время проверки. Запустите проверку ещё раз",
     );
+  }
+  throw error;
+}
+
+function marketCatalogId(symbol: string) {
+  return `bybit:linear-perpetual:${symbol}`;
+}
+
+function throwMarketUniverseApiError(error: unknown): never {
+  if (error instanceof MarketUniverseMarketNotFoundError) {
+    throw new ApiError(404, "MARKET_NOT_FOUND", "Пара отсутствует в рынке workspace");
+  }
+  if (error instanceof MarketUniverseInstrumentConflictError) {
+    throw new ApiError(409, "MARKET_INSTRUMENT_CONFLICT", error.message);
+  }
+  if (error instanceof MarketUniverseMarketInUseError) {
+    throw new ApiError(409, "MARKET_IN_USE", `${error.message}: ${error.blockers.join("; ")}`);
   }
   throw error;
 }

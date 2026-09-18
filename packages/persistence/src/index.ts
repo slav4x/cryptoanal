@@ -76,6 +76,13 @@ export {
   type MarketSnapshotInput,
 } from "./market-data-repository";
 export {
+  MarketUniverseInstrumentConflictError,
+  MarketUniverseMarketInUseError,
+  MarketUniverseMarketNotFoundError,
+  MarketUniverseRepository,
+  type MarketUniverseInstrumentInput,
+} from "./market-universe-repository";
+export {
   ValidationAlreadyActiveError,
   ValidationDatasetConflictError,
   ValidationNotEligibleError,

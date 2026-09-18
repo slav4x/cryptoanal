@@ -25,7 +25,11 @@ export class MarketDataRepository {
 
   public async listEnabledSymbols(): Promise<string[]> {
     const instruments = await this.prisma.marketInstrument.findMany({
-      where: { enabled: true },
+      where: {
+        enabled: true,
+        status: "Trading",
+        workspaceMarkets: { some: {} },
+      },
       select: { symbol: true },
     });
     return instruments.map(({ symbol }) => symbol);

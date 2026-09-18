@@ -155,14 +155,21 @@ export class DashboardRepository {
 
   public async listMarkets(workspaceId: string) {
     return this.prisma.marketInstrument.findMany({
-      where: { enabled: true },
-      orderBy: [{ watchlistItems: { _count: "desc" } }, { symbol: "asc" }],
+      where: { enabled: true, workspaceMarkets: { some: { workspaceId } } },
+      orderBy: { symbol: "asc" },
       select: {
         symbol: true,
         baseAsset: true,
         quoteAsset: true,
+        settleAsset: true,
         exchange: true,
         instrumentType: true,
+        contractType: true,
+        status: true,
+        tickSize: true,
+        qtyStep: true,
+        minOrderQty: true,
+        minNotional: true,
         watchlistItems: {
           where: { workspaceId },
           select: { position: true },
@@ -189,13 +196,20 @@ export class DashboardRepository {
 
   public async getMarket(workspaceId: string, symbol: string) {
     return this.prisma.marketInstrument.findFirst({
-      where: { symbol, enabled: true },
+      where: { symbol, enabled: true, workspaceMarkets: { some: { workspaceId } } },
       select: {
         symbol: true,
         baseAsset: true,
         quoteAsset: true,
+        settleAsset: true,
         exchange: true,
         instrumentType: true,
+        contractType: true,
+        status: true,
+        tickSize: true,
+        qtyStep: true,
+        minOrderQty: true,
+        minNotional: true,
         watchlistItems: {
           where: { workspaceId },
           select: { position: true },
@@ -228,9 +242,9 @@ export class DashboardRepository {
     });
   }
 
-  public async hasEnabledMarket(symbol: string): Promise<boolean> {
+  public async hasEnabledMarket(workspaceId: string, symbol: string): Promise<boolean> {
     const count = await this.prisma.marketInstrument.count({
-      where: { symbol, enabled: true },
+      where: { symbol, enabled: true, workspaceMarkets: { some: { workspaceId } } },
     });
     return count > 0;
   }

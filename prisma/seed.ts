@@ -45,6 +45,12 @@ for (const [position, [symbol, baseAsset]] of instruments.entries()) {
     update: { position },
     create: { workspaceId, symbol, position },
   });
+
+  await prisma.workspaceMarket.upsert({
+    where: { workspaceId_symbol: { workspaceId, symbol } },
+    update: { position },
+    create: { workspaceId, symbol, position, addedByActorId: "system:seed" },
+  });
 }
 
 await prisma.$disconnect();

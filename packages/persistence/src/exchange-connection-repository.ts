@@ -44,6 +44,26 @@ export class ExchangeConnectionRepository {
     });
   }
 
+  public async listActiveEnvironments(
+    workspaceId: string,
+    exchange: "bybit",
+  ): Promise<PersistedEnvironment[]> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: {
+        workspaceId,
+        exchange,
+        status: "ACTIVE",
+        revokedAt: null,
+      },
+      distinct: ["environment"],
+      select: { environment: true },
+      orderBy: { environment: "asc" },
+    });
+    return connections
+      .map(({ environment }) => environment)
+      .filter((environment): environment is PersistedEnvironment => environment !== "DRY_RUN");
+  }
+
   public find(workspaceId: string, connectionId: string) {
     return this.prisma.exchangeConnection.findFirst({
       where: { id: connectionId, workspaceId, revokedAt: null },

@@ -33,6 +33,35 @@ const tickerResponseSchema = z.object({
   }),
 });
 
+const instrumentInfoResponseSchema = z.object({
+  retCode: z.number(),
+  retMsg: z.string(),
+  result: z.object({
+    category: z.string(),
+    nextPageCursor: z.string().default(""),
+    list: z.array(
+      z
+        .object({
+          symbol: z.string(),
+          contractType: z.string(),
+          status: z.string(),
+          baseCoin: z.string(),
+          quoteCoin: z.string(),
+          settleCoin: z.string(),
+          priceFilter: z.object({
+            tickSize: z.string(),
+          }),
+          lotSizeFilter: z.object({
+            minOrderQty: z.string(),
+            qtyStep: z.string(),
+            minNotionalValue: z.string(),
+          }),
+        })
+        .passthrough(),
+    ),
+  }),
+});
+
 const klineResponseSchema = z.object({
   retCode: z.number(),
   retMsg: z.string(),
@@ -94,6 +123,19 @@ export type BybitMarketTicker = {
   change24hPercent: string;
   volume24h: string;
   observedAt: Date;
+};
+
+export type BybitLinearInstrument = {
+  symbol: string;
+  contractType: string;
+  status: string;
+  baseAsset: string;
+  quoteAsset: string;
+  settleAsset: string;
+  tickSize: string;
+  qtyStep: string;
+  minOrderQty: string;
+  minNotional: string;
 };
 
 export type BybitMarketCandle = {
@@ -329,6 +371,52 @@ export class BybitPublicMarketClient {
       volume24h: ticker.turnover24h,
       observedAt,
     }));
+  }
+
+  public async getLinearInstruments(signal?: AbortSignal): Promise<BybitLinearInstrument[]> {
+    const instruments = new Map<string, BybitLinearInstrument>();
+    let cursor = "";
+
+    for (let page = 0; page < 20; page += 1) {
+      const url = new URL("/v5/market/instruments-info", this.baseUrl);
+      url.searchParams.set("category", "linear");
+      url.searchParams.set("status", "Trading");
+      url.searchParams.set("limit", "1000");
+      if (cursor) url.searchParams.set("cursor", cursor);
+
+      const requestInit: RequestInit = { headers: { Accept: "application/json" } };
+      if (signal) requestInit.signal = signal;
+      const response = await this.fetchImpl(url, requestInit);
+      if (!response.ok) {
+        throw new Error(`Bybit instruments request failed with HTTP ${response.status}`);
+      }
+
+      const payload = instrumentInfoResponseSchema.parse(await response.json());
+      if (payload.retCode !== 0) {
+        throw new Error(`Bybit instruments request failed: ${payload.retCode} ${payload.retMsg}`);
+      }
+
+      for (const instrument of payload.result.list) {
+        instruments.set(instrument.symbol, {
+          symbol: instrument.symbol,
+          contractType: instrument.contractType,
+          status: instrument.status,
+          baseAsset: instrument.baseCoin,
+          quoteAsset: instrument.quoteCoin,
+          settleAsset: instrument.settleCoin,
+          tickSize: instrument.priceFilter.tickSize,
+          qtyStep: instrument.lotSizeFilter.qtyStep,
+          minOrderQty: instrument.lotSizeFilter.minOrderQty,
+          minNotional: instrument.lotSizeFilter.minNotionalValue,
+        });
+      }
+
+      const nextCursor = payload.result.nextPageCursor;
+      if (!nextCursor || nextCursor === cursor) break;
+      cursor = nextCursor;
+    }
+
+    return [...instruments.values()].sort((left, right) => left.symbol.localeCompare(right.symbol));
   }
 
   public async getLinearKlines(

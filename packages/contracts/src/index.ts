@@ -243,8 +243,15 @@ export const marketSchema = z.object({
   symbol: z.string(),
   baseAsset: z.string(),
   quoteAsset: z.string(),
+  settleAsset: z.string().nullable(),
   exchange: z.string(),
   instrumentType: z.string(),
+  contractType: z.string().nullable(),
+  status: z.string(),
+  tickSize: z.string().nullable(),
+  qtyStep: z.string().nullable(),
+  minOrderQty: z.string().nullable(),
+  minNotional: z.string().nullable(),
   watchlisted: z.boolean(),
   price: z.string().nullable(),
   change24hPercent: z.string().nullable(),
@@ -256,6 +263,50 @@ export const marketSchema = z.object({
 export const marketsSchema = z.object({
   items: z.array(marketSchema),
   total: z.number().int().nonnegative(),
+});
+
+export const marketCatalogInstrumentSchema = z.object({
+  id: z.string(),
+  symbol: z.string(),
+  baseAsset: z.string(),
+  quoteAsset: z.string(),
+  settleAsset: z.string(),
+  exchange: z.literal("bybit"),
+  instrumentType: z.literal("linear-perpetual"),
+  contractType: z.string(),
+  status: z.string(),
+  tickSize: z.string(),
+  qtyStep: z.string(),
+  minOrderQty: z.string(),
+  minNotional: z.string(),
+  added: z.boolean(),
+});
+
+export const marketCatalogSchema = z.object({
+  source: z.object({
+    exchange: z.literal("bybit"),
+    connected: z.boolean(),
+    environments: z.array(z.enum(["demo", "live"])),
+  }),
+  items: z.array(marketCatalogInstrumentSchema),
+});
+
+export const marketUniverseAddSchema = z.object({
+  instrumentIds: z
+    .array(z.string().regex(/^bybit:linear-perpetual:[A-Z0-9]{4,24}$/))
+    .min(1)
+    .max(50)
+    .refine((items) => new Set(items).size === items.length, "Пары не должны повторяться"),
+});
+
+export const marketUniverseAddedSchema = z.object({
+  added: z.array(z.string()),
+  existing: z.array(z.string()),
+});
+
+export const marketUniverseRemovedSchema = z.object({
+  symbol: z.string(),
+  removed: z.literal(true),
 });
 
 export const marketSymbolParamsSchema = z.object({
@@ -1621,6 +1672,11 @@ export type AnalyticsBreakdownDto = z.infer<typeof analyticsBreakdownSchema>;
 export type AnalyticsDto = z.infer<typeof analyticsSchema>;
 export type MarketDto = z.infer<typeof marketSchema>;
 export type MarketsDto = z.infer<typeof marketsSchema>;
+export type MarketCatalogInstrumentDto = z.infer<typeof marketCatalogInstrumentSchema>;
+export type MarketCatalogDto = z.infer<typeof marketCatalogSchema>;
+export type MarketUniverseAddDto = z.infer<typeof marketUniverseAddSchema>;
+export type MarketUniverseAddedDto = z.infer<typeof marketUniverseAddedSchema>;
+export type MarketUniverseRemovedDto = z.infer<typeof marketUniverseRemovedSchema>;
 export type MarketCandleDto = z.infer<typeof marketCandleSchema>;
 export type MarketAnalysisDto = z.infer<typeof marketAnalysisSchema>;
 export type MarketDetailDto = z.infer<typeof marketDetailSchema>;

@@ -176,6 +176,7 @@ model Workspace {
   createdAt           DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
   settings            WorkspaceSettings?
+  markets             WorkspaceMarket[]
   watchlistItems      WatchlistItem[]
   strategies          Strategy[]
   strategyVersions    StrategyVersion[]
@@ -336,11 +337,20 @@ model MarketInstrument {
   symbol           String                  @id
   baseAsset        String
   quoteAsset       String
+  settleAsset      String?
   exchange         String
   instrumentType   String
+  contractType     String?
+  status           String                  @default("Trading")
+  tickSize         Decimal?                @db.Decimal(38, 18)
+  qtyStep          Decimal?                @db.Decimal(38, 18)
+  minOrderQty      Decimal?                @db.Decimal(38, 18)
+  minNotional      Decimal?                @db.Decimal(38, 18)
   enabled          Boolean                 @default(true)
+  metadataSyncedAt DateTime?               @db.Timestamptz(3)
   createdAt        DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime                @updatedAt @db.Timestamptz(3)
+  workspaceMarkets WorkspaceMarket[]
   watchlistItems   WatchlistItem[]
   positions        Position[]
   orders           Order[]
@@ -353,7 +363,22 @@ model MarketInstrument {
   candles          MarketCandle[]
   journalLinks     JournalLink[]
 
-  @@index([exchange, enabled])
+  @@unique([exchange, instrumentType, symbol])
+  @@index([exchange, status, enabled])
+}
+
+model WorkspaceMarket {
+  workspaceId    String
+  symbol         String
+  position       Int              @default(0)
+  addedByActorId String
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instrument     MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+
+  @@id([workspaceId, symbol])
+  @@index([workspaceId, position])
+  @@index([symbol])
 }
 
 model MarketSnapshot {

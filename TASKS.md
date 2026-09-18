@@ -1,5 +1,36 @@
 # Задачи CryptoAnal
 
+## Текущий приоритет и порядок выполнения
+
+Состояние экспериментов на 19 сентября 2026 года: 16 параллельных dry-run deployments,
+69 закрытых сделок суммарно, от 0 до 11 сделок на отдельную стратегию. Этой выборки
+недостаточно для выбора победителя: первая контрольная точка — 30 сделок на стратегию,
+рабочее сравнение — от 100 сделок на каждого отобранного кандидата. Совокупный PnL
+изолированных virtual accounts не считать результатом единого портфеля.
+
+Оптимальная последовательность оставшейся разработки:
+
+1. **Market universe:** динамическое добавление Bybit-инструментов, полные торговые
+   ограничения инструмента, безопасное удаление и автоматическое управление ingestion.
+2. **Strategy universe UI:** выбор нескольких пар только из рынка текущего workspace;
+   затем перекомпоновка настроек и фильтр стратегий на графике пары.
+3. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
+   provenance метрик и окончательное решение по funding.
+4. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
+   накопить минимум 30 закрытых сделок на стратегию и отобрать 3–5 кандидатов.
+5. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
+   доставка критичных уведомлений. Длительный demo/runtime не должен зависеть от ноутбука.
+6. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
+   daily loss limit и глобальный kill switch.
+7. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
+   после перезапуска. Live execution до отдельного operational review запрещён.
+8. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
+   накопить минимум 100 сделок на каждого отобранного кандидата.
+9. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
+   данных, production key management и удаление development-доступа.
+10. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
+    только после подтверждения предыдущих stop-gates.
+
 ## Этап 1 — Foundation
 
 - [x] Создать структуру pnpm monorepo.
@@ -32,6 +63,18 @@
       фильтрация, множественный выбор доступных Bybit-инструментов, отметка уже добавленных
       и атомарное добавление выбранных пар в market universe. Каталог показывать только для
       бирж с `ACTIVE` connection; отсутствие подключения объяснять внутри интерфейса.
+- [ ] Расширить модель инструмента и API обязательными exchange constraints: `exchange`,
+      `marketType`, `baseAsset`, `quoteAsset`, `tickSize`, `qtyStep`, `minOrderQty`,
+      `minNotional`, торговый статус и время последней синхронизации. Идентичность строить
+      по `exchange + marketType + symbol`, а не только по `symbol`.
+- [ ] Добавить безопасное удаление пары из market universe: запрет при активном deployment
+      или открытой позиции, явное поведение для immutable strategy versions, остановка
+      новых subscriptions и сохранение уже накопленной истории.
+- [ ] Обрабатывать изменение статуса и delisting инструмента: запрет новых входов,
+      health incident, понятное состояние в UI и контролируемое закрытие/остановка runtime.
+- [ ] Добавить reconciliation market history после разрыва WebSocket: поиск пропусков,
+      REST-backfill недостающих свечей и контроль непрерывности данных до возобновления
+      торговых сигналов.
 - [x] Страница пары со свечами, EMA, RSI, ATR и regime.
 - [x] Read-model позиций и завершённых сделок.
 - [x] Страница открытых позиций и истории сделок.
@@ -75,6 +118,13 @@
 ## Этап 4 — Validation Center
 
 - [x] Единая execution semantics runtime/backtest.
+- [ ] Выделить versioned golden datasets и ожидаемые решения, сделки, PnL и метрики для
+      проверки equivalence runtime/backtest на одинаковой последовательности событий.
+- [ ] Зафиксировать funding policy: текущие конфликтующие funding-результаты считать
+      invalid/disabled до новой воспроизводимой валидации; исключить зависимость расчёта
+      от wall clock.
+- [ ] Довести provenance всех метрик до единого контракта: environment, exchange,
+      source, instrument type, dataset/config/engine versions и freshness.
 - [x] Immutable dataset snapshots с content hash и повторным использованием исторических
       наборов без повторной загрузки.
 - [x] Durable очередь ValidationRun/Job для backtest и walk-forward.
@@ -93,6 +143,12 @@
 - [x] Trade provenance и breakdowns по market regime и UTC-session.
 - [x] Health, drift и watchdog.
 - [x] Activity/explainability.
+- [ ] Сохранить текущие конфигурации экспериментов неизменными до 30 закрытых сделок на
+      стратегию, кроме исправлений доказанной ошибки исполнения или расчёта.
+- [ ] На checkpoint 30 сделать формальный review и выбрать 3–5 кандидатов по net return,
+      expectancy, drawdown, costs, стабильности по парам/режимам и достаточности выборки.
+- [ ] Для отобранных кандидатов накопить 100+ закрытых сделок; окончательные решения
+      принимать по неизменяемым версиям и отдельно сравнивать dry-run и Bybit Demo fills.
 
 ## Этап 6 — Разбор и polish
 
@@ -155,6 +211,15 @@
 - [x] Invite-only onboarding и управление участниками.
 - [x] Управление sessions, смена пароля и одноразовый recovery flow.
 - [ ] Public signup, email verification и автоматическая отправка recovery-ссылок.
+- [ ] Добавить onboarding нового workspace без seed/fake данных и полноценные empty states
+      для рынка, стратегий, validations, runtime, аналитики и биржевых подключений.
+- [ ] Добавить limits/quotas на параллельные deployments, размер market universe,
+      исторические datasets и тяжёлые validation jobs.
+- [ ] Завершить lifecycle пользовательских данных: полный экспорт, удаление аккаунта и
+      workspace, retention policy, блокировка пользователя и audit событий этих операций.
+- [ ] Удалить development access endpoints/config из клиентского deployment.
+- [ ] Определить support/incident workflow и окончательно утвердить достаточность ролей
+      `OWNER`/`MEMBER` до добавления новых ролей.
 - [x] Multi-workspace scheduling для runtime/account/watchdog worker.
 - [x] Workspace-scoped exchange connections и encrypted credentials.
 - [x] Проверка credentials через Bybit, permission policy и lifecycle статусов.
@@ -162,7 +227,35 @@
 - [x] Периодическая перепроверка exchange connection с lease, retry и health incidents.
 - [x] Миграция development workspace к владельцу.
 
-## Этап 9 — Landing
+## Этап 9 — Production readiness и Bybit Demo
+
+- [ ] Подготовить постоянное окружение вне ноутбука: server/VPS, HTTPS, домен, закрытая
+      административная поверхность и воспроизводимый deployment/rollback runbook.
+- [ ] Добавить CI для typecheck, lint, build, проверки Prisma migrations и сборки Docker
+      images; не выполнять автоматический production deploy без отдельного решения.
+- [ ] Автоматизировать регулярные PostgreSQL backups, retention, проверку восстановления и
+      оповещение о неуспешном backup/restore check.
+- [ ] Реализовать доставку критичных watchdog/outbox уведомлений минимум в один внешний
+      канал: stale market data, остановка worker, runtime failure, rejected order,
+      превышение risk limit и недоступность биржи.
+- [ ] Добавить versioned master-key rotation для encrypted exchange credentials и runbook
+      восстановления/повторной привязки ключей.
+- [ ] Реализовать portfolio risk для общего биржевого аккаунта: capital allocation,
+      reservation, конфликт long/short по символу, aggregate exposure/correlation limits,
+      order/position attribution и приоритеты стратегий.
+- [ ] Добавить независимый risk guard: max position/account exposure, max concurrent
+      positions, daily loss limit, stale-data gate и глобальный kill switch.
+- [ ] Реализовать Bybit Demo execution adapter: create/amend/cancel orders, exchange order
+      ids, fills/fees, exchange-native SL/TP и идемпотентные client order ids.
+- [ ] Реализовать reconciliation demo-account: balances, positions, open orders и fills;
+      восстановление после рестарта, обработка частичного исполнения и расхождений между
+      локальным ledger и Bybit.
+- [ ] Сопоставить dry-run fill/slippage model с фактическими Bybit Demo fills и повторно
+      валидировать параметры costs до решения о live readiness.
+- [ ] Провести отдельный operational readiness review перед любым `LIVE` deployment:
+      security, risk limits, reconciliation, backup, alerts, rollback и ручной kill switch.
+
+## Этап 10 — Landing
 
 - [ ] Marketing app.
 - [ ] Product, methodology и docs.
@@ -171,7 +264,6 @@
 
 ## Идеи
 
-- Shared-account multi-strategy allocation для будущего demo/live execution.
 - Team roles beyond owner/member.
 - Billing.
 - AI assistant.

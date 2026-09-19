@@ -21,7 +21,10 @@ export class ExperimentRepository {
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: {
             startedAt: true,
+            engineVersion: true,
+            configHash: true,
             trades: {
+              where: { funding: 0 },
               orderBy: [{ closedAt: "asc" }, { id: "asc" }],
               select: {
                 symbol: true,

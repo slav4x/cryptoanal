@@ -9,12 +9,15 @@ import {
   getExecutionMarketRegime,
   getExecutionTradingSession,
   getTradingDateKey,
+  fundingPolicy,
+  metricProvenanceSchemaVersion,
   minimumExecutionCandleCount,
   openExecutionPosition,
   openExecutionPositionAtQuote,
   runValidationEngine,
   updateExecutionTrailing,
   updateExecutionTrailingAtPrice,
+  validationEngineVersion,
   type ExecutionMarketRegime,
   type ExecutionPosition,
   type ExecutionQuote,
@@ -1072,7 +1075,20 @@ async function processValidationJob(job: ClaimedValidationJob) {
       ...result.metrics,
       gateReasons: result.gateReasons,
       provenance: {
+        schemaVersion: metricProvenanceSchemaVersion,
+        environment: executionInput.kind,
+        exchange: dataset.exchange,
+        source: dataset.source,
+        instrumentType: dataset.instrumentType,
+        datasetVersion: `dataset-snapshot@${dataset.schemaVersion}`,
+        datasetId: dataset.id,
         datasetHash: dataset.contentHash,
+        configVersion: `strategy-config@${strategyConfig.schemaVersion}`,
+        configHash: job.configHash,
+        engineVersion: validationEngineVersion,
+        asOf: dataset.endsAt.toISOString(),
+        freshness: "immutable",
+        fundingPolicy,
         symbols: dataset.symbols,
         timeframe: executionInput.dataset.timeframe,
         startDate: executionInput.dataset.startDate,
@@ -1139,8 +1155,13 @@ async function prepareValidationDataset(
   strategyConfig: ReturnType<typeof strategyConfigSchema.parse>,
 ): Promise<{
   id: string;
+  schemaVersion: number;
+  source: string;
+  exchange: string;
+  instrumentType: string;
   contentHash: string;
   symbols: string[];
+  endsAt: Date;
   candles: ValidationCandle[];
 }> {
   const symbols = [...new Set(executionInput.dataset.symbols)].sort();
@@ -1296,8 +1317,13 @@ function deserializeValidationDataset(
 ) {
   return {
     id: snapshot.id,
+    schemaVersion: snapshot.schemaVersion,
+    source: snapshot.source,
+    exchange: snapshot.exchange,
+    instrumentType: snapshot.instrumentType,
     contentHash: snapshot.contentHash,
     symbols,
+    endsAt: snapshot.endsAt,
     candles: snapshot.candles.map((candle) => ({
       symbol: candle.symbol,
       openTime: candle.openTime,

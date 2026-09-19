@@ -13,6 +13,7 @@ export class AnalyticsRepository {
   public async getPerformanceDataset(workspaceId: string, filters: AnalyticsTradeFilters) {
     const where = {
       workspaceId,
+      funding: 0,
       ...(filters.startsAt ? { closedAt: { gte: filters.startsAt } } : {}),
       ...(filters.environment ? { environment: filters.environment } : {}),
       ...(filters.strategyId ? { strategyVersion: { strategyId: filters.strategyId } } : {}),
@@ -43,10 +44,11 @@ export class AnalyticsRepository {
               strategy: { select: { id: true, name: true } },
             },
           },
+          executionRun: { select: { engineVersion: true, configHash: true } },
         },
       }),
       this.prisma.trade.findMany({
-        where: { workspaceId },
+        where: { workspaceId, funding: 0 },
         distinct: ["strategyVersionId", "symbol", "environment"],
         select: {
           symbol: true,
@@ -87,7 +89,16 @@ export class AnalyticsRepository {
           name: trade.strategyVersion.strategy.name,
           version: trade.strategyVersion.version,
         },
+        engineVersion: trade.executionRun.engineVersion,
+        configHash: trade.executionRun.configHash,
       })),
+      provenance: {
+        engineVersions: [
+          ...new Set(trades.map((trade) => trade.executionRun.engineVersion)),
+        ].sort(),
+        configHashes: [...new Set(trades.map((trade) => trade.executionRun.configHash))].sort(),
+        asOf: trades.at(-1)?.closedAt ?? null,
+      },
       options: {
         strategies: [...strategies.entries()]
           .map(([id, name]) => ({ id, name }))

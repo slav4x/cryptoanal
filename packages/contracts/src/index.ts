@@ -368,6 +368,34 @@ export const analyticsPeriodSchema = z.enum(["24h", "7d", "30d", "90d", "all"]);
 export const analyticsEnvironmentSchema = z.enum(["dry-run", "demo", "live"]);
 export const marketRegimeSchema = z.enum(["bull", "bear", "neutral", "unknown"]);
 export const tradingSessionSchema = z.enum(["asia", "europe", "us", "off-hours", "unknown"]);
+export const metricFreshnessSchema = z.enum(["immutable", "fresh", "stale", "unavailable"]);
+export const fundingPolicySchema = z.object({
+  version: z.string(),
+  status: z.enum(["disabled", "enabled"]),
+  reason: z.string(),
+});
+export const metricsProvenanceSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  environment: z
+    .enum(["backtest", "walk-forward", "dry-run", "demo", "live", "mixed"])
+    .default("backtest"),
+  exchange: z.string().default("bybit"),
+  source: z.string().default("legacy-unversioned"),
+  instrumentType: z.string().default("linear-perpetual"),
+  datasetVersion: z.string().default("legacy-unversioned"),
+  datasetId: z.string().nullable().default(null),
+  datasetHash: z.string().nullable().default(null),
+  configVersion: z.string().default("legacy-unversioned"),
+  configHash: z.string().nullable().default(null),
+  engineVersion: z.string().default("legacy-unversioned"),
+  asOf: z.iso.datetime().nullable().default(null),
+  freshness: metricFreshnessSchema.default("unavailable"),
+  fundingPolicy: fundingPolicySchema.default({
+    version: "cryptoanal-funding@disabled-v1",
+    status: "disabled",
+    reason: "Funding excluded pending reproducible exchange-time validation",
+  }),
+});
 export const analyticsQuerySchema = z.object({
   period: analyticsPeriodSchema.default("24h"),
   environment: analyticsEnvironmentSchema.optional(),
@@ -390,6 +418,7 @@ export const analyticsBreakdownSchema = z.object({
 });
 
 export const analyticsSchema = z.object({
+  provenance: metricsProvenanceSchema,
   filters: z.object({
     period: analyticsPeriodSchema,
     environment: analyticsEnvironmentSchema.nullable(),
@@ -864,7 +893,7 @@ export const validationMetricsSchema = z.object({
   ),
   equitySeries: z.array(z.object({ observedAt: z.iso.datetime(), equity: z.number() })),
   gateReasons: z.array(z.string()),
-  provenance: z.object({
+  provenance: metricsProvenanceSchema.extend({
     datasetHash: z.string(),
     symbols: z.array(z.string()),
     timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),
@@ -1101,6 +1130,7 @@ export const experimentRankingItemSchema = z.object({
 });
 
 export const experimentRankingSchema = z.object({
+  provenance: metricsProvenanceSchema,
   filters: z.object({
     period: experimentPeriodSchema,
     family: experimentFamilySchema.nullable(),

@@ -6,7 +6,9 @@ import {
   canTransitionStrategyStatus,
   executionEngineVersion,
   evaluateStrategyLifecycle,
+  fundingPolicy,
   getDeploymentCommands,
+  metricProvenanceSchemaVersion,
   settleExecutionPosition,
   validationDatasetSource,
   validationEngineVersion,
@@ -2255,9 +2257,41 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           symbol: filters.symbol ?? null,
         },
       );
+      const rankingEnvironments = [...new Set(ranking.items.map((item) => item.environment))];
+      const rankingEngineVersions = [
+        ...new Set(
+          dataset.flatMap((deployment) => deployment.executionRuns.map((run) => run.engineVersion)),
+        ),
+      ];
+      const rankingConfigHashes = [
+        ...new Set(
+          dataset.flatMap((deployment) => deployment.executionRuns.map((run) => run.configHash)),
+        ),
+      ];
+      const rankingAsOf = ranking.items.reduce<Date | null>(
+        (latest, item) =>
+          !item.lastTradeAt || (latest && latest >= item.lastTradeAt) ? latest : item.lastTradeAt,
+        null,
+      );
 
       return {
         data: {
+          provenance: {
+            schemaVersion: metricProvenanceSchemaVersion,
+            environment: metricEnvironment(rankingEnvironments),
+            exchange: "bybit",
+            source: "canonical-trade-ledger",
+            instrumentType: "linear-perpetual",
+            datasetVersion: "trade-ledger@1",
+            datasetId: null,
+            datasetHash: null,
+            configVersion: "strategy-config@1",
+            configHash: singleValue(rankingConfigHashes),
+            engineVersion: singleValue(rankingEngineVersions) ?? "mixed",
+            asOf: rankingAsOf?.toISOString() ?? null,
+            freshness: metricFreshness(ranking.items.length > 0),
+            fundingPolicy,
+          },
           filters: {
             period: filters.period,
             family: filters.family ?? null,
@@ -2334,6 +2368,24 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
 
       return {
         data: {
+          provenance: {
+            schemaVersion: metricProvenanceSchemaVersion,
+            environment: metricEnvironment(
+              dataset.trades.map((trade) => tradingEnvironment[trade.environment]),
+            ),
+            exchange: "bybit",
+            source: "canonical-trade-ledger",
+            instrumentType: "linear-perpetual",
+            datasetVersion: "trade-ledger@1",
+            datasetId: null,
+            datasetHash: null,
+            configVersion: "strategy-config@1",
+            configHash: singleValue(dataset.provenance.configHashes),
+            engineVersion: singleValue(dataset.provenance.engineVersions) ?? "mixed",
+            asOf: dataset.provenance.asOf?.toISOString() ?? null,
+            freshness: metricFreshness(analytics.summary.trades > 0),
+            fundingPolicy,
+          },
           filters: {
             period: filters.period,
             environment: filters.environment ?? null,
@@ -3722,6 +3774,19 @@ function getAnalyticsStartsAt(
 ): Date | null {
   const durationMs = analyticsPeriodDurationMs[period];
   return durationMs === null ? null : new Date(endsAt.getTime() - durationMs);
+}
+
+function metricEnvironment(environments: Array<"dry-run" | "demo" | "live">) {
+  const unique = [...new Set(environments)];
+  return unique.length === 1 ? unique[0]! : ("mixed" as const);
+}
+
+function singleValue(values: string[]) {
+  return values.length === 1 ? values[0]! : null;
+}
+
+function metricFreshness(hasData: boolean): "fresh" | "unavailable" {
+  return hasData ? "fresh" : "unavailable";
 }
 
 function createHealthThresholds(config: ServerConfig) {

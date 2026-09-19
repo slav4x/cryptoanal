@@ -201,7 +201,7 @@ export function buildExperimentRanking(
         unrealizedPnl: round(unrealizedPnl),
         totalPnl: round(realizedPnl + unrealizedPnl),
         returnPercent: percent(realizedPnl + unrealizedPnl, initialCapital),
-        costs: round(sum(trades.map((trade) => trade.fees + trade.funding + trade.slippage))),
+        costs: round(sum(trades.map((trade) => trade.fees + trade.slippage))),
         profitFactor: grossLoss > 0 ? round(grossProfit / grossLoss) : null,
         expectancy: trades.length > 0 ? round(realizedPnl / trades.length) : 0,
         maxDrawdownPercent: calculateMaxDrawdown(trades, initialCapital),

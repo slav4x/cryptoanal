@@ -155,7 +155,7 @@ export function buildPerformanceAnalytics(
       grossPnl: round(sum(trades.map((trade) => trade.grossPnl))),
       netPnl: round(sum(trades.map((trade) => trade.netPnl))),
       totalFees: round(sum(trades.map((trade) => trade.fees))),
-      totalFunding: round(sum(trades.map((trade) => trade.funding))),
+      totalFunding: 0,
       totalSlippage: round(sum(trades.map((trade) => trade.slippage))),
       profitFactor: grossLoss > 0 ? round(grossProfit / grossLoss) : null,
       expectancy:
@@ -288,9 +288,7 @@ function createBreakdown(
         winRatePercent: round(ratio(wins, groupedTrades.length) * 100),
         grossPnl: round(sum(groupedTrades.map((trade) => trade.grossPnl))),
         netPnl: round(sum(groupedTrades.map((trade) => trade.netPnl))),
-        costs: round(
-          sum(groupedTrades.map((trade) => trade.fees + trade.funding + trade.slippage)),
-        ),
+        costs: round(sum(groupedTrades.map((trade) => trade.fees + trade.slippage))),
       };
     })
     .sort((left, right) => right.netPnl - left.netPnl || left.label.localeCompare(right.label));

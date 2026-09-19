@@ -90,21 +90,138 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="Система"
         title="Настройки"
-        description="Рабочие параметры текущего пространства и прозрачное состояние инфраструктуры."
+        description="Доступ, торговая инфраструктура и данные текущего рабочего пространства."
       />
-      <div className="grid items-start gap-[18px] xl:grid-cols-2">
-        <WorkspaceCard session={session} />
-        <WorkspaceAccessCard session={session} />
-        <SecurityCard />
-        <PreferencesCard key={settings.preferences.updatedAt} preferences={settings.preferences} />
-        <RuntimeSafetyCard settings={settings} />
-        <MarketDataCard settings={settings} />
-        <ExchangeConnectionsCard session={session} />
-        <NotificationsCard settings={settings} />
-        <RetentionCard settings={settings} />
-        <SystemCard settings={settings} />
+      <div className="grid items-start gap-[18px] xl:grid-cols-[210px_minmax(0,1fr)]">
+        <nav
+          className="sticky top-[18px] hidden rounded-[14px] border bg-card p-2 xl:block"
+          aria-label="Разделы настроек"
+        >
+          {settingsSections.map(({ id, label, icon: Icon }) => (
+            <a
+              key={id}
+              href={`#${id}`}
+              className="flex items-center gap-2.5 rounded-[9px] px-3 py-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Icon className="size-3.5" aria-hidden="true" />
+              {label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="min-w-0 space-y-7">
+          <SettingsSection
+            id="workspace"
+            eyebrow="Workspace"
+            title="Рабочее пространство"
+            description="Контекст клиента, локальные предпочтения интерфейса и времени."
+          >
+            <div className="grid items-start gap-[18px] 2xl:grid-cols-2">
+              <WorkspaceCard session={session} />
+              <PreferencesCard
+                key={settings.preferences.updatedAt}
+                preferences={settings.preferences}
+              />
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            id="access"
+            eyebrow="Access"
+            title="Участники и доступ"
+            description="Роли, приглашения и состав текущего рабочего пространства."
+          >
+            <WorkspaceAccessCard session={session} />
+          </SettingsSection>
+
+          <SettingsSection
+            id="exchanges"
+            eyebrow="Integrations"
+            title="Биржи"
+            description="Приватные API-подключения и состояние источника рыночных данных."
+          >
+            <div className="space-y-[18px]">
+              <ExchangeConnectionsCard session={session} />
+              <MarketDataCard settings={settings} />
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            id="trading-risk"
+            eyebrow="Trading"
+            title="Торговля и риск"
+            description="Среда исполнения и серверные ограничения торговых запусков."
+          >
+            <RuntimeSafetyCard settings={settings} />
+          </SettingsSection>
+
+          <SettingsSection
+            id="data-retention"
+            eyebrow="Data"
+            title="Данные и хранение"
+            description="Состав переносимого экспорта и политика хранения workspace-данных."
+          >
+            <RetentionCard settings={settings} />
+          </SettingsSection>
+
+          <SettingsSection
+            id="security"
+            eyebrow="Security"
+            title="Безопасность аккаунта"
+            description="Пароль и активные пользовательские сессии."
+          >
+            <SecurityCard />
+          </SettingsSection>
+
+          <SettingsSection
+            id="system"
+            eyebrow="Operations"
+            title="Система"
+            description="Уведомления и диагностическое состояние приложения без секретов."
+          >
+            <div className="grid items-start gap-[18px] 2xl:grid-cols-2">
+              <NotificationsCard settings={settings} />
+              <SystemCard settings={settings} />
+            </div>
+          </SettingsSection>
+        </div>
       </div>
     </div>
+  );
+}
+
+const settingsSections: Array<{ id: string; label: string; icon: LucideIcon }> = [
+  { id: "workspace", label: "Рабочее пространство", icon: Building2 },
+  { id: "access", label: "Участники и доступ", icon: Users },
+  { id: "exchanges", label: "Биржи", icon: KeyRound },
+  { id: "trading-risk", label: "Торговля и риск", icon: ShieldCheck },
+  { id: "data-retention", label: "Данные и хранение", icon: Download },
+  { id: "security", label: "Безопасность", icon: LockKeyhole },
+  { id: "system", label: "Система", icon: ServerCog },
+];
+
+function SettingsSection({
+  id,
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="scroll-mt-[18px] space-y-3.5">
+      <header className="px-0.5">
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-stale">{eyebrow}</p>
+        <h2 className="mt-1 text-[18px] font-medium tracking-tight text-foreground">{title}</h2>
+        <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{description}</p>
+      </header>
+      {children}
+    </section>
   );
 }
 
@@ -137,7 +254,7 @@ function SecurityCard() {
   const mismatch = confirmation.length > 0 && newPassword !== confirmation;
 
   return (
-    <Card className="xl:col-span-2">
+    <Card>
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={LockKeyhole} />
         <div>
@@ -314,7 +431,7 @@ function WorkspaceAccessCard({ session }: { session: ReturnType<typeof useAuthSe
     invitationMutation.error ?? roleMutation.error ?? removeMutation.error ?? revokeMutation.error;
 
   return (
-    <Card className="xl:col-span-2">
+    <Card>
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={Users} />
         <div>
@@ -786,7 +903,7 @@ function ExchangeConnectionsCard({ session }: { session: ReturnType<typeof useAu
   const error = saveMutation.error ?? revokeMutation.error ?? verifyMutation.error;
 
   return (
-    <Card className="xl:col-span-2">
+    <Card>
       <CardHeader className="flex-row items-start gap-3 border-b">
         <CardIcon icon={KeyRound} />
         <div>
@@ -1203,10 +1320,16 @@ function SettingsSkeleton() {
   return (
     <div className="space-y-[18px]">
       <Skeleton className="h-20" />
-      <div className="grid gap-[18px] xl:grid-cols-2">
-        {Array.from({ length: 6 }, (_, index) => (
-          <Skeleton key={index} className="h-72" />
-        ))}
+      <div className="grid items-start gap-[18px] xl:grid-cols-[210px_minmax(0,1fr)]">
+        <Skeleton className="hidden h-44 xl:block" />
+        <div className="space-y-7">
+          {Array.from({ length: 7 }, (_, index) => (
+            <div key={index} className="space-y-3.5">
+              <Skeleton className="h-12 w-72 max-w-full" />
+              <Skeleton className="h-72 w-full" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

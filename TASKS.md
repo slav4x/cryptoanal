@@ -10,23 +10,21 @@
 
 Оптимальная последовательность оставшейся разработки:
 
-1. **Market data integrity:** обработка delisting/status, поиск разрывов свечей и
-   REST-backfill перед возобновлением торговых сигналов.
-2. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
+1. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
    provenance метрик и окончательное решение по funding.
-3. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
+2. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
    накопить минимум 30 закрытых сделок на стратегию и отобрать 3–5 кандидатов.
-4. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
+3. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
    доставка критичных уведомлений. Длительный demo/runtime не должен зависеть от ноутбука.
-5. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
+4. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
    daily loss limit и глобальный kill switch.
-6. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
+5. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
    после перезапуска. Live execution до отдельного operational review запрещён.
-7. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
+6. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
    накопить минимум 100 сделок на каждого отобранного кандидата.
-8. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
+7. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
    данных, production key management и удаление development-доступа.
-9. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
+8. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
    только после подтверждения предыдущих stop-gates.
 
 ## Этап 1 — Foundation
@@ -70,9 +68,9 @@
 - [x] Добавить безопасное удаление пары из market universe: запрет при активном deployment
       или открытой позиции, явное поведение для immutable strategy versions, остановка
       новых subscriptions и сохранение уже накопленной истории.
-- [ ] Обрабатывать изменение статуса и delisting инструмента: запрет новых входов,
+- [x] Обрабатывать изменение статуса и delisting инструмента: запрет новых входов,
       health incident, понятное состояние в UI и контролируемое закрытие/остановка runtime.
-- [ ] Добавить reconciliation market history после разрыва WebSocket: поиск пропусков,
+- [x] Добавить reconciliation market history после разрыва WebSocket: поиск пропусков,
       REST-backfill недостающих свечей и контроль непрерывности данных до возобновления
       торговых сигналов.
 - [x] Страница пары со свечами, EMA, RSI, ATR и regime.

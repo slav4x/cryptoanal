@@ -198,6 +198,18 @@ Health projection проверяет API/database, worker heartbeat, Bybit publi
 который зафиксирован в immutable execution context; до 20 закрытых сделок вывод не
 делается.
 
+Worker каждые `INSTRUMENT_SYNC_INTERVAL_MS` сверяет отслеживаемые Bybit-инструменты со
+статусами `Trading` и `Closed`. Выход пары из `Trading` отключает её ingestion,
+ставит использующие её running deployments на паузу, блокирует новые candle/realtime-входы
+на транзакционной границе и создаёт критичный health incident. Возврат в `Trading`
+восстанавливает сбор данных, но deployment требует осознанного ручного resume.
+
+Перед обработкой каждой runtime-свечи worker проверяет полное непрерывное окно данных до
+последней завершённой свечи. При пропуске выполняется REST-backfill точного диапазона и
+повторная проверка; сигнал не рассчитывается, пока окно не восстановлено. Если Bybit не
+вернул все свечи, runtime cursor получает `RUNTIME_CANDLE_GAP`, а последняя корректная
+позиция курсора не сдвигается.
+
 Activity — отдельный продуктовый audit trail на основе `Decision`, а не представление
 raw logs. Лента поддерживает серверные фильтры и keyset pagination, показывает factors,
 correlation/market reference, execution provenance и точные ссылки на position/trade,
@@ -403,5 +415,6 @@ risk/margin model или private exchange adapter.
   каждого workspace;
 - `DRY_RUN_INITIAL_BALANCE` — стартовый капитал;
 - `ACCOUNT_SNAPSHOT_INTERVAL_MS` — интервал snapshot, по умолчанию 5 минут;
+- `INSTRUMENT_SYNC_INTERVAL_MS` — сверка торговых статусов инструментов, по умолчанию 5 минут;
 - `RUNTIME_POLL_INTERVAL_MS` — частота поиска новых завершённых свечей, по умолчанию 5 секунд.
 - `WATCHDOG_INTERVAL_MS` — частота пересчёта и синхронизации инцидентов, по умолчанию 30 секунд.

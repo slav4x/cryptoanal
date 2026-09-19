@@ -4,6 +4,10 @@
 
 ### Added
 
+- Market data integrity gate with tracked Bybit status reconciliation, automatic runtime pause,
+  health incidents and explicit unavailable-instrument states in Markets.
+- Runtime candle continuity validation with bounded REST backfill before signal calculation and
+  a durable failure when the required completed-candle window cannot be restored.
 - Strategy multi-select for pair charts that filters entry/exit markers and open-position
   Entry, SL, TP and trailing levels while preserving independent position/trade layer toggles.
 - Sectioned Settings workspace with sticky desktop navigation and distinct workspace, access,

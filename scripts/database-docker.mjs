@@ -22,7 +22,7 @@ export async function waitForPostgres(container, timeoutMs = 30_000) {
         container,
         "sh",
         "-lc",
-        'pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB"',
+        'pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"',
       ]);
       return;
     } catch {

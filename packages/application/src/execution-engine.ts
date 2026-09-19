@@ -98,7 +98,13 @@ export type ExecutionMarketRegime = "bull" | "bear" | "neutral" | "unknown";
 export type ExecutionTradingSession = "asia" | "europe" | "us" | "off-hours" | "unknown";
 
 export type AutomaticExitReason = "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit";
-export type ExecutionExitReason = AutomaticExitReason | "end-of-data" | "manual";
+export type ExecutionExitReason =
+  | AutomaticExitReason
+  | "end-of-data"
+  | "manual"
+  | "recovery-exit"
+  | "kill-switch"
+  | "daily-loss-limit";
 
 export type ExecutionSettlement<Reason extends ExecutionExitReason = ExecutionExitReason> = {
   symbol: string;

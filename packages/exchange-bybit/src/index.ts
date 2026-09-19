@@ -74,6 +74,18 @@ const klineResponseSchema = z.object({
   }),
 });
 
+const streamTradeSchema = z.object({
+  topic: z.string().startsWith("publicTrade."),
+  data: z.array(
+    z.object({
+      T: z.number().int().nonnegative(),
+      s: z.string(),
+      p: z.string().refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
+      i: z.string().min(1),
+    }),
+  ),
+});
+
 const streamTickerSchema = z.object({
   topic: z.string().startsWith("tickers."),
   ts: z.number(),
@@ -141,6 +153,7 @@ export type BybitLinearInstrument = {
 export type BybitLinearInstrumentStatus = "Trading" | "Closed";
 
 export type BybitMarketCandle = {
+  isClosed: boolean;
   symbol: string;
   interval: string;
   openTime: Date;
@@ -160,12 +173,14 @@ export type BybitRealtimeQuote = {
 
 export type BybitPublicStreamSubscriptions = {
   tickerSymbols: string[];
+  tradeSymbols?: string[];
   klines: Array<{ symbol: string; interval: string }>;
 };
 
 export type BybitPublicStreamHandlers = {
   getSubscriptions: () => Promise<BybitPublicStreamSubscriptions>;
   onQuote: (quote: BybitRealtimeQuote) => void | Promise<void>;
+  onTrade?: (quote: BybitRealtimeQuote & { tradeId: string }) => void | Promise<void>;
   onClosedCandle: (candle: BybitMarketCandle) => void | Promise<void>;
   onConnected?: (() => void) | undefined;
   onDisconnected?: ((code: number, reason: string) => void) | undefined;
@@ -259,7 +274,9 @@ export class BybitPrivateClient {
         "cdn-request-id": randomUUID(),
       },
     };
-    if (signal) requestInit.signal = signal;
+    requestInit.signal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
 
     let response: Response;
     try {
@@ -352,7 +369,9 @@ export class BybitPublicMarketClient {
     const requestInit: RequestInit = {
       headers: { Accept: "application/json" },
     };
-    if (signal) requestInit.signal = signal;
+    requestInit.signal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
 
     const response = await this.fetchImpl(url, requestInit);
 
@@ -408,7 +427,9 @@ export class BybitPublicMarketClient {
       if (cursor) url.searchParams.set("cursor", cursor);
 
       const requestInit: RequestInit = { headers: { Accept: "application/json" } };
-      if (signal) requestInit.signal = signal;
+      requestInit.signal = signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+        : AbortSignal.timeout(15_000);
       const response = await this.fetchImpl(url, requestInit);
       if (!response.ok) {
         throw new Error(`Bybit instruments request failed with HTTP ${response.status}`);
@@ -522,8 +543,11 @@ export class BybitPublicMarketClient {
     const requestInit: RequestInit = {
       headers: { Accept: "application/json" },
     };
-    if (signal) requestInit.signal = signal;
+    requestInit.signal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
 
+    const requestedAt = Date.now();
     const response = await this.fetchImpl(url, requestInit);
     if (!response.ok) {
       throw new Error(`Bybit kline request failed with HTTP ${response.status}`);
@@ -536,6 +560,10 @@ export class BybitPublicMarketClient {
 
     return payload.result.list
       .map(([openTime, open, high, low, close, volume, turnover]) => ({
+        isClosed:
+          Number.isFinite(Number(interval)) &&
+          Number(interval) > 0 &&
+          Number(openTime) + Number(interval) * 60_000 <= requestedAt,
         symbol: payload.result.symbol,
         interval,
         openTime: new Date(Number(openTime)),
@@ -570,8 +598,9 @@ export class BybitPublicStreamClient {
 
   private runConnection(handlers: BybitPublicStreamHandlers, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.url);
+      const socket = new WebSocket(this.url, { handshakeTimeout: 15_000 });
       const activeTopics = new Set<string>();
+      let lastMessageAt = Date.now();
       let opened = false;
       let settled = false;
       let synchronizing = false;
@@ -597,6 +626,7 @@ export class BybitPublicStreamClient {
         try {
           const subscriptions = await handlers.getSubscriptions();
           const desiredTopics = new Set([
+            ...(subscriptions.tradeSymbols ?? []).map((symbol) => `publicTrade.${symbol}`),
             ...subscriptions.tickerSymbols.map((symbol) => `tickers.${symbol}`),
             ...subscriptions.klines.map(({ symbol, interval }) => `kline.${interval}.${symbol}`),
           ]);
@@ -626,6 +656,10 @@ export class BybitPublicStreamClient {
         handlers.onConnected?.();
         void synchronizeSubscriptions();
         heartbeat = setInterval(() => {
+          if (Date.now() - lastMessageAt > 45_000) {
+            socket.terminate();
+            return;
+          }
           if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: "ping" }));
         }, 20_000);
         subscriptionRefresh = setInterval(
@@ -634,7 +668,24 @@ export class BybitPublicStreamClient {
         );
       });
       socket.on("message", (raw) => {
-        this.handleMessage(raw, handlers);
+        lastMessageAt = Date.now();
+        try {
+          const acknowledgement = JSON.parse(raw.toString()) as { op?: string; success?: boolean };
+          if (acknowledgement.op === "subscribe" && acknowledgement.success === false) {
+            handlers.onError?.(new Error("Bybit subscription rejected"));
+            socket.terminate();
+            return;
+          }
+        } catch {
+          /* The message parser reports malformed JSON. */
+        }
+        this.handleMessage(raw, {
+          ...handlers,
+          onError: (error) => {
+            handlers.onError?.(error);
+            socket.terminate();
+          },
+        });
       });
       socket.on("error", (error) => {
         if (!opened) settle(asError(error));
@@ -655,6 +706,28 @@ export class BybitPublicStreamClient {
       payload = JSON.parse(raw.toString());
     } catch {
       handlers.onError?.(new Error("Bybit stream returned invalid JSON"));
+      return;
+    }
+
+    const trades = streamTradeSchema.safeParse(payload);
+    if (
+      !trades.success &&
+      typeof payload === "object" &&
+      payload !== null &&
+      "topic" in payload &&
+      String(payload.topic).startsWith("publicTrade.")
+    ) {
+      handlers.onError?.(new Error("Bybit stream returned invalid trade data"));
+      return;
+    }
+    if (trades.success && handlers.onTrade) {
+      for (const trade of trades.data.data) {
+        invokeHandler(
+          handlers.onTrade,
+          { symbol: trade.s, price: trade.p, observedAt: new Date(trade.T), tradeId: trade.i },
+          handlers.onError,
+        );
+      }
       return;
     }
 
@@ -681,6 +754,7 @@ export class BybitPublicStreamClient {
       invokeHandler(
         handlers.onClosedCandle,
         {
+          isClosed: true,
           symbol: topicSymbol,
           interval: value.interval,
           openTime: new Date(value.start),
@@ -734,14 +808,15 @@ function asError(error: unknown) {
 function abortableDelay(milliseconds: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();
-    const timeout = setTimeout(resolve, milliseconds);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    const abort = () => {
+      clearTimeout(timeout);
+      finish();
+    };
+    signal.addEventListener("abort", abort, { once: true });
   });
 }

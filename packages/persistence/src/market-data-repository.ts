@@ -1,4 +1,5 @@
 import type { CryptoAnalPrismaClient } from "./client";
+import { Prisma } from "./generated/prisma/client";
 
 export type MarketSnapshotInput = {
   symbol: string;
@@ -9,6 +10,7 @@ export type MarketSnapshotInput = {
 };
 
 export type MarketCandleInput = {
+  isClosed: boolean;
   symbol: string;
   interval: string;
   openTime: Date;
@@ -47,40 +49,27 @@ export class MarketDataRepository {
   public async saveCandles(candles: MarketCandleInput[]): Promise<number> {
     if (candles.length === 0) return 0;
 
-    const result = await this.prisma.marketCandle.createMany({
-      data: candles,
-      skipDuplicates: true,
-    });
-
-    const latestBySeries = new Map<string, MarketCandleInput>();
+    const unique = new Map<string, MarketCandleInput>();
     for (const candle of candles) {
-      const key = `${candle.symbol}:${candle.interval}`;
-      const current = latestBySeries.get(key);
-      if (!current || current.openTime < candle.openTime) latestBySeries.set(key, candle);
+      const key = `${candle.symbol}:${candle.interval}:${candle.openTime.toISOString()}`;
+      const existing = unique.get(key);
+      if (!existing?.isClosed || candle.isClosed) unique.set(key, candle);
     }
-
-    await this.prisma.$transaction(
-      [...latestBySeries.values()].map((candle) =>
-        this.prisma.marketCandle.update({
-          where: {
-            symbol_interval_openTime: {
-              symbol: candle.symbol,
-              interval: candle.interval,
-              openTime: candle.openTime,
-            },
-          },
-          data: {
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
-            volume: candle.volume,
-            turnover: candle.turnover,
-          },
-        }),
-      ),
-    );
-
-    return result.count;
+    return this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO "MarketCandle" ("symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed")
+      SELECT "symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed"
+      FROM jsonb_to_recordset(${JSON.stringify([...unique.values()])}::jsonb)
+      AS candle("symbol" text, "interval" text, "openTime" timestamptz, "open" numeric, "high" numeric,
+        "low" numeric, "close" numeric, "volume" numeric, "turnover" numeric, "isClosed" boolean)
+      ON CONFLICT ("symbol", "interval", "openTime") DO UPDATE SET
+        "open" = EXCLUDED."open", "high" = EXCLUDED."high", "low" = EXCLUDED."low",
+        "close" = EXCLUDED."close", "volume" = EXCLUDED."volume", "turnover" = EXCLUDED."turnover",
+        "isClosed" = EXCLUDED."isClosed"
+      WHERE (NOT "MarketCandle"."isClosed" OR EXCLUDED."isClosed")
+        AND ("MarketCandle"."open", "MarketCandle"."high", "MarketCandle"."low", "MarketCandle"."close",
+          "MarketCandle"."volume", "MarketCandle"."turnover", "MarketCandle"."isClosed")
+        IS DISTINCT FROM (EXCLUDED."open", EXCLUDED."high", EXCLUDED."low", EXCLUDED."close",
+          EXCLUDED."volume", EXCLUDED."turnover", EXCLUDED."isClosed")
+    `);
   }
 }

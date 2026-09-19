@@ -1,0 +1,1 @@
+ALTER TABLE "Position" ADD COLUMN "runtimeVersion" INTEGER NOT NULL DEFAULT 0;

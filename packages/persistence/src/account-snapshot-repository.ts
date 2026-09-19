@@ -37,20 +37,23 @@ export class AccountSnapshotRepository {
         deployment: { exchangeAccountId: { in: sourceAccountIds } },
       },
     } as const;
-    const [tradeAggregate, positions] = await Promise.all([
-      this.prisma.trade.aggregate({
-        where: { workspaceId, environment: "DRY_RUN", ...accountFilter },
-        _sum: { netPnl: true },
-      }),
-      this.prisma.position.findMany({
-        where: { workspaceId, environment: "DRY_RUN", status: "OPEN", ...accountFilter },
-        select: { unrealizedPnl: true },
-      }),
-    ]);
+    const [tradeAggregate, positions] = await this.prisma.$transaction(
+      [
+        this.prisma.trade.aggregate({
+          where: { workspaceId, environment: "DRY_RUN", ...accountFilter },
+          _sum: { netPnl: true },
+        }),
+        this.prisma.position.findMany({
+          where: { workspaceId, environment: "DRY_RUN", status: "OPEN", ...accountFilter },
+          select: { unrealizedPnl: true, entryFee: true },
+        }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
 
     const realizedPnl = tradeAggregate._sum.netPnl ?? new Prisma.Decimal(0);
     const unrealizedPnl = positions.reduce(
-      (sum, position) => sum.add(position.unrealizedPnl),
+      (sum, position) => sum.add(position.unrealizedPnl).sub(position.entryFee),
       new Prisma.Decimal(0),
     );
     const equity = new Prisma.Decimal(initialBalance).add(realizedPnl).add(unrealizedPnl);

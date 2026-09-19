@@ -170,6 +170,7 @@ enum ExchangeConnectionStatus {
 }
 
 model Workspace {
+  runtimeRiskDays RuntimeRiskDay[]
   id                  String                @id @default(uuid())
   slug                String                @unique
   name                String
@@ -324,6 +325,9 @@ model ExchangeConnection {
 }
 
 model WorkspaceSettings {
+  runtimeKillSwitch Boolean @default(false)
+  runtimeKillReason String?
+  runtimeKillVersion Int @default(0)
   workspaceId  String    @id
   timezone     String    @default("UTC")
   currency     String    @default("USDT")
@@ -396,6 +400,7 @@ model MarketSnapshot {
 }
 
 model MarketCandle {
+  isClosed   Boolean          @default(false)
   symbol     String
   interval   String
   openTime   DateTime         @db.Timestamptz(3)
@@ -635,6 +640,10 @@ model ExecutionRun {
 }
 
 model Position {
+  priceEventId      BigInt?
+  priceStreamId     String?
+  managedThroughAt  DateTime?          @db.Timestamptz(3)
+  runtimeVersion    Int                @default(0)
   id                String             @id @default(uuid())
   workspaceId       String
   executionRunId    String
@@ -1056,4 +1065,34 @@ model WatchdogIncident {
 
   @@unique([workspaceId, fingerprint])
   @@index([workspaceId, status, severity, lastObservedAt(sort: Desc)])
+}
+
+model MarketPriceEvent {
+  id         BigInt   @id @default(autoincrement())
+  eventKey   String   @unique
+  symbol     String
+  price      Decimal  @db.Decimal(38, 18)
+  observedAt DateTime @db.Timestamptz(3)
+  receivedAt DateTime @default(now()) @db.Timestamptz(3)
+  streamId   String
+
+  @@index([symbol, id])
+  @@index([observedAt])
+}
+
+model MarketStreamLease {
+  id        String @id
+  owner     String
+  expiresAt DateTime @db.Timestamptz(3)
+}
+
+model RuntimeRiskDay {
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspaceId       String
+  exchangeAccountId String
+  day               String
+  haltReason        String
+  haltedAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([workspaceId, exchangeAccountId, day])
 }

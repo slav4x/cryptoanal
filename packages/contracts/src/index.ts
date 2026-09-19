@@ -1562,6 +1562,16 @@ export const settingsUpdateSchema = z.object({
   tableDensity: tableDensitySchema,
   expectedUpdatedAt: z.iso.datetime(),
 });
+export const runtimeSafetyControlSchema = z.object({
+  enabled: z.boolean(),
+  reason: z.string().nullable(),
+  version: z.number().int().nonnegative(),
+});
+export const runtimeSafetyUpdateSchema = z.object({
+  enabled: z.boolean(),
+  reason: z.string().trim().min(3).max(300),
+  expectedVersion: z.number().int().nonnegative(),
+});
 export const settingsSchema = z.object({
   preferences: workspacePreferencesSchema,
   runtimeSafety: z.object({
@@ -1570,6 +1580,10 @@ export const settingsSchema = z.object({
     confirmationsRequired: z.literal(true),
     liveTradingEnabled: z.literal(false),
     maxActiveDeployments: z.literal(1),
+    killSwitch: runtimeSafetyControlSchema,
+    maxDailyLossPercent: z.number(),
+    maxAccountExposurePercent: z.number(),
+    maxOpenPositions: z.number().int(),
   }),
   marketData: z.object({
     provider: z.literal("Bybit public API"),

@@ -16,6 +16,7 @@
     "auth:create-recovery": "pnpm --filter @cryptoanal/api run auth:create-recovery --",
     "migration:audit": "tsx scripts/audit-legacy-migration.ts",
     "research:verify": "tsx scripts/verify-research-integrity.ts",
+    "runtime:verify": "tsc --project tests/tsconfig.json && tsx --test tests/runtime*.test.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

@@ -64,6 +64,7 @@ import {
   rotateExchangeConnectionCredentials,
   updateWorkspaceMemberRole,
   updateWorkspacePreferences,
+  updateRuntimeSafety,
   verifyExchangeConnection,
 } from "../../shared/api";
 import { authSessionQueryKey, useAuthSession } from "../auth/auth-context";
@@ -786,6 +787,26 @@ function PreferencesCard({ preferences }: { preferences: WorkspacePreferencesDto
 
 function RuntimeSafetyCard({ settings }: { settings: SettingsDto }) {
   const safety = settings.runtimeSafety;
+  const session = useAuthSession();
+  const queryClient = useQueryClient();
+  const [reason, setReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const mutation = useMutation({
+    mutationFn: () =>
+      updateRuntimeSafety({
+        enabled: !safety.killSwitch.enabled,
+        reason,
+        expectedVersion: safety.killSwitch.version,
+      }),
+    onSuccess: async () => {
+      setConfirming(false);
+      setReason("");
+      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
   return (
     <Card>
       <CardHeader className="flex-row items-start gap-3 border-b">
@@ -805,7 +826,77 @@ function RuntimeSafetyCard({ settings }: { settings: SettingsDto }) {
           label="Подтверждения команд"
           value={safety.confirmationsRequired ? "обязательны" : "отключены"}
         />
-        <SettingRow label="Активных запусков" value={`не более ${safety.maxActiveDeployments}`} />
+        <SettingRow
+          label="Запусков на виртуальный аккаунт"
+          value={`не более ${safety.maxActiveDeployments}`}
+        />
+        <SettingRow
+          label="Дневной лимит убытка"
+          value={`до ${safety.maxDailyLossPercent}% с плавающим убытком и издержками`}
+        />
+        <SettingRow
+          label="Экспозиция аккаунта"
+          value={`не более ${safety.maxAccountExposurePercent}% капитала`}
+        />
+        <SettingRow
+          label="Открытых позиций на аккаунт"
+          value={`не более ${safety.maxOpenPositions}`}
+        />
+        <SettingRow
+          label="Аварийная остановка"
+          value={safety.killSwitch.enabled ? "включена" : "выключена"}
+        />
+        {safety.killSwitch.reason && (
+          <p className="mt-2 text-xs text-muted-foreground">{safety.killSwitch.reason}</p>
+        )}
+        {session.activeWorkspace.role === "owner" && (
+          <div className="mt-4 space-y-3 border-t pt-4">
+            <p className="text-xs text-muted-foreground">
+              Остановка запрещает все новые входы в этом рабочем пространстве и закрывает dry-run
+              позиции по доступным свежим котировкам. Без цены закрытие ожидает восстановления
+              данных. Снятие остановки снова разрешает входы; дневной лимит продолжает действовать.
+            </p>
+            {confirming ? (
+              <>
+                <Input
+                  aria-label="Причина изменения аварийной остановки"
+                  placeholder="Причина изменения"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  maxLength={300}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    disabled={mutation.isPending || reason.trim().length < 3}
+                    onClick={() => mutation.mutate()}
+                  >
+                    {mutation.isPending
+                      ? "Применение…"
+                      : safety.killSwitch.enabled
+                        ? "Подтвердить возобновление"
+                        : "Остановить и закрыть позиции"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={mutation.isPending}
+                    onClick={() => setConfirming(false)}
+                  >
+                    Отмена
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => setConfirming(true)}>
+                {safety.killSwitch.enabled ? "Снять аварийную остановку" : "Аварийная остановка"}
+              </Button>
+            )}
+            {mutation.error && (
+              <p role="alert" className="text-xs text-loss">
+                {mutation.error.message}
+              </p>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

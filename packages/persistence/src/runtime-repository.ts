@@ -1,5 +1,11 @@
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
+import {
+  checkRuntimeEntry,
+  defaultRuntimeRiskPolicy,
+  lockRuntimeRisk,
+  type RuntimeRiskPolicy,
+} from "./runtime-risk";
 
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
@@ -37,6 +43,7 @@ type RuntimePositionAction =
       markPrice: string;
       unrealizedPnl: string;
       bestPrice: string;
+      stopPrice: string;
       trailingPrice: string | null;
     }
   | {
@@ -62,6 +69,8 @@ export type PersistRuntimeCycleInput = {
   candleAt: Date;
   expectedDeploymentStatus: RuntimeDeploymentStatus;
   expectedPositionId: string | null;
+  expectedPositionVersion: number | null;
+  entryPriceEventId?: bigint;
   pendingSignal: Prisma.InputJsonValue | null;
   maxOpenPositions: number;
   entryOrderType: "MARKET" | "LIMIT";
@@ -75,11 +84,13 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  processedPrice: { eventId: bigint; streamId: string; throughAt: Date };
   workspaceId: string;
   deploymentId: string;
   executionRunId: string;
   strategyVersionId: string;
   positionId: string;
+  expectedPositionVersion: number;
   symbol: string;
   quotePrice: string;
   quoteAt: Date;
@@ -90,12 +101,14 @@ export type PersistRuntimeQuoteInput = {
         markPrice: string;
         unrealizedPnl: string;
         bestPrice: string;
+        stopPrice: string;
         trailingPrice: string | null;
       }
     | { kind: "close"; settlement: RuntimeCycleSettlement };
 };
 
 export type PersistRealtimeEntryInput = {
+  entryPriceEventId: bigint;
   workspaceId: string;
   deploymentId: string;
   executionRunId: string;
@@ -119,19 +132,17 @@ export class RuntimeMarketPriceUnavailableError extends Error {}
 export class RuntimeIdempotencyConflictError extends Error {}
 
 export class RuntimeRepository {
-  public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
+  public constructor(
+    private readonly prisma: CryptoAnalPrismaClient,
+    private readonly riskPolicy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
+  ) {}
 
   public listActiveTargets(workspaceId: string) {
     return this.prisma.deployment.findMany({
       where: {
         workspaceId,
-        OR: [
-          {
-            status: "RUNNING",
-            exchangeConnection: { is: { status: "ACTIVE", revokedAt: null } },
-          },
-          { status: "PAUSED" },
-        ],
+        environment: "DRY_RUN",
+        status: { in: ["RUNNING", "PAUSED"] },
       },
       orderBy: { updatedAt: "asc" },
       select: {
@@ -139,6 +150,7 @@ export class RuntimeRepository {
         workspaceId: true,
         status: true,
         exchangeAccountId: true,
+        exchangeConnection: { select: { status: true, revokedAt: true } },
         strategyVersion: { select: { id: true, config: true, configHash: true } },
         executionRuns: {
           where: { status: "RUNNING" },
@@ -178,6 +190,10 @@ export class RuntimeRepository {
         },
         select: {
           id: true,
+          runtimeVersion: true,
+          priceEventId: true,
+          priceStreamId: true,
+          managedThroughAt: true,
           symbol: true,
           side: true,
           openedAt: true,
@@ -201,6 +217,7 @@ export class RuntimeRepository {
         where: {
           symbol: input.symbol,
           interval: input.interval,
+          isClosed: true,
           openTime: { lte: input.lastCompleteCandleAt },
         },
         orderBy: { openTime: "desc" },
@@ -235,28 +252,31 @@ export class RuntimeRepository {
     exchangeAccountId: string,
     initialBalance: string,
   ) {
-    const [trades, positions] = await Promise.all([
-      this.prisma.trade.aggregate({
-        where: {
-          workspaceId,
-          environment: "DRY_RUN",
-          executionRun: { deployment: { exchangeAccountId } },
-        },
-        _sum: { netPnl: true },
-      }),
-      this.prisma.position.findMany({
-        where: {
-          workspaceId,
-          environment: "DRY_RUN",
-          status: "OPEN",
-          executionRun: { deployment: { exchangeAccountId } },
-        },
-        select: { unrealizedPnl: true },
-      }),
-    ]);
+    const [trades, positions] = await this.prisma.$transaction(
+      [
+        this.prisma.trade.aggregate({
+          where: {
+            workspaceId,
+            environment: "DRY_RUN",
+            executionRun: { deployment: { exchangeAccountId } },
+          },
+          _sum: { netPnl: true },
+        }),
+        this.prisma.position.findMany({
+          where: {
+            workspaceId,
+            environment: "DRY_RUN",
+            status: "OPEN",
+            executionRun: { deployment: { exchangeAccountId } },
+          },
+          select: { unrealizedPnl: true, entryFee: true },
+        }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
     return positions
       .reduce(
-        (equity, position) => equity.add(position.unrealizedPnl),
+        (equity, position) => equity.add(position.unrealizedPnl).sub(position.entryFee),
         new Prisma.Decimal(initialBalance).add(trades._sum.netPnl ?? 0),
       )
       .toNumber();
@@ -279,6 +299,7 @@ export class RuntimeRepository {
       where: {
         workspaceId,
         status: "OPEN",
+        environment: "DRY_RUN",
         executionRun: {
           status: "RUNNING",
           deployment: { status: { in: ["RUNNING", "PAUSED"] } },
@@ -287,6 +308,10 @@ export class RuntimeRepository {
       orderBy: { openedAt: "asc" },
       select: {
         id: true,
+        runtimeVersion: true,
+        priceEventId: true,
+        priceStreamId: true,
+        managedThroughAt: true,
         workspaceId: true,
         executionRunId: true,
         strategyVersionId: true,
@@ -294,6 +319,7 @@ export class RuntimeRepository {
         side: true,
         openedAt: true,
         entryPrice: true,
+        markPrice: true,
         quantity: true,
         stopPrice: true,
         takePrice: true,
@@ -306,7 +332,7 @@ export class RuntimeRepository {
         strategyVersion: { select: { config: true } },
         executionRun: {
           select: {
-            deployment: { select: { id: true, status: true } },
+            deployment: { select: { id: true, status: true, exchangeAccountId: true } },
           },
         },
       },
@@ -315,12 +341,15 @@ export class RuntimeRepository {
 
   public async persistRealtimeQuote(input: PersistRuntimeQuoteInput) {
     return this.prisma.$transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId);
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
       `);
       const position = await transaction.position.findFirst({
         where: {
           id: input.positionId,
+          runtimeVersion: input.expectedPositionVersion,
+          environment: "DRY_RUN",
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
@@ -358,9 +387,14 @@ export class RuntimeRepository {
         await transaction.position.update({
           where: { id: position.id },
           data: {
+            priceEventId: input.processedPrice.eventId,
+            priceStreamId: input.processedPrice.streamId,
+            managedThroughAt: input.processedPrice.throughAt,
             markPrice: input.action.markPrice,
             unrealizedPnl: input.action.unrealizedPnl,
             bestPrice: input.action.bestPrice,
+            stopPrice: input.action.stopPrice,
+            runtimeVersion: { increment: 1 },
             trailingPrice: input.action.trailingPrice,
           },
         });
@@ -410,13 +444,19 @@ export class RuntimeRepository {
 
   public async persistRealtimeEntry(input: PersistRealtimeEntryInput) {
     return this.prisma.$transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId);
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
       `);
       const [deployment, executionRun, cursor, currentPosition, instrument] = await Promise.all([
         transaction.deployment.findFirst({
           where: { id: input.deploymentId, workspaceId: input.workspaceId },
-          select: { status: true },
+          select: {
+            status: true,
+            environment: true,
+            exchangeAccountId: true,
+            exchangeConnection: { select: { status: true, revokedAt: true } },
+          },
         }),
         transaction.executionRun.findFirst({
           where: {
@@ -424,7 +464,7 @@ export class RuntimeRepository {
             workspaceId: input.workspaceId,
             deploymentId: input.deploymentId,
           },
-          select: { status: true },
+          select: { status: true, strategyVersion: { select: { config: true } } },
         }),
         transaction.runtimeCursor.findUnique({
           where: {
@@ -451,6 +491,9 @@ export class RuntimeRepository {
       ]);
       if (
         deployment?.status !== "RUNNING" ||
+        deployment.environment !== "DRY_RUN" ||
+        deployment.exchangeConnection?.status !== "ACTIVE" ||
+        deployment.exchangeConnection.revokedAt !== null ||
         executionRun?.status !== "RUNNING" ||
         !cursor ||
         !cursor.pendingSignal ||
@@ -461,6 +504,18 @@ export class RuntimeRepository {
       ) {
         return { applied: false, capacityReached: false };
       }
+      const riskFailure = await checkRuntimeEntry(transaction, {
+        workspaceId: input.workspaceId,
+        exchangeAccountId: deployment.exchangeAccountId,
+        strategyConfig: executionRun.strategyVersion.config,
+        policy: this.riskPolicy,
+        eventId: input.entryPriceEventId,
+        position: input.position,
+      });
+      if (riskFailure) return { applied: false, capacityReached: false, riskFailure };
+      const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
+        where: { id: input.entryPriceEventId },
+      });
       const openPositions = await transaction.position.count({
         where: {
           workspaceId: input.workspaceId,
@@ -476,6 +531,9 @@ export class RuntimeRepository {
       const position = await transaction.position.create({
         data: {
           workspaceId: input.workspaceId,
+          priceEventId: entryEvent.id,
+          priceStreamId: entryEvent.streamId,
+          managedThroughAt: entryEvent.observedAt,
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
           symbol: input.symbol,
@@ -549,7 +607,11 @@ export class RuntimeRepository {
         instrument: { is: { enabled: true, status: "Trading" } },
         executionRun: {
           status: "RUNNING",
-          deployment: { status: "RUNNING" },
+          deployment: {
+            status: "RUNNING",
+            environment: "DRY_RUN",
+            exchangeConnection: { is: { status: "ACTIVE", revokedAt: null } },
+          },
         },
       },
       select: {
@@ -572,6 +634,7 @@ export class RuntimeRepository {
 
   public async persistCycle(input: PersistRuntimeCycleInput) {
     return this.prisma.$transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId);
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
       `);
@@ -590,7 +653,12 @@ export class RuntimeRepository {
 
       const deployment = await transaction.deployment.findFirst({
         where: { id: input.deploymentId, workspaceId: input.workspaceId },
-        select: { status: true },
+        select: {
+          status: true,
+          environment: true,
+          exchangeAccountId: true,
+          exchangeConnection: { select: { status: true, revokedAt: true } },
+        },
       });
       const executionRun = await transaction.executionRun.findFirst({
         where: {
@@ -598,10 +666,11 @@ export class RuntimeRepository {
           workspaceId: input.workspaceId,
           deploymentId: input.deploymentId,
         },
-        select: { status: true },
+        select: { status: true, strategyVersion: { select: { config: true } } },
       });
       if (
         deployment?.status !== input.expectedDeploymentStatus ||
+        deployment.environment !== "DRY_RUN" ||
         executionRun?.status !== "RUNNING"
       ) {
         throw new RuntimeStateConflictError();
@@ -627,11 +696,19 @@ export class RuntimeRepository {
           symbol: input.symbol,
           status: "OPEN",
         },
-        select: { id: true },
+        select: { id: true, runtimeVersion: true },
       });
       if ((currentPosition?.id ?? null) !== input.expectedPositionId) {
         throw new RuntimeStateConflictError();
       }
+
+      if ((currentPosition?.runtimeVersion ?? null) !== input.expectedPositionVersion) {
+        throw new RuntimeStateConflictError();
+      }
+      const entriesAllowed =
+        deployment.status === "RUNNING" &&
+        deployment.exchangeConnection?.status === "ACTIVE" &&
+        deployment.exchangeConnection.revokedAt === null;
 
       let decision = input.decision;
       let action = input.positionAction;
@@ -651,7 +728,15 @@ export class RuntimeRepository {
             },
           }),
         ]);
-        if (!instrument?.enabled || instrument.status !== "Trading") {
+        if (!entriesAllowed) {
+          action = { kind: "none" };
+          decision = {
+            action: "SKIP",
+            reasonCode: "ENTRY_GATE_CLOSED",
+            summary: "Новый вход запрещён состоянием deployment или подключения",
+            factors: input.decision.factors,
+          };
+        } else if (!instrument?.enabled || instrument.status !== "Trading") {
           action = { kind: "none" };
           decision = {
             action: "SKIP",
@@ -670,6 +755,25 @@ export class RuntimeRepository {
         }
       }
 
+      if (action.kind === "open") {
+        const riskFailure = await checkRuntimeEntry(transaction, {
+          workspaceId: input.workspaceId,
+          exchangeAccountId: deployment.exchangeAccountId,
+          strategyConfig: executionRun.strategyVersion.config,
+          policy: this.riskPolicy,
+          eventId: input.entryPriceEventId,
+          position: action.position,
+        });
+        if (riskFailure) {
+          action = { kind: "none" };
+          decision = {
+            action: "SKIP",
+            reasonCode: riskFailure,
+            summary: "Вход запрещён независимым риск-контролем",
+            factors: input.decision.factors,
+          };
+        }
+      }
       if (action.kind === "update") {
         await transaction.position.update({
           where: { id: action.positionId },
@@ -677,10 +781,15 @@ export class RuntimeRepository {
             markPrice: action.markPrice,
             unrealizedPnl: action.unrealizedPnl,
             bestPrice: action.bestPrice,
+            stopPrice: action.stopPrice,
+            runtimeVersion: { increment: 1 },
             trailingPrice: action.trailingPrice,
           },
         });
       } else if (action.kind === "open") {
+        const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
+          where: { id: input.entryPriceEventId! },
+        });
         const position = await transaction.position.create({
           data: {
             workspaceId: input.workspaceId,
@@ -688,6 +797,9 @@ export class RuntimeRepository {
             strategyVersionId: input.strategyVersionId,
             symbol: input.symbol,
             environment: "DRY_RUN",
+            priceEventId: entryEvent.id,
+            priceStreamId: entryEvent.streamId,
+            managedThroughAt: entryEvent.observedAt,
             side: action.position.side,
             entryRegime: action.position.entryRegime,
             entrySession: action.position.entrySession,
@@ -809,12 +921,12 @@ export class RuntimeRepository {
           executionRunId: input.executionRunId,
           symbol: input.symbol,
           lastEvaluatedAt: input.candleAt,
-          pendingSignal: input.pendingSignal ?? Prisma.DbNull,
+          pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
           lastDecisionId: persistedDecision.id,
         },
         update: {
           lastEvaluatedAt: input.candleAt,
-          pendingSignal: input.pendingSignal ?? Prisma.DbNull,
+          pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
           lastDecisionId: persistedDecision.id,
           lastFailureCode: null,
           lastFailureMessage: null,
@@ -891,6 +1003,7 @@ export class RuntimeRepository {
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`command:${input.workspaceId}:${input.idempotencyKey}`}))
       `);
+      await lockRuntimeRisk(transaction, input.workspaceId);
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
       `);

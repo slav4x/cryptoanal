@@ -79,6 +79,8 @@ import {
   settingsMutationSchema,
   settingsSchema,
   settingsUpdateSchema,
+  runtimeSafetyControlSchema,
+  runtimeSafetyUpdateSchema,
   strategyCatalogSchema,
   strategyConfigSchema,
   strategyCreateSchema,
@@ -178,6 +180,8 @@ import {
   RuntimePositionNotFoundError,
   RuntimePositionStatusConflictError,
   RuntimeRepository,
+  RuntimeRiskRepository,
+  RuntimeRiskControlConflictError,
   SettingsRepository,
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
@@ -288,6 +292,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
   const playbookRepository = new PlaybookRepository(prisma);
   const deploymentRepository = new DeploymentRepository(prisma);
   const runtimeRepository = new RuntimeRepository(prisma);
+  const runtimeRiskRepository = new RuntimeRiskRepository(prisma);
   const settingsRepository = new SettingsRepository(prisma);
   const systemLogRepository = new SystemLogRepository(prisma);
   const strategyRepository = new StrategyRepository(prisma);
@@ -1940,6 +1945,10 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             confirmationsRequired: true as const,
             liveTradingEnabled: false as const,
             maxActiveDeployments: 1 as const,
+            killSwitch: await runtimeRiskRepository.getControl(workspace.id),
+            maxDailyLossPercent: config.RUNTIME_MAX_DAILY_LOSS_PERCENT,
+            maxAccountExposurePercent: config.RUNTIME_MAX_ACCOUNT_EXPOSURE_PERCENT,
+            maxOpenPositions: config.RUNTIME_MAX_OPEN_POSITIONS,
           },
           marketData: {
             provider: "Bybit public API" as const,
@@ -1978,6 +1987,41 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         },
         meta: createMeta(request.id, databaseConnected ? "fresh" : "stale"),
       };
+    },
+  );
+
+  app.put(
+    "/api/v1/settings/runtime-safety",
+    {
+      schema: {
+        body: runtimeSafetyUpdateSchema,
+        response: {
+          200: apiEnvelopeSchema(runtimeSafetyControlSchema),
+          403: errorEnvelopeSchema,
+          409: errorEnvelopeSchema,
+        },
+      },
+    },
+    async (request) => {
+      const workspace = requireWorkspace(request);
+      const context = requireWorkspaceOwner(request, workspace.id);
+      try {
+        const result = await runtimeRiskRepository.setControl({
+          ...request.body,
+          workspaceId: workspace.id,
+          actorId: context.actorId,
+          requestId: request.id,
+        });
+        return { data: result, meta: createMeta(request.id, "fresh") };
+      } catch (error) {
+        if (error instanceof RuntimeRiskControlConflictError)
+          throw new ApiError(
+            409,
+            "RUNTIME_SAFETY_CONFLICT",
+            "Состояние изменилось, обновите страницу",
+          );
+        throw error;
+      }
     },
   );
 

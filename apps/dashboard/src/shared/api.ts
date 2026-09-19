@@ -32,6 +32,7 @@ import {
   settingsExportSchema,
   settingsMutationSchema,
   settingsSchema,
+  runtimeSafetyControlSchema,
   strategyCatalogSchema,
   strategyCreatedSchema,
   strategyDetailSchema,
@@ -487,6 +488,17 @@ export function changePlaybookStatus(
 
 export function fetchSettings(): Promise<ApiEnvelope<SettingsDto>> {
   return request("/api/v1/settings", settingsEnvelopeSchema);
+}
+
+export function updateRuntimeSafety(input: {
+  enabled: boolean;
+  reason: string;
+  expectedVersion: number;
+}) {
+  return request("/api/v1/settings/runtime-safety", apiEnvelopeSchema(runtimeSafetyControlSchema), {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
 }
 
 export function fetchExchangeConnections(): Promise<ApiEnvelope<ExchangeConnectionsDto>> {

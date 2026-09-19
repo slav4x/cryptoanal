@@ -4,6 +4,14 @@
 
 ### Added
 
+- Durable Bybit public-trade journal, exclusive writer lease, per-position replay progress,
+  bounded recovery from minute/signal history, and explicit conservative recovery exits.
+- Independent dry-run risk guard with unrealized losses and costs, persistent UTC daily halt,
+  atomic account exposure/position/stop-risk admission and owner-only audited kill switch.
+- Failure, reconnect, replay, concurrency, recovery and risk-control regression coverage.
+
+- Runtime regression tests with isolated PostgreSQL coverage for order/trade idempotency,
+  concurrent protection updates, paused exits, connection gates and candle finality.
 - Versioned golden research fixtures with dataset hashes, exact decisions, trades, PnL,
   fees and metrics, plus independent candle-event runtime/backtest equivalence checks.
 - One metrics provenance contract for Validation, Analytics and Experiments covering data,
@@ -191,6 +199,17 @@
 
 ### Fixed
 
+- Wait for the final TCP PostgreSQL listener before backup restore checks, avoiding the
+  temporary initialization server that shuts down during first startup.
+- Persist break-even stops immediately with protective updates and reject stale position
+  writes using an incrementing runtime version.
+- Use fresh quotes for realtime signal exits and avoid pre-entry OHLC extremes and timestamps.
+- Repair all candles in REST batches, explicitly require confirmed candle closure for signals,
+  and prevent delayed partial snapshots from replacing closed candles.
+- Recheck connection/environment gates for pending and candle entries, bound signal lifetime,
+  and use the current trading day for realtime daily-loss checks.
+- Include open entry fees in consistent equity/account reads, bound Bybit REST requests to
+  15 seconds, and use unique worker identities across restarts and containers.
 - Dashboard nginx now refreshes Docker DNS for the API service instead of keeping a stale
   container address and returning `502 Bad Gateway` after API recreation.
 - Bybit public and private REST clients can use an optional HTTP CONNECT proxy when direct

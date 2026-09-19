@@ -10,26 +10,24 @@
 
 Оптимальная последовательность оставшейся разработки:
 
-1. **Strategy chart filtering:** фильтр стратегий на графике пары; выбор universe в
-   редакторе и структура настроек уже приведены к workspace-модели.
-2. **Market data integrity:** обработка delisting/status, поиск разрывов свечей и
+1. **Market data integrity:** обработка delisting/status, поиск разрывов свечей и
    REST-backfill перед возобновлением торговых сигналов.
-3. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
+2. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
    provenance метрик и окончательное решение по funding.
-4. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
+3. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
    накопить минимум 30 закрытых сделок на стратегию и отобрать 3–5 кандидатов.
-5. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
+4. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
    доставка критичных уведомлений. Длительный demo/runtime не должен зависеть от ноутбука.
-6. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
+5. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
    daily loss limit и глобальный kill switch.
-7. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
+6. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
    после перезапуска. Live execution до отдельного operational review запрещён.
-8. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
+7. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
    накопить минимум 100 сделок на каждого отобранного кандидата.
-9. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
+8. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
    данных, production key management и удаление development-доступа.
-10. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
-    только после подтверждения предыдущих stop-gates.
+9. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
+   только после подтверждения предыдущих stop-gates.
 
 ## Этап 1 — Foundation
 
@@ -171,7 +169,7 @@
 - [x] Наложить на график пары торговые события всех относящихся к ней сделок: входы,
       выходы, открытые позиции, stop-loss, take-profit и направление; добавить подсказки
       и раздельное включение слоёв позиций и завершённых сделок.
-- [ ] Добавить фильтр стратегий для графика пары, когда количество одновременных отметок
+- [x] Добавить фильтр стратегий для графика пары, когда количество одновременных отметок
       станет мешать чтению данных.
 - [x] Пересобрать график капитала на главной через интерактивную библиотеку: полная ширина,
       увеличенная высота, оси, crosshair/tooltip и корректное отображение периодов 24 часа,

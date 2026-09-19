@@ -4,6 +4,8 @@
 
 ### Added
 
+- Strategy multi-select for pair charts that filters entry/exit markers and open-position
+  Entry, SL, TP and trailing levels while preserving independent position/trade layer toggles.
 - Sectioned Settings workspace with sticky desktop navigation and distinct workspace, access,
   trading infrastructure, data and system contexts without changing existing behavior.
 - Searchable shadcn-compatible strategy market multi-select backed by the current workspace

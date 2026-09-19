@@ -3,7 +3,7 @@ import type { StrategyConfigDto } from "@cryptoanal/contracts";
 export type ActiveDay = StrategyConfigDto["schedule"]["activeDays"][number];
 
 export type StrategyConfigDraft = {
-  symbols: string;
+  symbols: string[];
   timeframe: string;
   signalFamily: string;
   direction: string;
@@ -39,7 +39,7 @@ export type StrategyConfigDraft = {
 };
 
 export const defaultStrategyConfigDraft: StrategyConfigDraft = {
-  symbols: "",
+  symbols: [],
   timeframe: "15m",
   signalFamily: "ema-crossover",
   direction: "both",
@@ -76,7 +76,7 @@ export const defaultStrategyConfigDraft: StrategyConfigDraft = {
 
 export function strategyConfigToDraft(config: StrategyConfigDto): StrategyConfigDraft {
   return {
-    symbols: config.universe.symbols.join(", "),
+    symbols: config.universe.symbols,
     timeframe: config.universe.timeframe,
     signalFamily: config.signal.family,
     direction: config.signal.direction,
@@ -116,14 +116,7 @@ export function draftToStrategyConfig(draft: StrategyConfigDraft): StrategyConfi
   return {
     schemaVersion: 1,
     universe: {
-      symbols: Array.from(
-        new Set(
-          draft.symbols
-            .split(/[\s,]+/)
-            .map((symbol) => symbol.trim().toUpperCase())
-            .filter(Boolean),
-        ),
-      ),
+      symbols: Array.from(new Set(draft.symbols)),
       timeframe: draft.timeframe as StrategyConfigDto["universe"]["timeframe"],
     },
     signal: {

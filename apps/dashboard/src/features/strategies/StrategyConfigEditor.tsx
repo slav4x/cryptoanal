@@ -15,6 +15,7 @@ import {
   cn,
 } from "@cryptoanal/ui";
 import type { ComponentProps, ReactNode } from "react";
+import { MarketUniverseMultiSelect } from "./MarketUniverseMultiSelect";
 import type { ActiveDay, StrategyConfigDraft } from "./strategy-config-form";
 
 type Props = {
@@ -60,14 +61,14 @@ export function StrategyConfigEditor({ value, onChange }: Props) {
           description="Инструменты и базовый таймфрейм, на которых рассчитываются сигналы."
         >
           <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)]">
-            <Field label="Торговые пары" htmlFor="strategy-symbols" hint="Через запятую или пробел">
-              <Input
-                id="strategy-symbols"
+            <Field
+              label="Торговые пары"
+              htmlFor="strategy-symbols"
+              hint="Только из Market Universe текущего workspace"
+            >
+              <MarketUniverseMultiSelect
                 value={value.symbols}
-                onChange={(event) => update("symbols", event.target.value.toUpperCase())}
-                placeholder="BTCUSDT, ETHUSDT"
-                autoCapitalize="characters"
-                required
+                onChange={(symbols) => update("symbols", symbols)}
               />
             </Field>
             <SelectField

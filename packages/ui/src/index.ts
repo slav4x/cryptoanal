@@ -19,6 +19,13 @@ export { Input } from "./components/input";
 export { MetricCard } from "./components/metric-card";
 export { PageHeader } from "./components/page-header";
 export {
+  Popover,
+  PopoverAnchor,
+  PopoverClose,
+  PopoverContent,
+  PopoverTrigger,
+} from "./components/popover";
+export {
   Select,
   SelectContent,
   SelectGroup,

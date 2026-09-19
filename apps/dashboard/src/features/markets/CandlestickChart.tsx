@@ -1,5 +1,6 @@
 import type { MarketCandleDto, PositionDto, TradeDto } from "@cryptoanal/contracts";
-import { Button, cn } from "@cryptoanal/ui";
+import { Badge, Button, Input, Popover, PopoverContent, PopoverTrigger, cn } from "@cryptoanal/ui";
+import { Check, ListFilter, Search } from "lucide-react";
 import {
   CandlestickSeries,
   ColorType,
@@ -43,6 +44,13 @@ type InspectorState = {
   events: ChartEvent[];
 };
 
+type StrategyOption = {
+  id: string;
+  name: string;
+  positions: number;
+  trades: number;
+};
+
 const colors = {
   background: "#141517",
   border: "#232529",
@@ -72,6 +80,7 @@ export function CandlestickChart({ candles, symbol, positions, trades }: Candles
   const eventMapRef = useRef<Map<UTCTimestamp, ChartEvent[]>>(new Map());
   const [showPositions, setShowPositions] = useState(true);
   const [showTrades, setShowTrades] = useState(true);
+  const [selectedStrategyIds, setSelectedStrategyIds] = useState<string[] | null>(null);
   const [inspector, setInspector] = useState<InspectorState | null>(null);
 
   const chartData = useMemo<CandlestickData<UTCTimestamp>[]>(
@@ -85,9 +94,26 @@ export function CandlestickChart({ candles, symbol, positions, trades }: Candles
       })),
     [candles],
   );
+  const strategyOptions = useMemo(
+    () => buildStrategyOptions(positions, trades),
+    [positions, trades],
+  );
+  const effectiveSelectedStrategyIds = useMemo(() => {
+    if (selectedStrategyIds === null) return null;
+    const available = new Set(strategyOptions.map(({ id }) => id));
+    return selectedStrategyIds.filter((id) => available.has(id));
+  }, [selectedStrategyIds, strategyOptions]);
+  const filteredPositions = useMemo(
+    () => filterByStrategies(positions, effectiveSelectedStrategyIds),
+    [effectiveSelectedStrategyIds, positions],
+  );
+  const filteredTrades = useMemo(
+    () => filterByStrategies(trades, effectiveSelectedStrategyIds),
+    [effectiveSelectedStrategyIds, trades],
+  );
   const overlays = useMemo(
-    () => buildOverlays(candles, positions, trades, showPositions, showTrades),
-    [candles, positions, showPositions, showTrades, trades],
+    () => buildOverlays(candles, filteredPositions, filteredTrades, showPositions, showTrades),
+    [candles, filteredPositions, filteredTrades, showPositions, showTrades],
   );
 
   useEffect(() => {
@@ -223,11 +249,16 @@ export function CandlestickChart({ candles, symbol, positions, trades }: Candles
           ))}
         </div>
         <div className="flex items-center gap-1.5">
+          <StrategyFilter
+            options={strategyOptions}
+            selectedIds={effectiveSelectedStrategyIds}
+            onSelectedIdsChange={setSelectedStrategyIds}
+          />
           <LayerButton active={showPositions} onClick={() => setShowPositions((value) => !value)}>
-            Позиции {positions.length}
+            Позиции {filteredPositions.length}
           </LayerButton>
           <LayerButton active={showTrades} onClick={() => setShowTrades((value) => !value)}>
-            Сделки {trades.length}
+            Сделки {filteredTrades.length}
           </LayerButton>
           <Button
             type="button"
@@ -257,6 +288,202 @@ export function CandlestickChart({ candles, symbol, positions, trades }: Candles
       </div>
     </div>
   );
+}
+
+function StrategyFilter({
+  options,
+  selectedIds,
+  onSelectedIdsChange,
+}: {
+  options: StrategyOption[];
+  selectedIds: string[] | null;
+  onSelectedIdsChange: (ids: string[] | null) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const filteredOptions = useMemo(() => {
+    const normalized = search.trim().toLocaleLowerCase("ru-RU");
+    return normalized
+      ? options.filter((option) => option.name.toLocaleLowerCase("ru-RU").includes(normalized))
+      : options;
+  }, [options, search]);
+  const label = strategyFilterLabel(options, selectedIds);
+
+  function toggle(strategyId: string) {
+    if (selectedIds === null) {
+      onSelectedIdsChange([strategyId]);
+      return;
+    }
+    onSelectedIdsChange(
+      selectedIds.includes(strategyId)
+        ? selectedIds.filter((id) => id !== strategyId)
+        : [...selectedIds, strategyId],
+    );
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={`Фильтр стратегий: ${label}`}
+          className={cn(
+            "h-7 max-w-[220px] min-w-0 rounded-full px-2.5 text-[11px] text-muted-foreground",
+            selectedIds !== null && "bg-avatar text-foreground",
+          )}
+          disabled={options.length === 0}
+        >
+          <ListFilter className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">{label}</span>
+          {selectedIds !== null ? (
+            <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">
+              {selectedIds.length}/{options.length}
+            </Badge>
+          ) : null}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="flex max-h-[360px] w-[320px] flex-col p-0" align="end">
+        <div className="border-b border-row-border p-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Найти стратегию"
+              aria-label="Поиск стратегии"
+              className="pl-8"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1" role="listbox" aria-multiselectable>
+          {!search ? (
+            <StrategyFilterOption
+              label="Все стратегии"
+              hint={`${options.length} стратегий`}
+              selected={selectedIds === null}
+              onClick={() => onSelectedIdsChange(null)}
+            />
+          ) : null}
+          {filteredOptions.map((option) => (
+            <StrategyFilterOption
+              key={option.id}
+              label={option.name}
+              hint={`${option.positions} поз. · ${option.trades} сдел.`}
+              selected={selectedIds === null || selectedIds.includes(option.id)}
+              onClick={() => toggle(option.id)}
+            />
+          ))}
+          {filteredOptions.length === 0 ? (
+            <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+              Стратегии не найдены.
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-between border-t border-row-border px-3 py-2 text-[11px] text-muted-foreground">
+          <span>{selectedIds === null ? "Показаны все" : `Выбрано: ${selectedIds.length}`}</span>
+          {selectedIds !== null ? (
+            <button
+              type="button"
+              className="hover:text-foreground"
+              onClick={() => onSelectedIdsChange(null)}
+            >
+              Сбросить
+            </button>
+          ) : null}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function StrategyFilterOption({
+  label,
+  hint,
+  selected,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      className="flex min-h-10 w-full items-center gap-3 rounded-[7px] px-2 text-left outline-none hover:bg-accent focus-visible:bg-accent"
+      onClick={onClick}
+    >
+      <span
+        className={cn(
+          "flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input",
+          selected && "border-primary bg-primary text-primary-foreground",
+        )}
+      >
+        {selected ? <Check className="size-3" aria-hidden="true" /> : null}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12px] text-secondary-foreground">{label}</span>
+        <span className="block text-[10px] text-stale">{hint}</span>
+      </span>
+    </button>
+  );
+}
+
+function buildStrategyOptions(positions: PositionDto[], trades: TradeDto[]): StrategyOption[] {
+  const options = new Map<string, StrategyOption>();
+  for (const position of positions) {
+    const current = options.get(position.strategy.id) ?? {
+      id: position.strategy.id,
+      name: position.strategy.name,
+      positions: 0,
+      trades: 0,
+    };
+    current.positions += 1;
+    options.set(current.id, current);
+  }
+  for (const trade of trades) {
+    const current = options.get(trade.strategy.id) ?? {
+      id: trade.strategy.id,
+      name: trade.strategy.name,
+      positions: 0,
+      trades: 0,
+    };
+    current.trades += 1;
+    options.set(current.id, current);
+  }
+  return [...options.values()].sort((left, right) => left.name.localeCompare(right.name, "ru-RU"));
+}
+
+function filterByStrategies<Item extends { strategy: { id: string } }>(
+  items: Item[],
+  selectedIds: string[] | null,
+): Item[] {
+  if (selectedIds === null) return items;
+  const selected = new Set(selectedIds);
+  return items.filter((item) => selected.has(item.strategy.id));
+}
+
+function strategyFilterLabel(options: StrategyOption[], selectedIds: string[] | null): string {
+  if (options.length === 0) return "Нет стратегий";
+  if (selectedIds === null) return "Все стратегии";
+  if (selectedIds.length === 0) return "Без стратегий";
+  if (selectedIds.length === 1) {
+    return options.find(({ id }) => id === selectedIds[0])?.name ?? "1 стратегия";
+  }
+  return `${selectedIds.length} стратегий`;
 }
 
 function buildOverlays(

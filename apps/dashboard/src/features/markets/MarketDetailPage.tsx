@@ -155,6 +155,7 @@ export default function MarketDetailPage() {
         </CardHeader>
         <CardContent className="px-0 pb-0">
           <CandlestickChart
+            key={data.market.symbol}
             candles={data.candles}
             symbol={data.market.symbol}
             positions={pairPositions}

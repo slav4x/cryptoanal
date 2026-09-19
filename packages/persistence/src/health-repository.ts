@@ -44,10 +44,12 @@ export class HealthRepository {
         select: { lastSeenAt: true },
       }),
       this.prisma.marketInstrument.findMany({
-        where: { enabled: true },
+        where: { workspaceMarkets: { some: { workspaceId } } },
         orderBy: { symbol: "asc" },
         select: {
           symbol: true,
+          status: true,
+          enabled: true,
           snapshots: {
             orderBy: { observedAt: "desc" },
             take: 1,
@@ -152,6 +154,8 @@ export class HealthRepository {
       watchdogLastSeenAt: watchdogHeartbeat?.lastSeenAt ?? null,
       markets: markets.map((market) => ({
         symbol: market.symbol,
+        status: market.status,
+        enabled: market.enabled,
         observedAt: market.snapshots[0]?.observedAt ?? null,
       })),
       accountObservedAt: account?.observedAt ?? null,

@@ -159,7 +159,7 @@ export class RuntimeRepository {
     lastCompleteCandleAt: Date;
     candleLimit: number;
   }) {
-    const [cursor, position, candles, recentTrades] = await Promise.all([
+    const [cursor, position, instrument, candles, recentTrades] = await Promise.all([
       this.prisma.runtimeCursor.findUnique({
         where: {
           executionRunId_symbol: {
@@ -193,6 +193,10 @@ export class RuntimeRepository {
           entrySession: true,
         },
       }),
+      this.prisma.marketInstrument.findUnique({
+        where: { symbol: input.symbol },
+        select: { status: true, enabled: true, metadataSyncedAt: true },
+      }),
       this.prisma.marketCandle.findMany({
         where: {
           symbol: input.symbol,
@@ -223,7 +227,7 @@ export class RuntimeRepository {
       }),
     ]);
 
-    return { cursor, position, candles: candles.reverse(), recentTrades };
+    return { cursor, position, instrument, candles: candles.reverse(), recentTrades };
   }
 
   public async getDryRunEquity(
@@ -409,7 +413,7 @@ export class RuntimeRepository {
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
       `);
-      const [deployment, executionRun, cursor, currentPosition] = await Promise.all([
+      const [deployment, executionRun, cursor, currentPosition, instrument] = await Promise.all([
         transaction.deployment.findFirst({
           where: { id: input.deploymentId, workspaceId: input.workspaceId },
           select: { status: true },
@@ -440,6 +444,10 @@ export class RuntimeRepository {
           },
           select: { id: true },
         }),
+        transaction.marketInstrument.findUnique({
+          where: { symbol: input.symbol },
+          select: { status: true, enabled: true },
+        }),
       ]);
       if (
         deployment?.status !== "RUNNING" ||
@@ -447,7 +455,9 @@ export class RuntimeRepository {
         !cursor ||
         !cursor.pendingSignal ||
         cursor.lastEvaluatedAt?.getTime() !== input.expectedCandleAt.getTime() ||
-        currentPosition
+        currentPosition ||
+        !instrument?.enabled ||
+        instrument.status !== "Trading"
       ) {
         return { applied: false, capacityReached: false };
       }
@@ -536,6 +546,7 @@ export class RuntimeRepository {
       where: {
         workspaceId,
         pendingSignal: { not: Prisma.DbNull },
+        instrument: { is: { enabled: true, status: "Trading" } },
         executionRun: {
           status: "RUNNING",
           deployment: { status: "RUNNING" },
@@ -627,14 +638,28 @@ export class RuntimeRepository {
       let decisionPositionId = currentPosition?.id ?? null;
       let decisionTradeId: string | null = null;
       if (action.kind === "open") {
-        const openPositions = await transaction.position.count({
-          where: {
-            workspaceId: input.workspaceId,
-            executionRunId: input.executionRunId,
-            status: "OPEN",
-          },
-        });
-        if (openPositions >= input.maxOpenPositions) {
+        const [instrument, openPositions] = await Promise.all([
+          transaction.marketInstrument.findUnique({
+            where: { symbol: input.symbol },
+            select: { status: true, enabled: true },
+          }),
+          transaction.position.count({
+            where: {
+              workspaceId: input.workspaceId,
+              executionRunId: input.executionRunId,
+              status: "OPEN",
+            },
+          }),
+        ]);
+        if (!instrument?.enabled || instrument.status !== "Trading") {
+          action = { kind: "none" };
+          decision = {
+            action: "SKIP",
+            reasonCode: "INSTRUMENT_UNAVAILABLE",
+            summary: `Вход пропущен: ${input.symbol} недоступен для торговли`,
+            factors: input.decision.factors,
+          };
+        } else if (openPositions >= input.maxOpenPositions) {
           action = { kind: "none" };
           decision = {
             action: "SKIP",

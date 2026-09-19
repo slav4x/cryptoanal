@@ -16,6 +16,13 @@ export type MarketUniverseInstrumentInput = {
   minNotional: string;
 };
 
+export type MarketInstrumentStatusChange = {
+  symbol: string;
+  previousStatus: string;
+  status: string;
+  enabled: boolean;
+};
+
 export class MarketUniverseInstrumentConflictError extends Error {}
 export class MarketUniverseMarketNotFoundError extends Error {}
 export class MarketUniverseMarketInUseError extends Error {
@@ -37,6 +44,130 @@ export class MarketUniverseRepository {
       select: { symbol: true },
     });
     return markets.map(({ symbol }) => symbol);
+  }
+
+  public async listUnavailableTrackedSymbols(): Promise<string[]> {
+    const instruments = await this.prisma.marketInstrument.findMany({
+      where: {
+        workspaceMarkets: { some: {} },
+        OR: [{ enabled: false }, { status: { not: "Trading" } }],
+      },
+      orderBy: { symbol: "asc" },
+      select: { symbol: true },
+    });
+    return instruments.map(({ symbol }) => symbol);
+  }
+
+  public async syncTrackedInstruments(
+    instruments: MarketUniverseInstrumentInput[],
+    syncedAt: Date,
+  ): Promise<MarketInstrumentStatusChange[]> {
+    const tracked = await this.prisma.marketInstrument.findMany({
+      where: {
+        exchange: "bybit",
+        instrumentType: "linear-perpetual",
+        workspaceMarkets: { some: {} },
+      },
+      select: { symbol: true, status: true, enabled: true },
+    });
+    const received = new Map(instruments.map((instrument) => [instrument.symbol, instrument]));
+    const changes: MarketInstrumentStatusChange[] = [];
+
+    await this.prisma.$transaction(
+      tracked.map((current) => {
+        const next = received.get(current.symbol);
+        const status = next?.status ?? "Unavailable";
+        const enabled = status === "Trading";
+        if (current.status !== status || current.enabled !== enabled) {
+          changes.push({
+            symbol: current.symbol,
+            previousStatus: current.status,
+            status,
+            enabled,
+          });
+        }
+        return this.prisma.marketInstrument.update({
+          where: { symbol: current.symbol },
+          data: {
+            status,
+            enabled,
+            metadataSyncedAt: syncedAt,
+            ...(next
+              ? {
+                  baseAsset: next.baseAsset,
+                  quoteAsset: next.quoteAsset,
+                  settleAsset: next.settleAsset,
+                  contractType: next.contractType,
+                  tickSize: next.tickSize,
+                  qtyStep: next.qtyStep,
+                  minOrderQty: next.minOrderQty,
+                  minNotional: next.minNotional,
+                }
+              : {}),
+          },
+        });
+      }),
+    );
+
+    return changes;
+  }
+
+  public async pauseDeploymentsUsingSymbols(input: {
+    symbols: string[];
+    actorId: string;
+    requestId: string;
+  }): Promise<string[]> {
+    if (input.symbols.length === 0) return [];
+    const blocked = new Set(input.symbols);
+    const deployments = await this.prisma.deployment.findMany({
+      where: { status: "RUNNING" },
+      select: {
+        id: true,
+        workspaceId: true,
+        strategyId: true,
+        strategyVersion: { select: { config: true } },
+      },
+    });
+    const affected = deployments.flatMap((deployment) => {
+      const unavailableSymbols = readStrategySymbols(deployment.strategyVersion.config).filter(
+        (symbol) => blocked.has(symbol),
+      );
+      return unavailableSymbols.length > 0 ? [{ ...deployment, unavailableSymbols }] : [];
+    });
+    const paused: string[] = [];
+
+    await this.prisma.$transaction(async (transaction) => {
+      for (const deployment of affected) {
+        const result = await transaction.deployment.updateMany({
+          where: { id: deployment.id, status: "RUNNING" },
+          data: { status: "PAUSED" },
+        });
+        if (result.count === 0) continue;
+        paused.push(deployment.id);
+        await transaction.strategy.updateMany({
+          where: {
+            id: deployment.strategyId,
+            workspaceId: deployment.workspaceId,
+            status: "DEPLOYED",
+          },
+          data: { status: "PAUSED", updatedByActorId: input.actorId },
+        });
+        await transaction.auditEvent.create({
+          data: {
+            workspaceId: deployment.workspaceId,
+            actorId: input.actorId,
+            action: "deployment.auto-pause.market-status",
+            resourceType: "deployment",
+            resourceId: deployment.id,
+            outcome: "COMPLETED",
+            requestId: input.requestId,
+            metadata: { unavailableSymbols: deployment.unavailableSymbols },
+          },
+        });
+      }
+    });
+
+    return paused;
   }
 
   public async addMarkets(input: {

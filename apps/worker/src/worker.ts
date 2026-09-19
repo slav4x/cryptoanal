@@ -48,6 +48,7 @@ import {
   exchangeCredentialContext,
   HealthRepository,
   MarketDataRepository,
+  MarketUniverseRepository,
   RuntimeRepository,
   RuntimeStateConflictError,
   ValidationDatasetConflictError,
@@ -65,6 +66,7 @@ const watchdogId = `${workerId}:watchdog`;
 const config = loadServerConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
 const marketDataRepository = new MarketDataRepository(prisma);
+const marketUniverseRepository = new MarketUniverseRepository(prisma);
 const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
 const validationRepository = new ValidationRepository(prisma);
 const runtimeRepository = new RuntimeRepository(prisma);
@@ -164,6 +166,38 @@ async function candleDataLoop() {
   }
 }
 
+async function instrumentMetadataLoop() {
+  while (!stopping) {
+    try {
+      const syncedAt = new Date();
+      const instruments = await marketClient.getLinearInstrumentsByStatuses(["Trading", "Closed"]);
+      const changes = await marketUniverseRepository.syncTrackedInstruments(
+        instruments.map((instrument) => ({
+          ...instrument,
+          exchange: "bybit" as const,
+          instrumentType: "linear-perpetual" as const,
+        })),
+        syncedAt,
+      );
+      const unavailableSymbols = await marketUniverseRepository.listUnavailableTrackedSymbols();
+      const pausedDeployments = await marketUniverseRepository.pauseDeploymentsUsingSymbols({
+        symbols: unavailableSymbols,
+        actorId: `system:${workerId}`,
+        requestId: `instrument-sync:${syncedAt.toISOString()}`,
+      });
+      if (changes.length > 0) {
+        logger.warn({ changes, pausedDeployments }, "Tracked market instrument statuses changed");
+      } else {
+        logger.debug({ instruments: instruments.length }, "Market instrument metadata synced");
+      }
+    } catch (error) {
+      logger.error({ err: error }, "Failed to sync market instrument metadata");
+    }
+
+    await delay(config.INSTRUMENT_SYNC_INTERVAL_MS);
+  }
+}
+
 async function marketStreamLoop() {
   await marketStreamClient.run(
     {
@@ -198,6 +232,7 @@ async function marketStreamLoop() {
 
 async function listRequiredMarketSeries() {
   const symbols = await marketDataRepository.listEnabledSymbols();
+  const enabledSymbols = new Set(symbols);
   const requirements = new Map<string, { symbol: string; interval: string; limit: number }>();
   for (const symbol of symbols) {
     requirements.set(`${symbol}:15`, { symbol, interval: "15", limit: 200 });
@@ -213,6 +248,7 @@ async function listRequiredMarketSeries() {
     const interval = bybitIntervals[strategyConfig.universe.timeframe];
     const limit = Math.min(1_000, minimumExecutionCandleCount(strategyConfig) + 1);
     for (const symbol of strategyConfig.universe.symbols) {
+      if (!enabledSymbols.has(symbol)) continue;
       const key = `${symbol}:${interval}`;
       const current = requirements.get(key);
       requirements.set(key, {
@@ -692,7 +728,7 @@ async function processRuntimeTarget(
 
   for (const symbol of [...strategyConfig.universe.symbols].sort()) {
     try {
-      const state = await runtimeRepository.getCycleState({
+      let state = await runtimeRepository.getCycleState({
         workspaceId: target.workspaceId,
         exchangeAccountId: target.exchangeAccountId,
         executionRunId: executionRun.id,
@@ -701,6 +737,64 @@ async function processRuntimeTarget(
         lastCompleteCandleAt,
         candleLimit,
       });
+      if (!state.instrument?.enabled || state.instrument.status !== "Trading") {
+        if (target.status === "PAUSED") continue;
+        throw new RuntimeWorkerError(
+          "RUNTIME_INSTRUMENT_UNAVAILABLE",
+          `${symbol} недоступен для новых сигналов: статус ${state.instrument?.status ?? "Unknown"}`,
+        );
+      }
+
+      const continuity = assessCandleContinuity(
+        state.candles,
+        intervalMs,
+        lastCompleteCandleAt,
+        candleLimit,
+      );
+      if (!continuity.complete) {
+        logger.warn(
+          {
+            symbol,
+            interval,
+            missingCandles: continuity.missing.length,
+            from: continuity.expectedStart,
+            to: lastCompleteCandleAt,
+          },
+          "Runtime candle gap detected; starting REST backfill",
+        );
+        const backfill = await marketClient.getLinearKlinesRange(
+          symbol,
+          interval,
+          continuity.expectedStart,
+          lastCompleteCandleAt,
+        );
+        await marketDataRepository.saveCandles(backfill);
+        state = await runtimeRepository.getCycleState({
+          workspaceId: target.workspaceId,
+          exchangeAccountId: target.exchangeAccountId,
+          executionRunId: executionRun.id,
+          symbol,
+          interval,
+          lastCompleteCandleAt,
+          candleLimit,
+        });
+        const restored = assessCandleContinuity(
+          state.candles,
+          intervalMs,
+          lastCompleteCandleAt,
+          candleLimit,
+        );
+        if (!restored.complete) {
+          throw new RuntimeWorkerError(
+            "RUNTIME_CANDLE_GAP",
+            `Для ${symbol} не восстановлено ${restored.missing.length} свечей ${interval}`,
+          );
+        }
+        logger.info(
+          { symbol, interval, restoredCandles: backfill.length },
+          "Runtime candle continuity restored",
+        );
+      }
       const latest = state.candles.at(-1);
       if (!latest || state.candles.length < candleLimit) {
         throw new RuntimeWorkerError(
@@ -1562,11 +1656,31 @@ const tradingEnvironment = {
   LIVE: "live",
 } as const;
 
+function assessCandleContinuity(
+  candles: Array<{ openTime: Date }>,
+  intervalMs: number,
+  expectedLatest: Date,
+  requiredCount: number,
+) {
+  const expectedStart = new Date(expectedLatest.getTime() - (requiredCount - 1) * intervalMs);
+  const available = new Set(candles.map((candle) => candle.openTime.getTime()));
+  const missing: Date[] = [];
+  for (
+    let timestamp = expectedStart.getTime();
+    timestamp <= expectedLatest.getTime();
+    timestamp += intervalMs
+  ) {
+    if (!available.has(timestamp)) missing.push(new Date(timestamp));
+  }
+  return { complete: missing.length === 0, expectedStart, missing };
+}
+
 logger.info({ workerId }, "Worker started");
 await Promise.all([
   heartbeatLoop(),
   marketDataLoop(),
   candleDataLoop(),
+  instrumentMetadataLoop(),
   marketStreamLoop(),
   accountSnapshotLoop(),
   validationJobLoop(),

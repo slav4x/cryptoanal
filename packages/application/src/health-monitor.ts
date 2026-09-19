@@ -25,7 +25,12 @@ export type HealthMonitorInput = {
     exchangeVerificationOverdueMs: number;
   };
   workerLastSeenAt: Date | null;
-  markets: Array<{ symbol: string; observedAt: Date | null }>;
+  markets: Array<{
+    symbol: string;
+    status: string;
+    enabled: boolean;
+    observedAt: Date | null;
+  }>;
   accountObservedAt: Date | null;
   failedJobs24h: number;
   oldestQueuedJobAt: Date | null;
@@ -71,7 +76,13 @@ export type HealthMonitorInput = {
 
 export function evaluateHealth(input: HealthMonitorInput) {
   const conditions: HealthCondition[] = [];
-  const staleMarkets = input.markets.filter(
+  const availableMarkets = input.markets.filter(
+    (market) => market.enabled && market.status === "Trading",
+  );
+  const unavailableMarkets = input.markets.filter(
+    (market) => !market.enabled || market.status !== "Trading",
+  );
+  const staleMarkets = availableMarkets.filter(
     (market) =>
       !market.observedAt || age(input.now, market.observedAt) > input.thresholds.marketStaleMs,
   );
@@ -87,6 +98,23 @@ export function evaluateHealth(input: HealthMonitorInput) {
       resourceType: "market-instrument",
       resourceId: null,
       metadata: {},
+    });
+  }
+  if (unavailableMarkets.length > 0) {
+    conditions.push({
+      fingerprint: "market-data:instrument-status",
+      domain: "market-data",
+      code: "MARKET_INSTRUMENT_UNAVAILABLE",
+      severity: "critical",
+      title: "Торговые инструменты недоступны",
+      description: `${unavailableMarkets.length} инструментов вышли из статуса Trading; связанные runtime автоматически остановлены.`,
+      resourceType: "market-instrument",
+      resourceId: null,
+      metadata: {
+        instruments: unavailableMarkets
+          .map((market) => `${market.symbol}:${market.status}`)
+          .join(","),
+      },
     });
   }
 
@@ -107,14 +135,14 @@ export function evaluateHealth(input: HealthMonitorInput) {
     });
   }
   if (staleMarkets.length > 0) {
-    const allUnavailable = staleMarkets.length === input.markets.length;
+    const allUnavailable = staleMarkets.length === availableMarkets.length;
     conditions.push({
       fingerprint: "market-data:freshness",
       domain: "market-data",
       code: "MARKET_DATA_STALE",
       severity: allUnavailable ? "critical" : "warning",
       title: allUnavailable ? "Рыночные данные недоступны" : "Часть рыночных данных устарела",
-      description: `${staleMarkets.length} из ${input.markets.length} включённых инструментов не имеют свежего snapshot.`,
+      description: `${staleMarkets.length} из ${availableMarkets.length} торгуемых инструментов не имеют свежего snapshot.`,
       resourceType: "market-snapshot",
       resourceId: null,
       metadata: { symbols: staleMarkets.map((market) => market.symbol).join(",") },

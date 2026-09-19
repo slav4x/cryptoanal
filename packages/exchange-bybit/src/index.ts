@@ -138,6 +138,8 @@ export type BybitLinearInstrument = {
   minNotional: string;
 };
 
+export type BybitLinearInstrumentStatus = "Trading" | "Closed";
+
 export type BybitMarketCandle = {
   symbol: string;
   interval: string;
@@ -374,13 +376,34 @@ export class BybitPublicMarketClient {
   }
 
   public async getLinearInstruments(signal?: AbortSignal): Promise<BybitLinearInstrument[]> {
+    return this.getLinearInstrumentsByStatus("Trading", signal);
+  }
+
+  public async getLinearInstrumentsByStatuses(
+    statuses: BybitLinearInstrumentStatus[],
+    signal?: AbortSignal,
+  ): Promise<BybitLinearInstrument[]> {
+    const pages = await Promise.all(
+      statuses.map((status) => this.getLinearInstrumentsByStatus(status, signal)),
+    );
+    const instruments = new Map<string, BybitLinearInstrument>();
+    for (const page of pages) {
+      for (const instrument of page) instruments.set(instrument.symbol, instrument);
+    }
+    return [...instruments.values()].sort((left, right) => left.symbol.localeCompare(right.symbol));
+  }
+
+  private async getLinearInstrumentsByStatus(
+    status: BybitLinearInstrumentStatus,
+    signal?: AbortSignal,
+  ): Promise<BybitLinearInstrument[]> {
     const instruments = new Map<string, BybitLinearInstrument>();
     let cursor = "";
 
     for (let page = 0; page < 20; page += 1) {
       const url = new URL("/v5/market/instruments-info", this.baseUrl);
       url.searchParams.set("category", "linear");
-      url.searchParams.set("status", "Trading");
+      url.searchParams.set("status", status);
       url.searchParams.set("limit", "1000");
       if (cursor) url.searchParams.set("cursor", cursor);
 

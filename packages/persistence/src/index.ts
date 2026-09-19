@@ -81,6 +81,7 @@ export {
   MarketUniverseMarketInUseError,
   MarketUniverseMarketNotFoundError,
   MarketUniverseRepository,
+  type MarketInstrumentStatusChange,
   type MarketUniverseInstrumentInput,
 } from "./market-universe-repository";
 export {

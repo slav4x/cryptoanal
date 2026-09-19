@@ -53,6 +53,7 @@ const serverConfigSchema = z
     EXCHANGE_VERIFICATION_POLL_INTERVAL_MS: z.coerce.number().int().min(10_000).default(60_000),
     MARKET_POLL_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
     CANDLE_POLL_INTERVAL_MS: z.coerce.number().int().min(15_000).default(60_000),
+    INSTRUMENT_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     ACCOUNT_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     RUNTIME_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
     RUNTIME_QUOTE_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),

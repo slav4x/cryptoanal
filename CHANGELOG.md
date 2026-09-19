@@ -4,6 +4,10 @@
 
 ### Added
 
+- Searchable shadcn-compatible strategy market multi-select backed by the current workspace
+  Market Universe, with explicit handling of pairs removed from immutable older versions.
+- Server-side Market Universe validation for initial strategy configs and every new immutable
+  strategy version.
 - Workspace-scoped market universe with owner-only add/remove commands, audit events and
   safe removal guards for active deployments and open positions.
 - Bybit linear perpetual instrument catalog with search-ready metadata, exchange provenance

@@ -95,9 +95,12 @@ pnpm dev
 - `/trades` — открытые позиции и история завершённых сделок;
 - `/trades/:tradeId` — результат сделки, runtime-контекст, ордера и fills;
 - `/strategies` — каталог стратегий, версий, validation и deployment states;
-- `/strategies/new` — секционный редактор и создание черновика с immutable v1;
+- `/strategies/new` — секционный редактор, multi-select пар из Market Universe и создание
+  черновика с immutable v1;
 - `/strategies/:strategyId` — workspace стратегии с обзором, конфигурацией и историей версий;
 - `/strategies/:strategyId/versions/new` — создание новой версии на основе последней;
+  удалённые из Market Universe пары остаются в старой immutable-версии, но должны быть
+  исключены перед сохранением новой;
 - `/validation` — постановка backtest/walk-forward runs и состояние durable очереди;
 - `/validation/:validationRunId` — полный отчёт запуска: метрики, equity/drawdown, gates,
   пары, сделки и provenance;

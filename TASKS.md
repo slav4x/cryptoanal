@@ -10,8 +10,8 @@
 
 Оптимальная последовательность оставшейся разработки:
 
-1. **Strategy universe UI:** выбор нескольких пар только из рынка текущего workspace;
-   затем перекомпоновка настроек и фильтр стратегий на графике пары.
+1. **Strategy and settings UI:** перекомпоновка настроек и фильтр стратегий на графике
+   пары; выбор universe в редакторе уже привязан к рынку текущего workspace.
 2. **Market data integrity:** обработка delisting/status, поиск разрывов свечей и
    REST-backfill перед возобновлением торговых сигналов.
 3. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
@@ -88,7 +88,7 @@
 
 - [x] Strategy catalog и status model.
 - [x] Секционный strategy editor.
-- [ ] Заменить ручной ввод торговых пар в редакторе стратегии на shadcn-compatible
+- [x] Заменить ручной ввод торговых пар в редакторе стратегии на shadcn-compatible
       multi-select. Источником вариантов должен быть market universe текущего workspace;
       сохранять выбранные пары в immutable strategy version и явно обрабатывать пары,
       удалённые из рынка после создания версии.

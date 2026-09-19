@@ -155,7 +155,7 @@ export class DashboardRepository {
 
   public async listMarkets(workspaceId: string) {
     return this.prisma.marketInstrument.findMany({
-      where: { enabled: true, workspaceMarkets: { some: { workspaceId } } },
+      where: { workspaceMarkets: { some: { workspaceId } } },
       orderBy: { symbol: "asc" },
       select: {
         symbol: true,
@@ -196,7 +196,7 @@ export class DashboardRepository {
 
   public async getMarket(workspaceId: string, symbol: string) {
     return this.prisma.marketInstrument.findFirst({
-      where: { symbol, enabled: true, workspaceMarkets: { some: { workspaceId } } },
+      where: { symbol, workspaceMarkets: { some: { workspaceId } } },
       select: {
         symbol: true,
         baseAsset: true,

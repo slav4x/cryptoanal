@@ -2420,11 +2420,14 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             close: candle.close.toNumber(),
           })),
         );
-        const freshness = !snapshot
-          ? ("unavailable" as const)
-          : now - snapshot.observedAt.getTime() < 60_000
-            ? ("fresh" as const)
-            : ("stale" as const);
+        const freshness =
+          instrument.status !== "Trading"
+            ? ("unavailable" as const)
+            : !snapshot
+              ? ("unavailable" as const)
+              : now - snapshot.observedAt.getTime() < 60_000
+                ? ("fresh" as const)
+                : ("stale" as const);
 
         return {
           symbol: instrument.symbol,
@@ -3271,11 +3274,14 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         })),
       );
       const now = Date.now();
-      const marketFreshness = !snapshot
-        ? ("unavailable" as const)
-        : now - snapshot.observedAt.getTime() < 60_000
-          ? ("fresh" as const)
-          : ("stale" as const);
+      const marketFreshness =
+        instrument.status !== "Trading"
+          ? ("unavailable" as const)
+          : !snapshot
+            ? ("unavailable" as const)
+            : now - snapshot.observedAt.getTime() < 60_000
+              ? ("fresh" as const)
+              : ("stale" as const);
       const latestCandle = candles.at(-1);
       const candleFreshness = !latestCandle
         ? ("unavailable" as const)

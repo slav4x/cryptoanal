@@ -80,6 +80,9 @@ export default function MarketDetailPage() {
               {formatPercent(data.market.change24hPercent)} за 24ч
             </Badge>
             <Badge variant={regime.variant}>{regime.label}</Badge>
+            {data.market.status !== "Trading" ? (
+              <Badge variant="warning">Торговля остановлена · {data.market.status}</Badge>
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
             <Button
@@ -112,6 +115,13 @@ export default function MarketDetailPage() {
       {watchlistMutation.isError ? (
         <p className="rounded-[10px] border border-loss/20 bg-loss/5 px-4 py-2.5 text-xs text-loss">
           Не удалось изменить watchlist: {watchlistMutation.error.message}
+        </p>
+      ) : null}
+
+      {data.market.status !== "Trading" ? (
+        <p className="rounded-[10px] border border-warning/20 bg-warning/5 px-4 py-2.5 text-xs text-warning">
+          Bybit больше не сообщает инструмент как Trading. Новые сигналы отключены, связанные
+          runtime поставлены на паузу; накопленная история сохранена.
         </p>
       ) : null}
 

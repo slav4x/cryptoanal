@@ -282,6 +282,11 @@ export default function MarketsPage() {
                               <div className="text-xs text-muted-foreground">
                                 {market.exchange} · {market.instrumentType}
                               </div>
+                              {market.status !== "Trading" ? (
+                                <Badge variant="warning" className="mt-1">
+                                  {marketStatusLabel(market.status)}
+                                </Badge>
+                              ) : null}
                             </div>
                           </div>
                         </td>
@@ -583,6 +588,13 @@ const regimeLabel = {
   unknown: "Не определён",
 } as const;
 const freshnessLabel = { fresh: "Свежие", stale: "Устарели", unavailable: "Нет данных" } as const;
+
+function marketStatusLabel(status: string) {
+  if (status === "Settling") return "Расчёт";
+  if (status === "Closed") return "Закрыт";
+  if (status === "Unavailable") return "Недоступен";
+  return status;
+}
 
 function MarketsSkeleton() {
   return (

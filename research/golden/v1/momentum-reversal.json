@@ -1,0 +1,414 @@
+{
+  "schemaVersion": 1,
+  "id": "momentum-reversal-v1",
+  "datasetVersion": "cryptoanal-golden-candles@1",
+  "datasetHash": "1874f368c5d91dab93d6ed1a4c42a69a2e8317ca20b05759c7d124e099c69c36",
+  "engineVersion": "cryptoanal-validation@0.4.0",
+  "runtimeEngineVersion": "cryptoanal-runtime-replay@1.0.0",
+  "initialCapital": 10000,
+  "config": {
+    "schemaVersion": 1,
+    "universe": { "symbols": ["BTCUSDT"], "timeframe": "15m" },
+    "signal": {
+      "family": "momentum",
+      "direction": "both",
+      "emaFastPeriod": 2,
+      "emaSlowPeriod": 3,
+      "rsiPeriod": 2,
+      "rsiOversold": 30,
+      "rsiOverbought": 70,
+      "breakoutLookbackPeriod": 2,
+      "meanReversionLookbackPeriod": 5,
+      "meanReversionEntryZScore": 2,
+      "momentumLookbackPeriod": 2,
+      "momentumThresholdPercent": 1
+    },
+    "filters": {
+      "minimumVolume24hUsdt": 0,
+      "minimumAtrPercent": 0,
+      "maximumAtrPercent": 100
+    },
+    "risk": {
+      "riskPerTradePercent": 1,
+      "maxOpenPositions": 1,
+      "maxDailyLossPercent": 20
+    },
+    "entry": { "orderType": "market", "limitOffsetBps": 0 },
+    "exit": {
+      "stopLossPercent": 2,
+      "takeProfitPercent": 4,
+      "trailingStopPercent": 0,
+      "breakEvenActivationR": 0,
+      "trailingActivationR": 0,
+      "exitOnSignalReversal": false
+    },
+    "costs": { "makerFeeBps": 2, "takerFeeBps": 6, "slippageBps": 5 },
+    "schedule": {
+      "timezone": "UTC",
+      "activeDays": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    }
+  },
+  "candles": [
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T00:00:00.000Z",
+      "open": 100,
+      "high": 100.8,
+      "low": 99.2,
+      "close": 100,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T00:15:00.000Z",
+      "open": 100,
+      "high": 101,
+      "low": 99.2,
+      "close": 100.2,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T00:30:00.000Z",
+      "open": 100.2,
+      "high": 101,
+      "low": 99.3,
+      "close": 100.1,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T00:45:00.000Z",
+      "open": 100.1,
+      "high": 101.1,
+      "low": 99.3,
+      "close": 100.3,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T01:00:00.000Z",
+      "open": 100.3,
+      "high": 101.1,
+      "low": 99.4,
+      "close": 100.2,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T01:15:00.000Z",
+      "open": 100.2,
+      "high": 101.2,
+      "low": 99.4,
+      "close": 100.4,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T01:30:00.000Z",
+      "open": 100.4,
+      "high": 101.2,
+      "low": 99.5,
+      "close": 100.3,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T01:45:00.000Z",
+      "open": 100.3,
+      "high": 101.3,
+      "low": 99.5,
+      "close": 100.5,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T02:00:00.000Z",
+      "open": 100.5,
+      "high": 101.3,
+      "low": 99.6,
+      "close": 100.4,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T02:15:00.000Z",
+      "open": 100.4,
+      "high": 101.4,
+      "low": 99.6,
+      "close": 100.6,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T02:30:00.000Z",
+      "open": 100.6,
+      "high": 101.4,
+      "low": 99.7,
+      "close": 100.5,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T02:45:00.000Z",
+      "open": 100.5,
+      "high": 101.5,
+      "low": 99.7,
+      "close": 100.7,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T03:00:00.000Z",
+      "open": 100.7,
+      "high": 101.5,
+      "low": 99.8,
+      "close": 100.6,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T03:15:00.000Z",
+      "open": 100.6,
+      "high": 101.6,
+      "low": 99.8,
+      "close": 100.8,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T03:30:00.000Z",
+      "open": 100.8,
+      "high": 101.6,
+      "low": 99.9,
+      "close": 100.7,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T03:45:00.000Z",
+      "open": 100.7,
+      "high": 103.3,
+      "low": 99.9,
+      "close": 102.5,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T04:00:00.000Z",
+      "open": 102.5,
+      "high": 103.8,
+      "low": 101.7,
+      "close": 103,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T04:15:00.000Z",
+      "open": 103,
+      "high": 107,
+      "low": 102.2,
+      "close": 106,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T04:30:00.000Z",
+      "open": 106,
+      "high": 106.8,
+      "low": 104.2,
+      "close": 105,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T04:45:00.000Z",
+      "open": 105,
+      "high": 105.8,
+      "low": 102.2,
+      "close": 103,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T05:00:00.000Z",
+      "open": 103,
+      "high": 103.8,
+      "low": 99.2,
+      "close": 100,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T05:15:00.000Z",
+      "open": 100,
+      "high": 100.8,
+      "low": 97,
+      "close": 98,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T05:30:00.000Z",
+      "open": 98,
+      "high": 98.8,
+      "low": 94.2,
+      "close": 95,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T05:45:00.000Z",
+      "open": 95,
+      "high": 96.8,
+      "low": 94.2,
+      "close": 96,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T06:00:00.000Z",
+      "open": 96,
+      "high": 99.8,
+      "low": 95.2,
+      "close": 99,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T06:15:00.000Z",
+      "open": 99,
+      "high": 102.8,
+      "low": 98.2,
+      "close": 102,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T06:30:00.000Z",
+      "open": 102,
+      "high": 106,
+      "low": 101.2,
+      "close": 105,
+      "turnover": 100000
+    },
+    {
+      "symbol": "BTCUSDT",
+      "openTime": "2026-01-01T06:45:00.000Z",
+      "open": 105,
+      "high": 105.8,
+      "low": 103.2,
+      "close": 104,
+      "turnover": 100000
+    }
+  ],
+  "expected": {
+    "decisions": [
+      {
+        "sequence": 0,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T04:00:00.000Z",
+        "action": "open",
+        "reasonCode": "pending-signal-filled",
+        "price": 102.55125
+      },
+      {
+        "sequence": 1,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T04:15:00.000Z",
+        "action": "close",
+        "reasonCode": "take-profit",
+        "price": 106.59997335
+      },
+      {
+        "sequence": 2,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T05:00:00.000Z",
+        "action": "open",
+        "reasonCode": "pending-signal-filled",
+        "price": 102.94850000000001
+      },
+      {
+        "sequence": 3,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T05:15:00.000Z",
+        "action": "close",
+        "reasonCode": "take-profit",
+        "price": 98.87997528
+      },
+      {
+        "sequence": 4,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T06:15:00.000Z",
+        "action": "open",
+        "reasonCode": "pending-signal-filled",
+        "price": 99.0495
+      },
+      {
+        "sequence": 5,
+        "symbol": "BTCUSDT",
+        "candleAt": "2026-01-01T06:30:00.000Z",
+        "action": "close",
+        "reasonCode": "take-profit",
+        "price": 102.95997426
+      }
+    ],
+    "trades": [
+      {
+        "symbol": "BTCUSDT",
+        "side": "long",
+        "openedAt": "2026-01-01T04:00:00.000Z",
+        "closedAt": "2026-01-01T04:15:00.000Z",
+        "entryPrice": 102.55125,
+        "exitPrice": 106.59997335,
+        "quantity": 48.75610975,
+        "netPnl": 191.28156,
+        "fees": 6.11844,
+        "exitReason": "take-profit"
+      },
+      {
+        "symbol": "BTCUSDT",
+        "side": "short",
+        "openedAt": "2026-01-01T05:00:00.000Z",
+        "closedAt": "2026-01-01T05:15:00.000Z",
+        "entryPrice": 102.9485,
+        "exitPrice": 98.87997528,
+        "quantity": 49.49698908,
+        "netPnl": 195.38578252,
+        "fees": 5.9939411,
+        "exitReason": "take-profit"
+      },
+      {
+        "symbol": "BTCUSDT",
+        "side": "long",
+        "openedAt": "2026-01-01T06:15:00.000Z",
+        "closedAt": "2026-01-01T06:30:00.000Z",
+        "entryPrice": 99.0495,
+        "exitPrice": 102.95997426,
+        "quantity": 52.43170002,
+        "netPnl": 198.67779325,
+        "fees": 6.35502009,
+        "exitReason": "take-profit"
+      }
+    ],
+    "metrics": {
+      "trades": 3,
+      "wins": 3,
+      "losses": 0,
+      "winRatePercent": 100,
+      "netPnl": 585.34513577,
+      "returnPercent": 5.85345136,
+      "maxDrawdownPercent": 0,
+      "profitFactor": null,
+      "expectancy": 195.11504526,
+      "totalFees": 18.46740119,
+      "candleCount": 28,
+      "windows": 1,
+      "perSymbol": { "BTCUSDT": { "trades": 3, "netPnl": 585.34513577 } },
+      "equitySeries": [
+        { "observedAt": "2026-01-01T00:00:00.000Z", "equity": 10000 },
+        { "observedAt": "2026-01-01T06:45:00.000Z", "equity": 10585.34513577 }
+      ]
+    }
+  }
+}

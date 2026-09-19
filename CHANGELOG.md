@@ -4,6 +4,8 @@
 
 ### Added
 
+- Sectioned Settings workspace with sticky desktop navigation and distinct workspace, access,
+  trading infrastructure, data and system contexts without changing existing behavior.
 - Searchable shadcn-compatible strategy market multi-select backed by the current workspace
   Market Universe, with explicit handling of pairs removed from immutable older versions.
 - Server-side Market Universe validation for initial strategy configs and every new immutable

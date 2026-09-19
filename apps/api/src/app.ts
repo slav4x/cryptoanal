@@ -179,6 +179,7 @@ import {
   SettingsRepository,
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
+  StrategyMarketsUnavailableError,
   StrategyNotFoundError,
   StrategyRepository,
   StrategyStatusConflictError,
@@ -2656,6 +2657,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         const result = await strategyRepository.createWithInitialVersion({
           workspaceId: workspace.id,
           actorId: requireContext(request).actorId,
+          symbols: request.body.config.universe.symbols,
           name: request.body.name,
           description: request.body.description,
           configSchemaVersion: request.body.config.schemaVersion,
@@ -2681,6 +2683,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             409,
             "STRATEGY_NAME_CONFLICT",
             "Стратегия с таким названием уже существует",
+          );
+        }
+        if (error instanceof StrategyMarketsUnavailableError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_MARKETS_UNAVAILABLE",
+            `Пары отсутствуют в Market Universe: ${error.symbols.join(", ")}`,
           );
         }
         throw error;
@@ -2783,6 +2792,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           workspaceId: workspace.id,
           strategyId: request.params.strategyId,
           actorId: requireContext(request).actorId,
+          symbols: request.body.config.universe.symbols,
           configSchemaVersion: request.body.config.schemaVersion,
           config: request.body.config,
           configHash,
@@ -2808,6 +2818,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             409,
             "STRATEGY_CONFIG_UNCHANGED",
             "Конфигурация не отличается от последней версии",
+          );
+        }
+        if (error instanceof StrategyMarketsUnavailableError) {
+          throw new ApiError(
+            409,
+            "STRATEGY_MARKETS_UNAVAILABLE",
+            `Пары отсутствуют в Market Universe: ${error.symbols.join(", ")}`,
           );
         }
         if (error instanceof StrategyVersionNotAllowedError) {

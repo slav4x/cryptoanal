@@ -62,6 +62,7 @@ export {
 export {
   StrategyNameConflictError,
   StrategyConfigUnchangedError,
+  StrategyMarketsUnavailableError,
   StrategyNotFoundError,
   StrategyStatusConflictError,
   StrategyVersionNotAllowedError,

@@ -4,6 +4,7 @@ import { Prisma } from "./generated/prisma/client";
 export type CreateStrategyInput = {
   workspaceId: string;
   actorId: string;
+  symbols: string[];
   name: string;
   description: string | null;
   configSchemaVersion: number;
@@ -32,6 +33,12 @@ export type TransitionStrategyStatusInput = {
 export class StrategyNameConflictError extends Error {
   public constructor() {
     super("A strategy with this name already exists in the workspace");
+  }
+}
+
+export class StrategyMarketsUnavailableError extends Error {
+  public constructor(public readonly symbols: string[]) {
+    super(`Strategy markets are unavailable: ${symbols.join(", ")}`);
   }
 }
 
@@ -65,6 +72,7 @@ export class StrategyRepository {
   public async createWithInitialVersion(input: CreateStrategyInput) {
     try {
       return await this.prisma.$transaction(async (transaction) => {
+        await ensureStrategyMarketsAvailable(transaction, input.workspaceId, input.symbols);
         const strategy = await transaction.strategy.create({
           data: {
             workspaceId: input.workspaceId,
@@ -178,6 +186,7 @@ export class StrategyRepository {
       if (latestVersion.configHash === input.configHash) {
         throw new StrategyConfigUnchangedError();
       }
+      await ensureStrategyMarketsAvailable(transaction, input.workspaceId, input.symbols);
 
       const version = await transaction.strategyVersion.create({
         data: {
@@ -252,5 +261,21 @@ export class StrategyRepository {
 
       return strategy;
     });
+  }
+}
+
+async function ensureStrategyMarketsAvailable(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  symbols: string[],
+) {
+  const available = await transaction.workspaceMarket.findMany({
+    where: { workspaceId, symbol: { in: symbols } },
+    select: { symbol: true },
+  });
+  const availableSymbols = new Set(available.map(({ symbol }) => symbol));
+  const unavailableSymbols = symbols.filter((symbol) => !availableSymbols.has(symbol));
+  if (unavailableSymbols.length > 0) {
+    throw new StrategyMarketsUnavailableError(unavailableSymbols);
   }
 }

@@ -8,23 +8,24 @@
 рабочее сравнение — от 100 сделок на каждого отобранного кандидата. Совокупный PnL
 изолированных virtual accounts не считать результатом единого портфеля.
 
+Research integrity закрыт: добавлены versioned golden fixtures, независимый candle-event
+runtime replay, единый provenance метрик и явная disabled policy для funding.
+
 Оптимальная последовательность оставшейся разработки:
 
-1. **Research integrity:** golden datasets, equivalence runtime/backtest, единый
-   provenance метрик и окончательное решение по funding.
-2. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
+1. **Первый экспериментальный gate:** не менять конфигурации без ошибки корректности,
    накопить минимум 30 закрытых сделок на стратегию и отобрать 3–5 кандидатов.
-3. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
+2. **Production foundation:** постоянный сервер, CI, резервные копии, наблюдаемость и
    доставка критичных уведомлений. Длительный demo/runtime не должен зависеть от ноутбука.
-4. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
+3. **Portfolio risk:** распределение капитала, конфликтная политика, совокупные лимиты,
    daily loss limit и глобальный kill switch.
-5. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
+4. **Bybit Demo execution:** реальные demo orders/fills, reconciliation и восстановление
    после перезапуска. Live execution до отдельного operational review запрещён.
-6. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
+5. **Второй экспериментальный gate:** сопоставить dry-run fill model с demo fills и
    накопить минимум 100 сделок на каждого отобранного кандидата.
-7. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
+6. **Client hardening:** onboarding, empty states, quotas, lifecycle пользовательских
    данных, production key management и удаление development-доступа.
-8. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
+7. **Landing:** позиционирование, публичный track record, waitlist/signup и pricing —
    только после подтверждения предыдущих stop-gates.
 
 ## Этап 1 — Foundation
@@ -116,12 +117,12 @@
 ## Этап 4 — Validation Center
 
 - [x] Единая execution semantics runtime/backtest.
-- [ ] Выделить versioned golden datasets и ожидаемые решения, сделки, PnL и метрики для
+- [x] Выделить versioned golden datasets и ожидаемые решения, сделки, PnL и метрики для
       проверки equivalence runtime/backtest на одинаковой последовательности событий.
-- [ ] Зафиксировать funding policy: текущие конфликтующие funding-результаты считать
+- [x] Зафиксировать funding policy: текущие конфликтующие funding-результаты считать
       invalid/disabled до новой воспроизводимой валидации; исключить зависимость расчёта
       от wall clock.
-- [ ] Довести provenance всех метрик до единого контракта: environment, exchange,
+- [x] Довести provenance всех метрик до единого контракта: environment, exchange,
       source, instrument type, dataset/config/engine versions и freshness.
 - [x] Immutable dataset snapshots с content hash и повторным использованием исторических
       наборов без повторной загрузки.

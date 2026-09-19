@@ -266,6 +266,19 @@ workspace без повторной загрузки с биржи. Validation r
 ссылается на snapshot до запуска engine, поэтому после потери lease или перезапуска
 worker продолжает работу на том же наборе, а не загружает изменившуюся историю заново.
 
+Research integrity дополнительно проверяется versioned golden fixtures из `research/golden`.
+`pnpm research:verify` запускает независимый candle-event runtime replay и backtest на
+одной последовательности свечей, требует одинаковые сделки/PnL/fees и сверяет решения и
+метрики с golden snapshot. Граница проверки явная: realtime quote path потребует отдельного
+fixture с точным порядком котировок. Validation, Analytics и Experiments используют единый
+provenance-контракт с environment, exchange/source/instrument type, версиями dataset,
+config и engine, hashes, freshness и `asOf`.
+
+Funding пока отключён политикой `cryptoanal-funding@disabled-v1`: runtime пишет ноль,
+legacy-сделки с ненулевым funding исключаются из Analytics и Experiments. Включать funding
+можно только после воспроизводимого теста exchange timestamps, ставок, позиции и cash flow.
+Правила обновления fixtures описаны в [`research/README.md`](research/README.md).
+
 Каталог validation возвращает только лёгкие summary-метрики. Полные equity points,
 per-symbol breakdown и provenance загружаются отдельным detail-запросом. Все сделки run
 хранятся в `ValidationTrade` и выдаются страницами до 100 строк, поэтому размер списка
@@ -323,6 +336,7 @@ expectancy, поэтому в runtime не запущены и до walk-forward
 ## Проверки
 
 ```bash
+pnpm research:verify
 pnpm format:check
 pnpm lint
 pnpm typecheck

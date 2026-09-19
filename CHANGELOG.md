@@ -4,6 +4,12 @@
 
 ### Added
 
+- Versioned golden research fixtures with dataset hashes, exact decisions, trades, PnL,
+  fees and metrics, plus independent candle-event runtime/backtest equivalence checks.
+- One metrics provenance contract for Validation, Analytics and Experiments covering data,
+  configuration, engine, environment and freshness identity.
+- An explicit disabled funding policy that excludes unverified nonzero funding records from
+  analytical and experiment comparisons until exchange-time cash flows are reproducible.
 - Market data integrity gate with tracked Bybit status reconciliation, automatic runtime pause,
   health incidents and explicit unavailable-instrument states in Markets.
 - Runtime candle continuity validation with bounded REST backfill before signal calculation and

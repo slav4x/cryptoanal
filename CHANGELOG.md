@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Overview now shows the real open-position count per market and keeps “Пары в работе”
+  limited to markets with active positions instead of listing the entire Market Universe.
+
 ### Added
 
 - Durable Bybit public-trade journal, exclusive writer lease, per-position replay progress,

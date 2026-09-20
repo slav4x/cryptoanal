@@ -63,6 +63,14 @@ export default function OverviewPage() {
   }
 
   const { data, meta } = overviewQuery.data;
+  const openPositions = tradingQuery.data?.data.positions ?? [];
+  const openPositionCounts = new Map<string, number>();
+  for (const position of openPositions) {
+    openPositionCounts.set(position.symbol, (openPositionCounts.get(position.symbol) ?? 0) + 1);
+  }
+  const workingMarkets =
+    marketsQuery.data?.data.items.filter((market) => openPositionCounts.has(market.symbol)) ?? [];
+  const workingMarketsReady = marketsQuery.isSuccess && tradingQuery.isSuccess;
 
   return (
     <div className="space-y-[18px]">
@@ -112,18 +120,35 @@ export default function OverviewPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between border-b">
-          <CardTitle>Пары в работе</CardTitle>
-          <Badge variant="outline">{marketsQuery.data?.data.total ?? 0} пар</Badge>
+          <div>
+            <CardTitle>Пары в работе</CardTitle>
+            <CardDescription>Только пары с открытыми позициями.</CardDescription>
+          </div>
+          <Badge variant="outline">{workingMarketsReady ? workingMarkets.length : "—"}</Badge>
         </CardHeader>
         <CardContent className="px-0 pb-0">
-          {marketsQuery.isPending ? (
+          {marketsQuery.isPending || tradingQuery.isPending ? (
             <div className="space-y-1 p-4">
               {Array.from({ length: 5 }, (_, index) => (
                 <Skeleton key={index} className="h-10" />
               ))}
             </div>
           ) : null}
-          {marketsQuery.isSuccess ? (
+          {marketsQuery.isError || tradingQuery.isError ? <CompactUnavailable /> : null}
+          {workingMarketsReady && workingMarkets.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                title="Открытых позиций нет"
+                description="Пары появятся здесь после открытия позиции торговой стратегией. Полный список инструментов остаётся в разделе «Рынок»."
+                action={
+                  <Button asChild variant="outline" size="sm">
+                    <Link to="/markets">Открыть рынок</Link>
+                  </Button>
+                }
+              />
+            </div>
+          ) : null}
+          {workingMarketsReady && workingMarkets.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[680px] border-collapse text-[13px]">
                 <thead>
@@ -149,7 +174,7 @@ export default function OverviewPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {marketsQuery.data.data.items.map((market) => {
+                  {workingMarkets.map((market) => {
                     const change = Number(market.change24hPercent ?? 0);
                     return (
                       <tr
@@ -157,7 +182,9 @@ export default function OverviewPage() {
                         className="border-t border-row-border hover:bg-row-hover"
                       >
                         <td className="px-4 py-2.5 font-mono font-medium text-foreground">
-                          {market.symbol}
+                          <Link to={`/markets/${market.symbol}`} className="hover:text-white">
+                            {market.symbol}
+                          </Link>
                         </td>
                         <td className="px-3 py-2.5 text-xs text-muted-foreground">
                           {market.regime === "unknown" ? "Не определён" : market.regime}
@@ -176,7 +203,9 @@ export default function OverviewPage() {
                         >
                           {formatPercent(market.change24hPercent)}
                         </td>
-                        <td className="px-3 py-2.5 text-right font-mono text-stale">0</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-secondary-foreground">
+                          {openPositionCounts.get(market.symbol)}
+                        </td>
                         <td className="px-4 py-2.5 text-right">
                           <span
                             className={

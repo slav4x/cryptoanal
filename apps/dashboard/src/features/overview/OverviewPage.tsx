@@ -9,7 +9,6 @@ import {
   CardTitle,
   EmptyState,
   ErrorState,
-  MetricCard,
   PageHeader,
   Skeleton,
   cn,
@@ -84,39 +83,49 @@ export default function OverviewPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard
-          label="Капитал"
-          value={formatMetricMoney(data.account?.equity ?? null)}
-          hint={
-            data.account
-              ? `Snapshot ${new Date(data.account.observedAt).toLocaleTimeString("ru-RU")}`
-              : "Ожидается account snapshot"
-          }
-        />
-        <MetricCard
-          label="PnL сегодня"
-          value={formatMetricMoney(data.dayPnl)}
-          hint="UTC, закрытые сделки"
-          tone={metricTone(data.dayPnl)}
-        />
-        <MetricCard
-          label="Total PnL"
-          value={formatMetricMoney(data.totalPnl)}
-          tone={metricTone(data.totalPnl)}
-          hint="Все закрытые сделки"
-        />
-        <MetricCard
-          label="Экспозиция"
-          value={formatMetricMoney(data.openExposure)}
-          hint={`${data.openPositions} открытых позиций`}
-        />
-        <MetricCard
-          label="Активные стратегии"
-          value={String(data.activeStrategies)}
-          hint="Deployments и paused"
-        />
-      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="grid grid-cols-2 xl:grid-cols-[minmax(270px,1.35fr)_repeat(4,minmax(0,1fr))]">
+            <div className="col-span-2 min-w-0 bg-muted/20 px-5 py-4 xl:col-span-1">
+              <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                Капитал
+              </p>
+              <p className="mt-2 truncate whitespace-nowrap font-mono text-[26px] font-medium leading-none tabular-nums text-foreground">
+                {formatMetricMoney(data.account?.equity ?? null)}
+              </p>
+              <p className="mt-2 truncate text-xs text-stale">
+                {data.account
+                  ? `Snapshot ${new Date(data.account.observedAt).toLocaleTimeString("ru-RU")}`
+                  : "Ожидается account snapshot"}
+              </p>
+            </div>
+            <OverviewMetric
+              label="PnL сегодня"
+              value={formatMetricMoney(data.dayPnl)}
+              hint="UTC, закрытые сделки"
+              tone={metricTone(data.dayPnl)}
+            />
+            <OverviewMetric
+              label="Total PnL"
+              value={formatMetricMoney(data.totalPnl)}
+              hint="Все закрытые сделки"
+              tone={metricTone(data.totalPnl)}
+              className="border-l"
+            />
+            <OverviewMetric
+              label="Экспозиция"
+              value={formatMetricMoney(data.openExposure)}
+              hint={`${data.openPositions} открытых позиций`}
+            />
+            <OverviewMetric
+              label="Активные стратегии"
+              value={String(data.activeStrategies)}
+              hint="Running и paused"
+              className="border-l"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex-row items-center justify-between border-b">
@@ -465,6 +474,47 @@ function EquityDelta({
       </p>
       <p className="mt-1 text-xs text-stale">
         {percent === null ? "—" : formatPercent(String(percent))} за период
+      </p>
+    </div>
+  );
+}
+
+function OverviewMetric({
+  label,
+  value,
+  hint,
+  tone = "neutral",
+  className,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone?: "neutral" | "profit" | "loss";
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "min-w-0 border-t border-row-border px-4 py-4 xl:border-l xl:border-t-0",
+        className,
+      )}
+    >
+      <p className="truncate text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className={cn(
+          "mt-2 truncate whitespace-nowrap font-mono text-[17px] font-medium leading-none tabular-nums 2xl:text-[19px]",
+          tone === "profit" && "text-profit",
+          tone === "loss" && "text-loss",
+          tone === "neutral" && "text-foreground",
+        )}
+        title={value}
+      >
+        {value}
+      </p>
+      <p className="mt-2 truncate text-[11px] text-stale" title={hint}>
+        {hint}
       </p>
     </div>
   );

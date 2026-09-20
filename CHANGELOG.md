@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Overview KPI cards are consolidated into one hierarchical summary panel with a primary
-  capital value and compact single-line secondary metrics.
+- Overview KPI cards are consolidated into one equal-weight summary panel with compact
+  single-line values.
 - Overview now shows the real open-position count per market and keeps “Пары в работе”
   limited to markets with active positions instead of listing the entire Market Universe.
 

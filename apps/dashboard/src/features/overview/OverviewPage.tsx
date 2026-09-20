@@ -85,20 +85,17 @@ export default function OverviewPage() {
 
       <Card>
         <CardContent className="p-0">
-          <div className="grid grid-cols-2 xl:grid-cols-[minmax(270px,1.35fr)_repeat(4,minmax(0,1fr))]">
-            <div className="col-span-2 min-w-0 bg-muted/20 px-5 py-4 xl:col-span-1">
-              <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                Капитал
-              </p>
-              <p className="mt-2 truncate whitespace-nowrap font-mono text-[26px] font-medium leading-none tabular-nums text-foreground">
-                {formatMetricMoney(data.account?.equity ?? null)}
-              </p>
-              <p className="mt-2 truncate text-xs text-stale">
-                {data.account
+          <div className="grid grid-cols-2 xl:grid-cols-5">
+            <OverviewMetric
+              label="Капитал"
+              value={formatMetricMoney(data.account?.equity ?? null)}
+              hint={
+                data.account
                   ? `Snapshot ${new Date(data.account.observedAt).toLocaleTimeString("ru-RU")}`
-                  : "Ожидается account snapshot"}
-              </p>
-            </div>
+                  : "Ожидается account snapshot"
+              }
+              className="col-span-2 xl:col-span-1 xl:border-l-0"
+            />
             <OverviewMetric
               label="PnL сегодня"
               value={formatMetricMoney(data.dayPnl)}

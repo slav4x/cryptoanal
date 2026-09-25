@@ -18,6 +18,7 @@
     "research:verify": "tsx scripts/verify-research-integrity.ts",
     "strategies:import-shared": "tsx scripts/import-shared-strategies.ts",
     "strategies:launch-shared": "tsx scripts/launch-shared-strategies.ts",
+    "validations:queue-annual": "tsx scripts/queue-annual-validations.ts",
     "runtime:verify": "tsc --project tests/tsconfig.json && tsx --test tests/runtime*.test.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",

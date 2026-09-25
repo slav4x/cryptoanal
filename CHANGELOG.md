@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Backtest можно запускать для действующей стратегии без смены её статуса и остановки dry-run deployment.
 - Overview KPI cards are consolidated into one equal-weight summary panel with compact
   single-line values.
 - Overview now shows the real open-position count per market and keeps “Пары в работе”
@@ -11,6 +12,7 @@
 
 ### Added
 
+- Идемпотентная постановка годовых backtest всех запущенных стратегий в штатную очередь «Проверок».
 - Reproducible full-year research backtest of all running strategies, with a documented
   34-strategy comparison and dataset provenance.
 - Versioned shared research catalog with idempotent import, optional local backtest queueing

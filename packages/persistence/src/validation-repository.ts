@@ -606,16 +606,18 @@ export class ValidationRepository {
       }
 
       const lockedStrategies = await transaction.$queryRaw<
-        Array<{ id: string; status: string }>
+        Array<{ id: string; status: string; activeVersionId: string | null }>
       >(Prisma.sql`
-        SELECT "id", "status"
+        SELECT "id", "status", "activeVersionId"
         FROM "Strategy"
         WHERE "id" = ${input.strategyId} AND "workspaceId" = ${input.workspaceId}
         FOR UPDATE
       `);
       const strategy = lockedStrategies[0];
       if (!strategy) throw new ValidationStrategyNotFoundError();
-      if (strategy.status !== "DRAFT") throw new ValidationNotEligibleError();
+      if (strategy.status === "VALIDATING" || strategy.status === "ARCHIVED") {
+        throw new ValidationNotEligibleError();
+      }
 
       const latestVersion = await transaction.strategyVersion.findFirst({
         where: { strategyId: input.strategyId, workspaceId: input.workspaceId },
@@ -626,6 +628,9 @@ export class ValidationRepository {
         throw new ValidationVersionMismatchError();
       }
       if (latestVersion.configHash !== input.configHash) {
+        throw new ValidationVersionMismatchError();
+      }
+      if (strategy.status !== "DRAFT" && strategy.activeVersionId !== input.strategyVersionId) {
         throw new ValidationVersionMismatchError();
       }
 
@@ -664,10 +669,12 @@ export class ValidationRepository {
         },
         select: { id: true, status: true, input: true },
       });
-      await transaction.strategy.update({
-        where: { id: input.strategyId },
-        data: { status: "VALIDATING", updatedByActorId: input.actorId },
-      });
+      if (strategy.status === "DRAFT") {
+        await transaction.strategy.update({
+          where: { id: input.strategyId },
+          data: { status: "VALIDATING", updatedByActorId: input.actorId },
+        });
+      }
       await transaction.auditEvent.create({
         data: {
           workspaceId: input.workspaceId,

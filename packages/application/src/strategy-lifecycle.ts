@@ -56,11 +56,10 @@ export function evaluateStrategyLifecycle(state: StrategyLifecycleState) {
   const validationReasons: string[] = [];
 
   if (!state.latestVersionId) validationReasons.push("У стратегии нет версии конфигурации");
-  if (state.status !== "draft") {
-    validationReasons.push("Для новой проверки стратегия должна быть в статусе «Черновик»");
+  if (state.status === "validating" || state.status === "archived") {
+    validationReasons.push("Проверка недоступна для текущего статуса стратегии");
   }
   if (activeValidation) validationReasons.push("Проверка стратегии уже выполняется");
-  if (state.hasActiveDeployment) validationReasons.push("Сначала остановите активный deployment");
 
   const candidateTargets = strategyStatusTransitions[state.status].filter(
     (status): status is StrategyManualTransition =>

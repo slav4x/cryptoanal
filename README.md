@@ -99,6 +99,16 @@ dry-run аккаунтах:
 pnpm strategies:launch-shared --workspace development
 ```
 
+Годовой исследовательский backtest всех запущенных стратегий за 01.09.2025–31.08.2026:
+
+```bash
+pnpm exec tsx scripts/annual-backtest.ts
+```
+
+Скрипт выводит JSON; [сводка по 34 стратегиям](docs/annual-backtest-2025-2026.md) содержит
+метод, все результаты и хеши исходных рядов. Запущенные dry-run стратегии не меняются.
+При необходимости host-проxy задаётся через `ANNUAL_BACKTEST_PROXY_URL`.
+
 Адреса:
 
 - dashboard: `http://localhost:15173`;

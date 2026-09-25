@@ -11,6 +11,8 @@
 
 ### Added
 
+- Reproducible full-year research backtest of all running strategies, with a documented
+  34-strategy comparison and dataset provenance.
 - Versioned shared research catalog with idempotent import, optional local backtest queueing
   and isolated dry-run launch commands.
 

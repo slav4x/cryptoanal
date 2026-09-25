@@ -30,6 +30,12 @@ export { AnalyticsRepository, type AnalyticsTradeFilters } from "./analytics-rep
 export { ExperimentRepository } from "./experiment-repository";
 export { DashboardRepository } from "./dashboard-repository";
 export {
+  DecisionRepository,
+  ensureDecisionContextSnapshot,
+  type DecisionContextSnapshotPersistenceInput,
+  type PersistShadowDecisionInput,
+} from "./decision-repository";
+export {
   JournalCursorNotFoundError,
   JournalRepository,
   JournalTargetNotFoundError,

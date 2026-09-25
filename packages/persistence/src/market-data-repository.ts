@@ -72,4 +72,38 @@ export class MarketDataRepository {
           EXCLUDED."volume", EXCLUDED."turnover", EXCLUDED."isClosed")
     `);
   }
+
+  public async listClosedCandleSeries(input: {
+    symbol: string;
+    intervals: Array<{ interval: string; intervalMs: number }>;
+    availableAt: Date;
+    limit?: number;
+  }) {
+    const limit = Math.min(200, Math.max(1, input.limit ?? 64));
+    return Promise.all(
+      input.intervals.map(async ({ interval, intervalMs }) => {
+        const latestOpenTime = new Date(input.availableAt.getTime() - intervalMs);
+        const candles = await this.prisma.marketCandle.findMany({
+          where: {
+            symbol: input.symbol,
+            interval,
+            isClosed: true,
+            openTime: { lte: latestOpenTime },
+          },
+          orderBy: { openTime: "desc" },
+          take: limit,
+          select: {
+            symbol: true,
+            openTime: true,
+            open: true,
+            high: true,
+            low: true,
+            close: true,
+            turnover: true,
+          },
+        });
+        return { interval, intervalMs, candles: candles.reverse() };
+      }),
+    );
+  }
 }

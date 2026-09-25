@@ -1,4 +1,8 @@
 import {
+  buildDecisionMarketFrame,
+  createDecisionContextSnapshot,
+  decisionContextSchemaVersion,
+  decisionFeatureSetVersion,
   enrichExecutionCandles,
   evaluateHealth,
   settleExecutionPosition,
@@ -19,6 +23,7 @@ import {
   type ExecutionPosition,
   type ExecutionQuote,
   type ExecutionSettlement,
+  type DecisionCandidate,
   type PendingExecutionSignal,
   type ValidationCandle,
   validationDatasetSource,
@@ -41,6 +46,7 @@ import {
 import {
   AccountSnapshotRepository,
   CredentialCipher,
+  DecisionRepository,
   ExchangeConnectionRepository,
   ExchangeConnectionVerificationConflictError,
   ExchangeConnectionVerificationLeaseLostError,
@@ -88,6 +94,7 @@ const runtimeRiskPolicy = {
 };
 const runtimeRepository = new RuntimeRepository(prisma, runtimeRiskPolicy);
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
+const decisionRepository = new DecisionRepository(prisma);
 const priceEventRepository = new PriceEventRepository(prisma);
 const healthRepository = new HealthRepository(prisma);
 const workspaceRepository = new WorkspaceRepository(prisma);
@@ -358,6 +365,16 @@ async function listRequiredMarketSeries() {
         interval,
         limit: Math.max(current?.limit ?? 0, limit),
       });
+      for (const contextTimeframe of decisionContextTimeframes) {
+        const contextInterval = bybitIntervals[contextTimeframe];
+        const contextKey = `${symbol}:${contextInterval}`;
+        const currentContext = requirements.get(contextKey);
+        requirements.set(contextKey, {
+          symbol,
+          interval: contextInterval,
+          limit: Math.max(currentContext?.limit ?? 0, decisionContextAnalysisCandleLimit),
+        });
+      }
     }
   }
   return [...requirements.values()];
@@ -1119,18 +1136,16 @@ async function processRuntimeTarget(
       if (state.cursor?.lastEvaluatedAt && state.cursor.lastEvaluatedAt >= latest.openTime)
         continue;
 
-      const candles = enrichExecutionCandles(
-        state.candles.map((candle) => ({
-          symbol: candle.symbol,
-          openTime: candle.openTime,
-          open: candle.open.toNumber(),
-          high: candle.high.toNumber(),
-          low: candle.low.toNumber(),
-          close: candle.close.toNumber(),
-          turnover: candle.turnover.toNumber(),
-        })),
-        strategyConfig,
-      );
+      const executionCandles = state.candles.map((candle) => ({
+        symbol: candle.symbol,
+        openTime: candle.openTime,
+        open: candle.open.toNumber(),
+        high: candle.high.toNumber(),
+        low: candle.low.toNumber(),
+        close: candle.close.toNumber(),
+        turnover: candle.turnover.toNumber(),
+      }));
+      const candles = enrichExecutionCandles(executionCandles, strategyConfig);
       const candle = candles.at(-1)!;
       const candleClosedAt = new Date(candle.openTime.getTime() + intervalMs);
       const existingPosition = state.position ? deserializeExecutionPosition(state.position) : null;
@@ -1150,11 +1165,17 @@ async function processRuntimeTarget(
         .reduce((sum, trade) => sum + trade.netPnl.toNumber(), 0);
       const lossLimit =
         config.DRY_RUN_INITIAL_BALANCE * (strategyConfig.risk.maxDailyLossPercent / 100);
+      const riskAssessment = await runtimeRiskRepository.assess(
+        target.workspaceId,
+        target.exchangeAccountId,
+        target.strategyVersion.config,
+      );
       const entriesAllowed =
         target.status === "RUNNING" &&
         target.exchangeConnection?.status === "ACTIVE" &&
         target.exchangeConnection.revokedAt === null &&
-        dailyPnl > -lossLimit;
+        dailyPnl > -lossLimit &&
+        !riskAssessment.reason;
 
       let positionAction: Parameters<RuntimeRepository["persistCycle"]>[0]["positionAction"] = {
         kind: "none",
@@ -1171,6 +1192,7 @@ async function processRuntimeTarget(
       let pendingSignalAfter: RuntimePendingSignal | null = null;
       let entryPriceEventId: bigint | undefined;
       let positionRemainsOpen = existingPosition !== null;
+      let signalCandidate: PendingExecutionSignal | null = null;
 
       if (existingPosition && state.position) {
         if (!state.position.managedThroughAt || state.position.managedThroughAt < candleClosedAt)
@@ -1225,7 +1247,15 @@ async function processRuntimeTarget(
 
       if (!positionRemainsOpen && target.status === "RUNNING") {
         const signal = getExecutionSignal(candle, strategyConfig);
-        if (signal && entriesAllowed) {
+        signalCandidate = signal;
+        if (signal && !entriesAllowed && positionAction.kind === "none") {
+          decision = {
+            action: "SKIP",
+            reasonCode: riskAssessment.reason ?? "ENTRY_GATE_CLOSED",
+            summary: "Торговый сигнал отклонён до исполнения общим risk gate",
+            factors: runtimeFactors(candle, dailyPnl, equity),
+          };
+        } else if (signal) {
           const quote = getFreshQuote(symbol);
           const candidate =
             quote &&
@@ -1240,17 +1270,12 @@ async function processRuntimeTarget(
                   strategyConfig,
                 )
               : null;
-          const risk = await runtimeRiskRepository.assess(
-            target.workspaceId,
-            target.exchangeAccountId,
-            target.strategyVersion.config,
-          );
           const opened =
-            candidate && !risk.reason
+            candidate && !riskAssessment.reason
               ? limitRuntimePositionRisk(
                   candidate,
-                  risk.equity,
-                  Math.max(0, risk.maximumExposure - risk.exposure),
+                  riskAssessment.equity,
+                  Math.max(0, riskAssessment.maximumExposure - riskAssessment.exposure),
                   strategyConfig,
                 )
               : null;
@@ -1292,6 +1317,104 @@ async function processRuntimeTarget(
         }
       }
 
+      const decisionAt = new Date();
+      const [higherSeries, recentMemory] = await Promise.all([
+        marketDataRepository.listClosedCandleSeries({
+          symbol,
+          intervals: decisionContextTimeframes.map((timeframe) => ({
+            interval: bybitIntervals[timeframe],
+            intervalMs: timeframeMinutes[timeframe] * 60_000,
+          })),
+          availableAt: decisionAt,
+          limit: decisionContextAnalysisCandleLimit,
+        }),
+        decisionRepository.listMemory({
+          workspaceId: target.workspaceId,
+          executionRunId: executionRun.id,
+          symbol,
+        }),
+      ]);
+      const primaryFrame = buildDecisionMarketFrame({
+        candles: executionCandles,
+        timeframe: strategyConfig.universe.timeframe,
+        intervalMs,
+        availableAt: decisionAt,
+        maxCandles: decisionContextStoredCandleLimit,
+      });
+      const contextSnapshot = createDecisionContextSnapshot({
+        workspaceId: target.workspaceId,
+        executionRunId: executionRun.id,
+        strategyVersionId: target.strategyVersion.id,
+        strategyConfigHash: target.strategyVersion.configHash,
+        engineVersion: executionRun.engineVersion,
+        symbol,
+        availableAt: decisionAt.toISOString(),
+        primaryFrame,
+        higherTimeframes: higherSeries.map((series) =>
+          buildDecisionMarketFrame({
+            candles: series.candles.map((item) => ({
+              symbol: item.symbol,
+              openTime: item.openTime,
+              open: item.open.toNumber(),
+              high: item.high.toNumber(),
+              low: item.low.toNumber(),
+              close: item.close.toNumber(),
+              turnover: item.turnover.toNumber(),
+            })),
+            timeframe: timeframeForBybitInterval(series.interval),
+            intervalMs: series.intervalMs,
+            availableAt: decisionAt,
+            maxCandles: decisionContextStoredCandleLimit,
+          }),
+        ),
+        account: {
+          equity: riskAssessment.equity,
+          availableBalance: Math.max(0, riskAssessment.equity - riskAssessment.exposure),
+          realizedPnlToday: riskAssessment.dailyPnl,
+          openExposure: riskAssessment.exposure,
+        },
+        position: state.position
+          ? {
+              id: state.position.id,
+              side: state.position.side === "BUY" ? "long" : "short",
+              openedAt: state.position.openedAt.toISOString(),
+              entryPrice: state.position.entryPrice.toNumber(),
+              markPrice: state.position.markPrice?.toNumber() ?? null,
+              quantity: state.position.quantity.toNumber(),
+              stopPrice: state.position.stopPrice.toNumber(),
+              takePrice: state.position.takePrice.toNumber(),
+              trailingPrice: state.position.trailingPrice?.toNumber() ?? null,
+              unrealizedPnl: state.position.unrealizedPnl.toNumber(),
+            }
+          : null,
+        risk: {
+          entriesAllowed,
+          maxOpenPositions: riskAssessment.maximumPositions,
+          maxDailyLossPercent: strategyConfig.risk.maxDailyLossPercent,
+          riskPerTradePercent: strategyConfig.risk.riskPerTradePercent,
+          maximumAccountExposure: riskAssessment.maximumExposure,
+          remainingAccountExposure: Math.max(
+            0,
+            riskAssessment.maximumExposure - riskAssessment.exposure,
+          ),
+        },
+        memory: recentMemory.map((item) => ({
+          decisionId: item.id,
+          decidedAt: item.decidedAt.toISOString(),
+          action: item.action,
+          reasonCode: item.reasonCode,
+          summary: item.summary,
+          providerId: item.providerId,
+          mode: item.mode === "SHADOW" ? "shadow" : "execution",
+        })),
+      });
+      const candidate = ruleBasedDecisionCandidate({
+        signal: signalCandidate,
+        decision,
+        strategyConfig,
+        generatedAt: decisionAt,
+        validUntil: new Date(decisionAt.getTime() + intervalMs),
+      });
       const result = await runtimeRepository.persistCycle({
         workspaceId: target.workspaceId,
         deploymentId: target.id,
@@ -1307,6 +1430,19 @@ async function processRuntimeTarget(
         pendingSignal: pendingSignalAfter,
         maxOpenPositions: strategyConfig.risk.maxOpenPositions,
         entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
+        providerVersion: executionRun.engineVersion,
+        contextSnapshot: {
+          workspaceId: target.workspaceId,
+          executionRunId: executionRun.id,
+          strategyVersionId: target.strategyVersion.id,
+          symbol,
+          schemaVersion: decisionContextSchemaVersion,
+          featureSetVersion: decisionFeatureSetVersion,
+          contentHash: contextSnapshot.contentHash,
+          availableAt: decisionAt,
+          context: contextSnapshot.snapshot,
+        },
+        candidate,
         decision,
         positionAction,
       });
@@ -1863,6 +1999,41 @@ function runtimeFactors(
   };
 }
 
+function ruleBasedDecisionCandidate(input: {
+  signal: PendingExecutionSignal | null;
+  decision: Parameters<RuntimeRepository["persistCycle"]>[0]["decision"];
+  strategyConfig: ReturnType<typeof strategyConfigSchema.parse>;
+  generatedAt: Date;
+  validUntil: Date;
+}): DecisionCandidate {
+  const side = input.signal?.side ?? null;
+  return {
+    action: side === "long" ? "BUY" : side === "short" ? "SELL" : "HOLD",
+    side,
+    tradable: side !== null,
+    confidence: side === null ? 0 : 1,
+    riskBudgetPercent: side === null ? null : input.strategyConfig.risk.riskPerTradePercent,
+    stopLossPercent: side === null ? null : input.strategyConfig.exit.stopLossPercent,
+    takeProfitPercent: side === null ? null : input.strategyConfig.exit.takeProfitPercent,
+    horizonCandles: null,
+    reasonCodes: [input.decision.reasonCode.toUpperCase().replaceAll(/[^A-Z0-9_:-]/g, "_")],
+    summary: input.decision.summary,
+    generatedAt: input.generatedAt.toISOString(),
+    validUntil: input.validUntil.toISOString(),
+  };
+}
+
+function timeframeForBybitInterval(interval: string): keyof typeof timeframeMinutes {
+  const timeframe = Object.entries(bybitIntervals).find(([, value]) => value === interval)?.[0];
+  if (!timeframe || !(timeframe in timeframeMinutes)) {
+    throw new RuntimeWorkerError(
+      "RUNTIME_CONTEXT_TIMEFRAME_UNKNOWN",
+      `Неизвестный interval decision context: ${interval}`,
+    );
+  }
+  return timeframe as keyof typeof timeframeMinutes;
+}
+
 function serializeMarketRegime(regime: ExecutionPosition["entryRegime"]) {
   return regime === "bull"
     ? ("BULL" as const)
@@ -1967,6 +2138,9 @@ const validationLeaseMs = 5 * 60_000;
 const maximumDatasetCandles = 250_000;
 const persistenceBatchSize = 2_000;
 const timeframeMinutes = { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 } as const;
+const decisionContextTimeframes = ["1h", "4h"] as const;
+const decisionContextAnalysisCandleLimit = 80;
+const decisionContextStoredCandleLimit = 32;
 const bybitIntervals: Record<keyof typeof timeframeMinutes, string> = {
   "5m": "5",
   "15m": "15",

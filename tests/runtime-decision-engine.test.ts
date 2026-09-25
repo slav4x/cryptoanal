@@ -4,7 +4,10 @@ import { test } from "node:test";
 import {
   buildDecisionMarketFrame,
   createDecisionContextSnapshot,
+  evaluateRecordedDecisionCandidate,
+  getDecisionCadenceWindow,
   runShadowDecisionProviders,
+  summarizeRecordedDecisionReplays,
   type DecisionCandidate,
   type DecisionProvider,
   type ExecutionCandle,
@@ -141,4 +144,73 @@ test("shadow provider timeouts cannot become executable candidates", async () =>
   assert.equal(result?.status, "timeout");
   assert.equal(result?.candidate, null);
   assert.equal(result?.rejectionCode, "PROVIDER_TIMEOUT");
+});
+
+test("decision cadence is independent from realtime protection", () => {
+  const window = getDecisionCadenceWindow({
+    availableAt: new Date("2026-01-01T12:05:00.000Z"),
+    lastEvaluatedAt: new Date("2026-01-01T12:04:00.000Z"),
+    cadence: { intervalMs: 60_000, deadlineMs: 20_000 },
+  });
+  assert.equal(window.due, true);
+  assert.equal(window.validUntil.toISOString(), "2026-01-01T12:05:20.000Z");
+});
+
+test("recorded candidates replay without calling the provider again", () => {
+  const context = snapshot();
+  const candidate: DecisionCandidate = {
+    action: "BUY",
+    side: "long",
+    tradable: true,
+    confidence: 0.7,
+    riskBudgetPercent: 0.5,
+    stopLossPercent: 1,
+    takeProfitPercent: 2,
+    horizonCandles: 3,
+    reasonCodes: ["TEST_REPLAY"],
+    summary: "Replay candidate",
+    generatedAt: context.snapshot.availableAt,
+    validUntil: "2026-01-01T01:21:00.000Z",
+  };
+  const replayCandles: ExecutionCandle[] = [
+    {
+      symbol: "BTCUSDT",
+      openTime: new Date("2026-01-01T01:20:00.000Z"),
+      open: 100,
+      high: 101,
+      low: 99.5,
+      close: 100.5,
+      turnover: 1_000,
+    },
+    {
+      symbol: "BTCUSDT",
+      openTime: new Date("2026-01-01T01:21:00.000Z"),
+      open: 100.5,
+      high: 102.5,
+      low: 100,
+      close: 102,
+      turnover: 1_100,
+    },
+  ];
+
+  const result = evaluateRecordedDecisionCandidate({
+    candidate,
+    availableAt: new Date(context.snapshot.availableAt),
+    asOf: new Date("2026-01-01T01:22:00.000Z"),
+    intervalMs: 60_000,
+    candles: replayCandles,
+    roundTripCostBps: 12,
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.exitReason, "take-profit");
+  assert.equal(result.grossReturnPercent, 2);
+  assert.equal(result.netReturnPercent, 1.88);
+
+  const summary = summarizeRecordedDecisionReplays([
+    result,
+    { ...result, grossReturnPercent: -1, netReturnPercent: -1.12 },
+  ]);
+  assert.equal(summary.completedTrades, 2);
+  assert.equal(summary.winRatePercent, 50);
+  assert.ok(summary.maximumDrawdownPercent > 1);
 });

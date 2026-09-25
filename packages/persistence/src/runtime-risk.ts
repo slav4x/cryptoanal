@@ -197,6 +197,18 @@ export async function checkRuntimeEntry(
     fee < 0
   )
     return "INVALID_ENTRY_SIZE";
+  const conflictingDirection = await tx.position.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      environment: "DRY_RUN",
+      status: "OPEN",
+      symbol: input.position.symbol,
+      side: input.position.side === "BUY" ? "SELL" : "BUY",
+      executionRun: { deployment: { exchangeAccountId: input.exchangeAccountId } },
+    },
+    select: { id: true },
+  });
+  if (conflictingDirection) return "PORTFOLIO_DIRECTION_CONFLICT";
   if (risk.positions >= risk.maximumPositions) return "MAX_OPEN_POSITIONS";
   if (risk.exposure + quantity * entry + fee > risk.maximumExposure + 1e-8)
     return "MAX_ACCOUNT_EXPOSURE";

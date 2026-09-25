@@ -1,6 +1,10 @@
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 import {
+  ensureDecisionContextSnapshot,
+  type DecisionContextSnapshotPersistenceInput,
+} from "./decision-repository";
+import {
   checkRuntimeEntry,
   defaultRuntimeRiskPolicy,
   lockRuntimeRisk,
@@ -74,6 +78,9 @@ export type PersistRuntimeCycleInput = {
   pendingSignal: Prisma.InputJsonValue | null;
   maxOpenPositions: number;
   entryOrderType: "MARKET" | "LIMIT";
+  contextSnapshot: DecisionContextSnapshotPersistenceInput;
+  candidate: Prisma.InputJsonValue;
+  providerVersion: string;
   decision: {
     action: "OPEN" | "CLOSE" | "HOLD" | "SKIP";
     reasonCode: string;
@@ -205,6 +212,8 @@ export class RuntimeRepository {
           bestPrice: true,
           entryFee: true,
           entrySlippage: true,
+          markPrice: true,
+          unrealizedPnl: true,
           entryRegime: true,
           entrySession: true,
         },
@@ -891,21 +900,32 @@ export class RuntimeRepository {
         decisionTradeId = trade.id;
       }
 
+      const contextSnapshot = await ensureDecisionContextSnapshot(
+        transaction,
+        input.contextSnapshot,
+      );
       const persistedDecision = await transaction.decision.create({
         data: {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
+          contextSnapshotId: contextSnapshot.id,
           positionId: decisionPositionId,
           tradeId: decisionTradeId,
           symbol: input.symbol,
           action: decision.action,
+          mode: "EXECUTION",
+          providerKind: "RULE_BASED",
+          providerId: "cryptoanal-rule-engine",
+          providerVersion: input.providerVersion,
           reasonCode: decision.reasonCode,
           summary: decision.summary,
           factors: decision.factors,
-          marketSnapshotRef: `market-candle:${input.symbol}:${input.interval}:${input.candleAt.toISOString()}`,
+          candidate: input.candidate,
+          verdictReasonCode: decision.reasonCode,
+          marketSnapshotRef: `decision-context:${contextSnapshot.contentHash}`,
           correlationId,
-          decidedAt: input.candleAt,
+          decidedAt: input.contextSnapshot.availableAt,
         },
         select: { id: true },
       });

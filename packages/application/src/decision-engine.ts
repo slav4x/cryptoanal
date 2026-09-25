@@ -146,6 +146,41 @@ export type ShadowDecisionResult = {
   latencyMs: number;
 };
 
+export type DecisionCadence = {
+  intervalMs: number;
+  deadlineMs: number;
+};
+
+export type RecordedDecisionReplayResult = {
+  status: "no-trade" | "completed" | "insufficient-data";
+  side: "long" | "short" | null;
+  entryPrice: number | null;
+  exitPrice: number | null;
+  exitReason: "stop-loss" | "take-profit" | "horizon" | null;
+  candlesObserved: number;
+  grossReturnPercent: number | null;
+  netReturnPercent: number | null;
+  maximumFavorableExcursionPercent: number | null;
+  maximumAdverseExcursionPercent: number | null;
+};
+
+export type RecordedDecisionReplaySummary = {
+  candidates: number;
+  completedTrades: number;
+  noTrades: number;
+  insufficientData: number;
+  coveragePercent: number;
+  wins: number;
+  losses: number;
+  winRatePercent: number | null;
+  grossExpectancyPercent: number | null;
+  netExpectancyPercent: number | null;
+  cumulativeNetReturnPercent: number;
+  maximumDrawdownPercent: number;
+  averageMfePercent: number | null;
+  averageMaePercent: number | null;
+};
+
 export function buildDecisionMarketFrame(input: {
   candles: ExecutionCandle[];
   timeframe: string;
@@ -155,23 +190,23 @@ export function buildDecisionMarketFrame(input: {
 }): DecisionMarketFrame {
   const availableAtMs = input.availableAt.getTime();
   const maxCandles = input.maxCandles ?? 48;
-  const candles = [...input.candles]
+  const history = [...input.candles]
     .filter(
       (candle) =>
         Number.isFinite(candle.openTime.getTime()) &&
         candle.openTime.getTime() + input.intervalMs <= availableAtMs,
     )
-    .sort((left, right) => left.openTime.getTime() - right.openTime.getTime())
-    .slice(-maxCandles);
+    .sort((left, right) => left.openTime.getTime() - right.openTime.getTime());
+  const candles = history.slice(-maxCandles);
   const points = candles.map(toDecisionOhlcvPoint);
-  const closes = candles.map((candle) => candle.close);
+  const closes = history.map((candle) => candle.close);
   const ema20 = last(emaSeries(closes, 20));
   const ema50 = last(emaSeries(closes, 50));
   const rsi14 = calculateRsi(closes, 14);
-  const atr14 = calculateAtr(candles, 14);
+  const atr14 = calculateAtr(history, 14);
   const macd = calculateMacd(closes);
-  const latest = candles.at(-1);
-  const previous = candles.at(-2);
+  const latest = history.at(-1);
+  const previous = history.at(-2);
   const pivot = previous ? (previous.high + previous.low + previous.close) / 3 : null;
   const regime = inferRegime(ema20, ema50, rsi14);
 
@@ -192,9 +227,9 @@ export function buildDecisionMarketFrame(input: {
       macdSignal: macd.signal,
       atr14,
       atrPercent: atr14 !== null && latest?.close ? (atr14 / latest.close) * 100 : null,
-      adx14: calculateAdx(candles, 14),
-      chop14: calculateChop(candles, 14),
-      rvol20: calculateRelativeVolume(candles, 20),
+      adx14: calculateAdx(history, 14),
+      chop14: calculateChop(history, 14),
+      rvol20: calculateRelativeVolume(history, 20),
       zScore20: calculateZScore(closes, 20),
       slope20PercentPerBar: calculateSlopePercent(closes, 20),
       pivot,
@@ -325,7 +360,7 @@ export async function runShadowDecisionProviders(input: {
           rejectionCode,
           latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
         };
-      } catch (error) {
+      } catch {
         return {
           provider: descriptor(provider),
           contextHash: input.context.contentHash,
@@ -342,8 +377,197 @@ export async function runShadowDecisionProviders(input: {
   );
 }
 
+export function getDecisionCadenceWindow(input: {
+  availableAt: Date;
+  lastEvaluatedAt: Date | null;
+  cadence: DecisionCadence;
+}): { due: boolean; validUntil: Date } {
+  if (!Number.isInteger(input.cadence.intervalMs) || input.cadence.intervalMs <= 0)
+    throw new Error("Decision cadence interval must be a positive integer");
+  if (!Number.isInteger(input.cadence.deadlineMs) || input.cadence.deadlineMs <= 0)
+    throw new Error("Decision cadence deadline must be a positive integer");
+  const due =
+    input.lastEvaluatedAt === null ||
+    input.availableAt.getTime() - input.lastEvaluatedAt.getTime() >= input.cadence.intervalMs;
+  return {
+    due,
+    validUntil: new Date(input.availableAt.getTime() + input.cadence.deadlineMs),
+  };
+}
+
+export function evaluateRecordedDecisionCandidate(input: {
+  candidate: DecisionCandidate;
+  availableAt: Date;
+  asOf: Date;
+  intervalMs: number;
+  candles: ExecutionCandle[];
+  roundTripCostBps?: number;
+  fallbackHorizonCandles?: number;
+}): RecordedDecisionReplayResult {
+  if (input.candidate.action === "HOLD" || input.candidate.side === null) {
+    return replayResult("no-trade", null, 0);
+  }
+  const horizon = input.candidate.horizonCandles ?? input.fallbackHorizonCandles ?? 12;
+  if (!Number.isInteger(horizon) || horizon <= 0) throw new Error("Replay horizon is invalid");
+  const candles = [...input.candles]
+    .filter(
+      (candle) =>
+        candle.openTime.getTime() >= input.availableAt.getTime() &&
+        candle.openTime.getTime() + input.intervalMs <= input.asOf.getTime(),
+    )
+    .sort((left, right) => left.openTime.getTime() - right.openTime.getTime())
+    .slice(0, horizon);
+  if (candles.length === 0) return replayResult("insufficient-data", input.candidate.side, 0);
+
+  const side = input.candidate.side;
+  const entryPrice = candles[0]!.open;
+  const stopPrice =
+    input.candidate.stopLossPercent === null
+      ? null
+      : entryPrice *
+        (side === "long"
+          ? 1 - input.candidate.stopLossPercent / 100
+          : 1 + input.candidate.stopLossPercent / 100);
+  const takePrice =
+    input.candidate.takeProfitPercent === null
+      ? null
+      : entryPrice *
+        (side === "long"
+          ? 1 + input.candidate.takeProfitPercent / 100
+          : 1 - input.candidate.takeProfitPercent / 100);
+  let favorable = 0;
+  let adverse = 0;
+  let exitPrice: number | null = null;
+  let exitReason: RecordedDecisionReplayResult["exitReason"] = null;
+  let candlesObserved = 0;
+
+  for (const candle of candles) {
+    candlesObserved += 1;
+    const favorablePrice = side === "long" ? candle.high : candle.low;
+    const adversePrice = side === "long" ? candle.low : candle.high;
+    favorable = Math.max(favorable, signedReturnPercent(side, entryPrice, favorablePrice));
+    adverse = Math.min(adverse, signedReturnPercent(side, entryPrice, adversePrice));
+    const stopTouched =
+      stopPrice !== null && (side === "long" ? candle.low <= stopPrice : candle.high >= stopPrice);
+    if (stopTouched) {
+      exitPrice = stopPrice;
+      exitReason = "stop-loss";
+      break;
+    }
+    const takeTouched =
+      takePrice !== null && (side === "long" ? candle.high >= takePrice : candle.low <= takePrice);
+    if (takeTouched) {
+      exitPrice = takePrice;
+      exitReason = "take-profit";
+      break;
+    }
+  }
+  if (exitPrice === null && candles.length === horizon) {
+    exitPrice = candles.at(-1)!.close;
+    exitReason = "horizon";
+  }
+  if (exitPrice === null) {
+    return {
+      ...replayResult("insufficient-data", side, candlesObserved),
+      entryPrice,
+      maximumFavorableExcursionPercent: favorable,
+      maximumAdverseExcursionPercent: Math.abs(adverse),
+    };
+  }
+  const grossReturnPercent = signedReturnPercent(side, entryPrice, exitPrice);
+  return {
+    status: "completed",
+    side,
+    entryPrice,
+    exitPrice,
+    exitReason,
+    candlesObserved,
+    grossReturnPercent,
+    netReturnPercent: grossReturnPercent - (input.roundTripCostBps ?? 0) / 100,
+    maximumFavorableExcursionPercent: favorable,
+    maximumAdverseExcursionPercent: Math.abs(adverse),
+  };
+}
+
+export function summarizeRecordedDecisionReplays(
+  results: RecordedDecisionReplayResult[],
+): RecordedDecisionReplaySummary {
+  const completed = results.filter(
+    (
+      result,
+    ): result is RecordedDecisionReplayResult & {
+      grossReturnPercent: number;
+      netReturnPercent: number;
+      maximumFavorableExcursionPercent: number;
+      maximumAdverseExcursionPercent: number;
+    } =>
+      result.status === "completed" &&
+      result.grossReturnPercent !== null &&
+      result.netReturnPercent !== null &&
+      result.maximumFavorableExcursionPercent !== null &&
+      result.maximumAdverseExcursionPercent !== null,
+  );
+  let equity = 100;
+  let peak = equity;
+  let maximumDrawdownPercent = 0;
+  for (const result of completed) {
+    equity *= 1 + result.netReturnPercent / 100;
+    peak = Math.max(peak, equity);
+    maximumDrawdownPercent = Math.max(maximumDrawdownPercent, ((peak - equity) / peak) * 100);
+  }
+  const wins = completed.filter((result) => result.netReturnPercent > 0).length;
+  const losses = completed.filter((result) => result.netReturnPercent < 0).length;
+  return {
+    candidates: results.length,
+    completedTrades: completed.length,
+    noTrades: results.filter((result) => result.status === "no-trade").length,
+    insufficientData: results.filter((result) => result.status === "insufficient-data").length,
+    coveragePercent: results.length === 0 ? 0 : (completed.length / results.length) * 100,
+    wins,
+    losses,
+    winRatePercent: completed.length === 0 ? null : (wins / completed.length) * 100,
+    grossExpectancyPercent:
+      completed.length === 0 ? null : average(completed.map((result) => result.grossReturnPercent)),
+    netExpectancyPercent:
+      completed.length === 0 ? null : average(completed.map((result) => result.netReturnPercent)),
+    cumulativeNetReturnPercent: equity - 100,
+    maximumDrawdownPercent,
+    averageMfePercent:
+      completed.length === 0
+        ? null
+        : average(completed.map((result) => result.maximumFavorableExcursionPercent)),
+    averageMaePercent:
+      completed.length === 0
+        ? null
+        : average(completed.map((result) => result.maximumAdverseExcursionPercent)),
+  };
+}
+
 function descriptor(provider: DecisionProvider): DecisionProviderDescriptor {
   return { id: provider.id, version: provider.version, kind: provider.kind };
+}
+
+function replayResult(
+  status: "no-trade" | "insufficient-data",
+  side: "long" | "short" | null,
+  candlesObserved: number,
+): RecordedDecisionReplayResult {
+  return {
+    status,
+    side,
+    entryPrice: null,
+    exitPrice: null,
+    exitReason: null,
+    candlesObserved,
+    grossReturnPercent: null,
+    netReturnPercent: null,
+    maximumFavorableExcursionPercent: null,
+    maximumAdverseExcursionPercent: null,
+  };
+}
+
+function signedReturnPercent(side: "long" | "short", entryPrice: number, price: number): number {
+  return ((price - entryPrice) / entryPrice) * 100 * (side === "long" ? 1 : -1);
 }
 
 function toDecisionOhlcvPoint(candle: ExecutionCandle): DecisionOhlcvPoint {

@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { createPrismaClient } from "../packages/persistence/src/client";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
 import { AccountSnapshotRepository } from "../packages/persistence/src/account-snapshot-repository";
+import { DecisionRepository } from "../packages/persistence/src/decision-repository";
 import {
   RuntimeRepository,
   RuntimeStateConflictError,
@@ -32,6 +33,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
   const runtime = new RuntimeRepository(prisma);
   const candles = new MarketDataRepository(prisma);
   const snapshots = new AccountSnapshotRepository(prisma);
+  const decisions = new DecisionRepository(prisma);
   const candleAt = new Date("2026-01-01T12:00:00Z");
   const quoteAt = new Date();
   async function setup(shared?: { workspace: { id: string }; account: string }) {
@@ -200,6 +202,39 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
     };
     return { ...context, position, quote };
   }
+  function decisionEngineFields(context: Awaited<ReturnType<typeof setup>>) {
+    const availableAt = new Date();
+    const snapshot = {
+      schemaVersion: 1,
+      featureSetVersion: "test-features@1",
+      engineVersion: "test",
+      availableAt: availableAt.toISOString(),
+    };
+    return {
+      providerVersion: "test",
+      candidate: {
+        action: "BUY",
+        side: "long",
+        tradable: true,
+        confidence: 1,
+        reasonCodes: ["TEST"],
+        summary: "Test",
+        generatedAt: availableAt.toISOString(),
+        validUntil: new Date(availableAt.getTime() + 60_000).toISOString(),
+      },
+      contextSnapshot: {
+        workspaceId: context.workspace.id,
+        executionRunId: context.run.id,
+        strategyVersionId: context.entry.strategyVersionId,
+        symbol: context.symbol,
+        schemaVersion: 1,
+        featureSetVersion: "test-features@1",
+        contentHash: createHash("sha256").update(JSON.stringify(snapshot)).digest("hex"),
+        availableAt,
+        context: snapshot,
+      },
+    } satisfies Pick<PersistRuntimeCycleInput, "providerVersion" | "candidate" | "contextSnapshot">;
+  }
   try {
     await t.test(
       "closed candle replaces partial history and resists delayed partial snapshots",
@@ -253,6 +288,38 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         1,
       );
     });
+    await t.test(
+      "shadow decisions share immutable context and deduplicate provider runs",
+      async () => {
+        const context = await setup();
+        const fields = decisionEngineFields(context);
+        const input = {
+          context: fields.contextSnapshot,
+          provider: { id: "shadow-test", version: "1", kind: "LLM" as const },
+          status: "accepted" as const,
+          candidate: fields.candidate,
+          rejectionCode: null,
+          latencyMs: 12,
+          summary: "Shadow candidate accepted",
+        };
+        const first = await decisions.persistShadowDecision(input);
+        const second = await decisions.persistShadowDecision(input);
+
+        assert.equal(first.created, true);
+        assert.equal(second.created, false);
+        assert.equal(first.id, second.id);
+        assert.equal(
+          await prisma.decisionContextSnapshot.count({
+            where: { executionRunId: context.run.id, symbol: context.symbol },
+          }),
+          1,
+        );
+        const stored = await prisma.decision.findUniqueOrThrow({ where: { id: first.id } });
+        assert.equal(stored.mode, "SHADOW");
+        assert.equal(stored.providerKind, "LLM");
+        assert.equal(stored.providerId, "shadow-test");
+      },
+    );
     await t.test("invalid connection blocks pending and candle entries", async () => {
       const context = await setup();
       await prisma.exchangeConnection.update({
@@ -263,6 +330,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       assert.equal((await runtime.listRealtimePendingEntries(context.workspace.id)).length, 0);
       const cycle: PersistRuntimeCycleInput = {
         ...context.entry,
+        ...decisionEngineFields(context),
         interval: "15",
         candleAt: quoteAt,
         expectedDeploymentStatus: "RUNNING",
@@ -280,6 +348,11 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       };
       await runtime.persistCycle(cycle);
       assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
+      const storedDecision = await prisma.decision.findFirstOrThrow({
+        where: { executionRunId: context.run.id, mode: "EXECUTION" },
+      });
+      assert.equal(storedDecision.providerId, "cryptoanal-rule-engine");
+      assert.ok(storedDecision.contextSnapshotId);
     });
     await t.test("quote protection is durable; stale updates cannot loosen it", async () => {
       const context = await open();
@@ -320,6 +393,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       );
       const staleCycle: PersistRuntimeCycleInput = {
         ...context.entry,
+        ...decisionEngineFields(context),
         interval: "15",
         candleAt: quoteAt,
         expectedDeploymentStatus: "RUNNING",
@@ -430,6 +504,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal((await runtime.persistRealtimeEntry(context.entry)).applied, false);
         await runtime.persistCycle({
           ...context.entry,
+          ...decisionEngineFields(context),
           interval: "15",
           candleAt: quoteAt,
           expectedDeploymentStatus: "RUNNING",
@@ -550,6 +625,46 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         );
       },
     );
+    await t.test("shared account rejects opposite directions on the same symbol", async () => {
+      const first = await setup();
+      const second = await setup({
+        workspace: first.workspace,
+        account: first.deployment.exchangeAccountId,
+      });
+      assert.equal((await runtime.persistRealtimeEntry(first.entry)).applied, true);
+      await prisma.runtimeCursor.create({
+        data: {
+          workspaceId: second.workspace.id,
+          executionRunId: second.run.id,
+          symbol: first.symbol,
+          lastEvaluatedAt: candleAt,
+          pendingSignal: {
+            mode: "realtime",
+            side: "short",
+            signalPrice: 100,
+            detectedAt: "2026-01-01T12:15:00Z",
+            expiresAt: new Date(Date.now() + 900_000).toISOString(),
+            entryRegime: "neutral",
+          },
+        },
+      });
+      const event = await prisma.marketPriceEvent.create({
+        data: {
+          eventKey: randomUUID(),
+          symbol: first.symbol,
+          price: "100",
+          observedAt: quoteAt,
+          streamId: second.deployment.exchangeAccountId,
+        },
+      });
+      const result = await runtime.persistRealtimeEntry({
+        ...second.entry,
+        entryPriceEventId: event.id,
+        symbol: first.symbol,
+        position: { ...second.entry.position, symbol: first.symbol, side: "SELL" },
+      });
+      assert.equal("riskFailure" in result && result.riskFailure, "PORTFOLIO_DIRECTION_CONFLICT");
+    });
     await t.test("stale entry quotes and oversized stop risk fail closed", async () => {
       const stale = await setup();
       const old = new Date(Date.now() - 60_000);

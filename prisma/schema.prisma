@@ -87,6 +87,17 @@ enum DecisionAction {
   ERROR
 }
 
+enum DecisionMode {
+  EXECUTION
+  SHADOW
+}
+
+enum DecisionProviderKind {
+  RULE_BASED
+  ML
+  LLM
+}
+
 enum JobKind {
   BACKTEST
   WALK_FORWARD
@@ -170,12 +181,12 @@ enum ExchangeConnectionStatus {
 }
 
 model Workspace {
-  runtimeRiskDays RuntimeRiskDay[]
-  id                  String                @id @default(uuid())
-  slug                String                @unique
+  runtimeRiskDays     RuntimeRiskDay[]
+  id                  String                    @id @default(uuid())
+  slug                String                    @unique
   name                String
-  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                  @updatedAt @db.Timestamptz(3)
   settings            WorkspaceSettings?
   markets             WorkspaceMarket[]
   watchlistItems      WatchlistItem[]
@@ -192,6 +203,7 @@ model Workspace {
   fills               Fill[]
   trades              Trade[]
   decisions           Decision[]
+  decisionContexts    DecisionContextSnapshot[]
   jobs                Job[]
   auditEvents         AuditEvent[]
   commandReceipts     CommandReceipt[]
@@ -325,41 +337,42 @@ model ExchangeConnection {
 }
 
 model WorkspaceSettings {
-  runtimeKillSwitch Boolean @default(false)
-  runtimeKillReason String?
-  runtimeKillVersion Int @default(0)
-  workspaceId  String    @id
-  timezone     String    @default("UTC")
-  currency     String    @default("USDT")
-  tableDensity String    @default("compact")
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtimeKillSwitch  Boolean   @default(false)
+  runtimeKillReason  String?
+  runtimeKillVersion Int       @default(0)
+  workspaceId        String    @id
+  timezone           String    @default("UTC")
+  currency           String    @default("USDT")
+  tableDensity       String    @default("compact")
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model MarketInstrument {
-  symbol           String                  @id
+  symbol           String                    @id
   baseAsset        String
   quoteAsset       String
   settleAsset      String?
   exchange         String
   instrumentType   String
   contractType     String?
-  status           String                  @default("Trading")
-  tickSize         Decimal?                @db.Decimal(38, 18)
-  qtyStep          Decimal?                @db.Decimal(38, 18)
-  minOrderQty      Decimal?                @db.Decimal(38, 18)
-  minNotional      Decimal?                @db.Decimal(38, 18)
-  enabled          Boolean                 @default(true)
-  metadataSyncedAt DateTime?               @db.Timestamptz(3)
-  createdAt        DateTime                @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime                @updatedAt @db.Timestamptz(3)
+  status           String                    @default("Trading")
+  tickSize         Decimal?                  @db.Decimal(38, 18)
+  qtyStep          Decimal?                  @db.Decimal(38, 18)
+  minOrderQty      Decimal?                  @db.Decimal(38, 18)
+  minNotional      Decimal?                  @db.Decimal(38, 18)
+  enabled          Boolean                   @default(true)
+  metadataSyncedAt DateTime?                 @db.Timestamptz(3)
+  createdAt        DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                  @updatedAt @db.Timestamptz(3)
   workspaceMarkets WorkspaceMarket[]
   watchlistItems   WatchlistItem[]
   positions        Position[]
   orders           Order[]
   trades           Trade[]
   decisions        Decision[]
+  decisionContexts DecisionContextSnapshot[]
   validationTrades ValidationTrade[]
   datasetCandles   DatasetSnapshotCandle[]
   runtimeCursors   RuntimeCursor[]
@@ -466,25 +479,26 @@ model Strategy {
 }
 
 model StrategyVersion {
-  id                  String          @id @default(uuid())
+  id                  String                    @id @default(uuid())
   workspaceId         String
   strategyId          String
   version             Int
-  configSchemaVersion Int             @default(1)
+  configSchemaVersion Int                       @default(1)
   config              Json
   configHash          String
   changeSummary       String?
   createdByActorId    String
-  createdAt           DateTime        @default(now()) @db.Timestamptz(3)
-  workspace           Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  strategy            Strategy        @relation("StrategyVersions", fields: [strategyId], references: [id], onDelete: Cascade)
-  activeForStrategy   Strategy?       @relation("ActiveStrategyVersion")
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
+  workspace           Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy            Strategy                  @relation("StrategyVersions", fields: [strategyId], references: [id], onDelete: Cascade)
+  activeForStrategy   Strategy?                 @relation("ActiveStrategyVersion")
   validationRuns      ValidationRun[]
   deployments         Deployment[]
   executionRuns       ExecutionRun[]
   positions           Position[]
   trades              Trade[]
   decisions           Decision[]
+  decisionContexts    DecisionContextSnapshot[]
   journalLinks        JournalLink[]
 
   @@unique([strategyId, version])
@@ -611,7 +625,7 @@ model Deployment {
 }
 
 model ExecutionRun {
-  id                String             @id @default(uuid())
+  id                String                    @id @default(uuid())
   workspaceId       String
   deploymentId      String
   strategyVersionId String
@@ -620,18 +634,19 @@ model ExecutionRun {
   context           Json
   contextHash       String
   engineVersion     String
-  status            RunStatus          @default(QUEUED)
+  status            RunStatus                 @default(QUEUED)
   createdByActorId  String
-  startedAt         DateTime?          @db.Timestamptz(3)
-  stoppedAt         DateTime?          @db.Timestamptz(3)
-  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
-  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  deployment        Deployment         @relation(fields: [deploymentId], references: [id], onDelete: Restrict)
-  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  startedAt         DateTime?                 @db.Timestamptz(3)
+  stoppedAt         DateTime?                 @db.Timestamptz(3)
+  createdAt         DateTime                  @default(now()) @db.Timestamptz(3)
+  workspace         Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deployment        Deployment                @relation(fields: [deploymentId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion           @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
   positions         Position[]
   orders            Order[]
   trades            Trade[]
   decisions         Decision[]
+  decisionContexts  DecisionContextSnapshot[]
   journalLinks      JournalLink[]
   runtimeCursors    RuntimeCursor[]
 
@@ -761,27 +776,36 @@ model Trade {
 }
 
 model Decision {
-  id                String           @id @default(uuid())
+  id                String                   @id @default(uuid())
   workspaceId       String
   executionRunId    String
   strategyVersionId String
+  contextSnapshotId String?
   positionId        String?
   tradeId           String?
   symbol            String
   action            DecisionAction
+  mode              DecisionMode             @default(EXECUTION)
+  providerKind      DecisionProviderKind     @default(RULE_BASED)
+  providerId        String                   @default("rule-based")
+  providerVersion   String                   @default("execution-engine")
   reasonCode        String
   summary           String
   factors           Json
+  candidate         Json?
+  verdictReasonCode String?
+  latencyMs         Int?
   marketSnapshotRef String?
   correlationId     String
-  decidedAt         DateTime         @db.Timestamptz(3)
-  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
-  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  executionRun      ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
-  strategyVersion   StrategyVersion  @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
-  position          Position?        @relation(fields: [positionId], references: [id], onDelete: SetNull)
-  trade             Trade?           @relation(fields: [tradeId], references: [id], onDelete: SetNull)
-  instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  decidedAt         DateTime                 @db.Timestamptz(3)
+  createdAt         DateTime                 @default(now()) @db.Timestamptz(3)
+  workspace         Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun      ExecutionRun             @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion          @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  contextSnapshot   DecisionContextSnapshot? @relation(fields: [contextSnapshotId], references: [id], onDelete: Restrict)
+  position          Position?                @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  trade             Trade?                   @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+  instrument        MarketInstrument         @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   journalLinks      JournalLink[]
 
   @@unique([workspaceId, correlationId])
@@ -789,6 +813,31 @@ model Decision {
   @@index([workspaceId, symbol, decidedAt])
   @@index([positionId])
   @@index([tradeId])
+  @@index([contextSnapshotId])
+  @@index([workspaceId, mode, decidedAt])
+}
+
+model DecisionContextSnapshot {
+  id                String           @id @default(uuid())
+  workspaceId       String
+  executionRunId    String
+  strategyVersionId String
+  symbol            String
+  schemaVersion     Int
+  featureSetVersion String
+  contentHash       String           @db.Char(64)
+  availableAt       DateTime         @db.Timestamptz(3)
+  context           Json
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun      ExecutionRun     @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion   StrategyVersion  @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  instrument        MarketInstrument @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  decisions         Decision[]
+
+  @@unique([executionRunId, symbol, contentHash])
+  @@index([workspaceId, availableAt(sort: Desc)])
+  @@index([workspaceId, symbol, availableAt(sort: Desc)])
 }
 
 model JournalEntry {
@@ -1081,18 +1130,18 @@ model MarketPriceEvent {
 }
 
 model MarketStreamLease {
-  id        String @id
+  id        String   @id
   owner     String
   expiresAt DateTime @db.Timestamptz(3)
 }
 
 model RuntimeRiskDay {
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   workspaceId       String
   exchangeAccountId String
   day               String
   haltReason        String
-  haltedAt          DateTime @default(now()) @db.Timestamptz(3)
+  haltedAt          DateTime  @default(now()) @db.Timestamptz(3)
 
   @@id([workspaceId, exchangeAccountId, day])
 }

@@ -81,9 +81,13 @@ pnpm dev
 
 Адреса:
 
-- dashboard: `http://localhost:5173`;
-- API: `http://localhost:3100`;
-- health: `http://localhost:3100/health`.
+- dashboard: `http://localhost:15173`;
+- API: `http://localhost:13100`;
+- health: `http://localhost:13100/health`;
+- PostgreSQL на host: `127.0.0.1:15432`.
+
+Host-порты задаются в `.env` через `DASHBOARD_HOST_PORT`, `API_HOST_PORT` и
+`POSTGRES_HOST_PORT`; внутренние порты Docker-сети не меняются.
 
 Основные рабочие маршруты:
 

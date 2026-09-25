@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: cryptoanal
       POSTGRES_PASSWORD: cryptoanal
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - cryptoanal-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -28,9 +28,9 @@ services:
       HOST: 0.0.0.0
       API_PORT: 3100
       DATABASE_URL: postgresql://cryptoanal:cryptoanal@postgres:5432/cryptoanal_dev?schema=public
-      DASHBOARD_ORIGIN: http://localhost:5173
+      DASHBOARD_ORIGIN: http://localhost:${DASHBOARD_HOST_PORT:-15173}
     ports:
-      - "3100:3100"
+      - "${API_HOST_PORT:-13100}:3100"
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,7 +67,7 @@ services:
       target: dashboard
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "${DASHBOARD_HOST_PORT:-15173}:80"
     depends_on:
       api:
         condition: service_healthy

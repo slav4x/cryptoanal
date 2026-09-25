@@ -173,6 +173,9 @@
 
 ### Changed
 
+- Docker host ports moved to the configurable high-port defaults `15173` (dashboard),
+  `13100` (API) and `15432` (PostgreSQL), while internal service ports remain unchanged.
+
 - Overview и Analytics всегда загружают полную историю графиков; переключатели 24h/7d/30d
   меняют только ширину viewport, а ручной pan/zoom сохраняется до смены масштаба.
 - Overview equity API возвращает все доступные account snapshots без временного фильтра и

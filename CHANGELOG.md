@@ -11,6 +11,9 @@
 
 ### Added
 
+- Versioned shared research catalog with idempotent import, optional local backtest queueing
+  and isolated dry-run launch commands.
+
 - Documentation backlog for an AI Decision Lab, split into provider-neutral trading-engine
   work and separately controlled LLM API integration with shadow-first rollout gates.
 - Provider-neutral decision engine with immutable multi-timeframe context snapshots,

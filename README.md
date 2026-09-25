@@ -79,6 +79,26 @@ pnpm dev
 
 В этом режиме PostgreSQL работает в Docker, а API, worker и Vite — как локальные процессы.
 
+Импорт shared research-набора из Git без дубликатов:
+
+```bash
+pnpm strategies:import-shared --workspace development
+```
+
+Чтобы сразу поставить локальные backtest за период, зафиксированный в наборе:
+
+```bash
+pnpm strategies:import-shared --workspace development --queue-validations
+```
+
+Чужие метрики хранятся только как референс и не подменяют результаты локальной валидации.
+После успешного локального backtest прошедшие стратегии можно запустить в изолированных
+dry-run аккаунтах:
+
+```bash
+pnpm strategies:launch-shared --workspace development
+```
+
 Адреса:
 
 - dashboard: `http://localhost:15173`;

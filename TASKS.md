@@ -293,6 +293,32 @@ runtime replay, единый provenance метрик и явная disabled poli
 - [ ] Public track-record projection.
 - [ ] Signup/waitlist и pricing после отдельных решений.
 
+## Отложенный этап — AI Decision Lab
+
+Полная декомпозиция: [движок и LLM-интеграция](docs/rebuild/16-AI-DECISION-LAB.md).
+
+### Торговый движок
+
+- [ ] Подготовить immutable decision-context snapshots и versioned feature pipeline с
+      ADX, CHOP, ATR, RVOL и старшими таймфреймами.
+- [ ] Выделить provider-neutral контракт решений и отделить candidate от итогового
+      risk/execution verdict.
+- [ ] Реализовать отдельный decision loop, bounded memory, persistence и audit trail;
+      realtime SL/TP и сопровождение оставить в детерминированном quote loop.
+- [ ] Добавить shadow mode, fan-out одного snapshot, replay и сопоставимые метрики.
+- [ ] Завершить portfolio risk и safety gates до разрешения исполняемого режима.
+
+### LLM-интеграция
+
+- [ ] Подключить первый официальный model API через adapter со строгим structured output,
+      timeout/rate-limit handling и fail-closed поведением.
+- [ ] Добавить immutable prompt registry, зашифрованные workspace credentials и защиту
+      передаваемого контекста.
+- [ ] Добавить budgets, usage/cost accounting, provider health и timeline решений в UI.
+- [ ] Запустить несколько model/prompt candidates только в shadow на одинаковых snapshots.
+- [ ] После 500 сопоставимых решений провести первый review; торговые выводы делать не
+      раньше 100 закрытых shadow/dry-run сделок на кандидата.
+
 ## Идеи
 
 - Сократить стартовый JS dashboard до бюджета 100 KiB gzip: превышение было до P1
@@ -300,7 +326,7 @@ runtime replay, единый provenance метрик и явная disabled poli
 
 - Team roles beyond owner/member.
 - Billing.
-- AI assistant.
+- AI assistant для объяснений и навигации — отдельно от торгового AI Decision Lab.
 - Marketplace.
 - Multi-exchange.
 - Управляемое самообучение стратегий по плану `docs/rebuild/11-SELF-LEARNING-MODELS.md`.

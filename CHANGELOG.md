@@ -11,6 +11,9 @@
 
 ### Added
 
+- Documentation backlog for an AI Decision Lab, split into provider-neutral trading-engine
+  work and separately controlled LLM API integration with shadow-first rollout gates.
+
 - Durable Bybit public-trade journal, exclusive writer lease, per-position replay progress,
   bounded recovery from minute/signal history, and explicit conservative recovery exits.
 - Independent dry-run risk guard with unrealized losses and costs, persistent UTC daily halt,

@@ -56,6 +56,8 @@ Dashboard использует database users, Argon2id password hashes, server-
     шифрование credentials, проверка, deployment binding и ограничения runtime.
 15. [15-PARALLEL-STRATEGY-EXPERIMENTS.md](15-PARALLEL-STRATEGY-EXPERIMENTS.md) — активные
     dry-run варианты, единые правила сравнения и отрицательные результаты исследований.
+16. [16-AI-DECISION-LAB.md](16-AI-DECISION-LAB.md) — раздельный backlog развития
+    decision engine и интеграции LLM-провайдеров через shadow-сравнение.
 
 ## Короткая формула продукта
 

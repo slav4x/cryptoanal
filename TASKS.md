@@ -299,14 +299,15 @@ runtime replay, единый provenance метрик и явная disabled poli
 
 ### Торговый движок
 
-- [ ] Подготовить immutable decision-context snapshots и versioned feature pipeline с
+- [x] Подготовить immutable decision-context snapshots и versioned feature pipeline с
       ADX, CHOP, ATR, RVOL и старшими таймфреймами.
-- [ ] Выделить provider-neutral контракт решений и отделить candidate от итогового
+- [x] Выделить provider-neutral контракт решений и отделить candidate от итогового
       risk/execution verdict.
-- [ ] Реализовать отдельный decision loop, bounded memory, persistence и audit trail;
+- [x] Реализовать отдельный decision loop, bounded memory, persistence и audit trail;
       realtime SL/TP и сопровождение оставить в детерминированном quote loop.
-- [ ] Добавить shadow mode, fan-out одного snapshot, replay и сопоставимые метрики.
-- [ ] Завершить portfolio risk и safety gates до разрешения исполняемого режима.
+- [x] Добавить shadow mode, fan-out одного snapshot, replay и сопоставимые метрики.
+- [ ] До исполняемого LLM-режима завершить оставшиеся Demo/Live safety gates: exchange
+      reconciliation и correlation limits. Текущий AI-контур остаётся только shadow.
 
 ### LLM-интеграция
 

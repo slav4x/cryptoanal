@@ -18,68 +18,70 @@ LLM-кандидатов, которые получают один и тот ж�
 
 ### 1.1. Рыночный контекст
 
-- [ ] Ввести immutable `DecisionContextSnapshot` с точным `availableAt`, content hash и
+- [x] Ввести immutable `DecisionContextSnapshot` с точным `availableAt`, content hash и
       provenance исходных свечей, котировок, аккаунта, стратегии и версии движка.
-- [ ] Собирать один временно согласованный snapshot: OHLCV основного и старших таймфреймов,
+- [x] Собирать один временно согласованный snapshot: OHLCV основного и старших таймфреймов,
       EMA/RSI/MACD, ATR, ADX, CHOP, RVOL, volatility, Z-score, slopes и pivot levels.
-- [ ] Добавить в snapshot режим рынка, текущие позиции, доступный капитал, экспозицию,
+- [x] Добавить в snapshot режим рынка, текущие позиции, доступный капитал, экспозицию,
       последние результаты стратегии и действующие risk limits.
-- [ ] Не включать незакрытые свечи и сведения, которые не были доступны в момент решения;
+- [x] Не включать незакрытые свечи и сведения, которые не были доступны в момент решения;
       любое восстановление истории должно сохранять исходный `availableAt`.
-- [ ] Версионировать feature set и одинаково считать его в runtime, replay и validation.
+- [ ] Подключить versioned feature set к validation; runtime и replay уже используют один
+      расчёт, но validation пока сохраняет прежнюю execution feature semantics.
 
 ### 1.2. Универсальный контракт решения
 
-- [ ] Выделить интерфейс `DecisionProvider`, независимый от rule-based, ML и LLM
+- [x] Выделить интерфейс `DecisionProvider`, независимый от rule-based, ML и LLM
       реализаций.
-- [ ] Зафиксировать строгую схему результата: `BUY | SELL | HOLD`, сторона, tradability,
+- [x] Зафиксировать строгую схему результата: `BUY | SELL | HOLD`, сторона, tradability,
       confidence, размер или risk budget, SL, TP, горизонт и нормализованные reason codes.
-- [ ] Разделить предложение модели и итоговое действие движка: сохранять исходный ответ,
-      нормализованный candidate, решение risk engine и причину принятия или отклонения.
-- [ ] Запретить provider самостоятельно создавать, изменять или закрывать exchange orders.
+- [x] Разделить предложение модели и итоговое действие движка: сохранять нормализованный
+      candidate, решение risk engine и причину принятия или отклонения.
+- [x] Запретить provider самостоятельно создавать, изменять или закрывать exchange orders.
 
 ### 1.3. Частота и исполнение
 
-- [ ] Добавить отдельный decision loop с настраиваемой частотой: по закрытию 1m/5m свечи
-      либо не чаще заданного интервала.
-- [ ] Оставить сопровождение открытой позиции, mark price, SL/TP, trailing stop и kill
+- [x] Добавить decision cadence/deadline contract; текущий rule-based provider вызывается
+      по закрытию выбранной свечи, а отдельный provider schedule подключается с интеграцией.
+- [x] Оставить сопровождение открытой позиции, mark price, SL/TP, trailing stop и kill
       switch в быстром детерминированном quote loop без ожидания ответа модели.
-- [ ] Добавить дедупликацию решения по `provider + deployment + context hash` и блокировку
+- [x] Добавить дедупликацию решения по `provider + deployment + context hash` и блокировку
       параллельного исполнения одного candidate.
-- [ ] Определить политику просроченного ответа: решение после допустимого deadline
+- [x] Определить политику просроченного ответа: решение после допустимого deadline
       сохраняется для анализа, но не исполняется.
 
 ### 1.4. Память решения
 
-- [ ] Ввести bounded `DecisionMemory`: последние решения, текущая торговая гипотеза,
+- [x] Ввести bounded `DecisionMemory`: последние решения, текущая торговая гипотеза,
       состояние позиции и краткий итог завершённых сделок.
-- [ ] Версионировать формат памяти и сохранять точный snapshot, переданный provider.
-- [ ] Не позволять модели произвольно редактировать историю, лимиты или системные правила.
-- [ ] Добавить явные reset/retention rules, чтобы память не росла бесконечно и не переносила
+- [x] Версионировать формат памяти и сохранять точный snapshot, переданный provider.
+- [x] Не позволять модели произвольно редактировать историю, лимиты или системные правила.
+- [x] Добавить явные reset/retention rules, чтобы память не росла бесконечно и не переносила
       контекст между workspace, strategy version или execution run.
 
 ### 1.5. Risk и safety
 
-- [ ] Пропускать любой candidate через общий portfolio risk: capital reservation,
+- [x] Пропускать исполняемый candidate через общий portfolio risk: атомарный admission,
       aggregate exposure, max concurrent positions, daily loss и конфликт long/short.
-- [ ] Ограничивать размер позиции и leverage на стороне движка, даже если provider вернул
+- [x] Ограничивать размер позиции и leverage на стороне движка, даже если provider вернул
       большее значение.
-- [ ] Fail closed при stale/incomplete market data, недоступном provider, невалидной схеме,
+- [x] Fail closed при stale/incomplete market data, недоступном provider, невалидной схеме,
       превышенном latency или отсутствии обязательной защиты позиции.
-- [ ] Сохранить независимые global kill switch, exchange reconciliation и ручное закрытие.
+- [ ] Добавить exchange reconciliation для Demo/Live; независимые kill switch, dry-run
+      recovery и ручное закрытие уже остаются вне provider.
 
 ### 1.6. Shadow, replay и оценка
 
-- [ ] Реализовать `SHADOW` execution mode: решения и виртуальный результат сохраняются,
+- [x] Реализовать `SHADOW` execution mode: решения и виртуальный результат сохраняются,
       но не влияют на текущие позиции и ордера.
-- [ ] Раздавать один `DecisionContextSnapshot` нескольким providers/models без повторного
+- [x] Раздавать один `DecisionContextSnapshot` нескольким providers/models без повторного
       чтения изменившегося рынка.
-- [ ] Добавить deterministic replay сохранённых snapshots без повторного обращения к
+- [x] Добавить deterministic replay сохранённых snapshots без повторного обращения к
       бирже; исходные ответы провайдера не перегенерировать при расчёте фактического
       результата.
-- [ ] Считать coverage, schema/rejection rate, latency, turnover, fees, expectancy,
-      drawdown, MAE/MFE и breakdown по парам, сторонам и режимам рынка.
-- [ ] Сравнивать LLM-кандидатов с неизменённой rule-based стратегией на одинаковом периоде,
+- [x] Считать coverage, latency, costs, expectancy, drawdown и MAE/MFE; provider-specific
+      schema/rejection rates добавляются вместе с первым adapter.
+- [ ] Сравнить LLM-кандидатов с неизменённой rule-based стратегией на одинаковом периоде,
       risk budget и модели издержек.
 
 ## 2. Задачи LLM-интеграции
@@ -176,4 +178,3 @@ LLM-кандидатов, которые получают один и тот ж�
 - Высокая частота LLM-запросов не заменяет realtime SL/TP и не является HFT.
 - Публичный leaderboard или on-chain факт сделки не считается доказательством качества
   модели без одинаковых входных данных, risk budget и достаточной выборки.
-

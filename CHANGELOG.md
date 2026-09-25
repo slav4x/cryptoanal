@@ -13,6 +13,13 @@
 
 - Documentation backlog for an AI Decision Lab, split into provider-neutral trading-engine
   work and separately controlled LLM API integration with shadow-first rollout gates.
+- Provider-neutral decision engine with immutable multi-timeframe context snapshots,
+  versioned technical features, bounded decision memory and deterministic content hashes.
+- Persisted execution/shadow decision provenance, shared-context provider fan-out,
+  deadline validation and deterministic candidate replay with expectancy, drawdown and
+  MAE/MFE metrics.
+- Shared-account direction-conflict admission that blocks simultaneous long and short
+  positions on the same symbol before any provider candidate can execute.
 
 - Durable Bybit public-trade journal, exclusive writer lease, per-position replay progress,
   bounded recovery from minute/signal history, and explicit conservative recovery exits.

@@ -1,5 +1,6 @@
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
+import type { DeploymentStatus } from "./generated/prisma/enums";
 
 type PersistedEnvironment = "DEMO" | "LIVE";
 
@@ -151,7 +152,7 @@ export class ExchangeConnectionRepository {
         input.workspaceId,
         input.connectionId,
       );
-      await assertConnectionNotInUse(transaction, input.workspaceId, existing.id);
+      await assertConnectionSafeToRotate(transaction, input.workspaceId, existing);
       const connection = await transaction.exchangeConnection.update({
         where: { id: existing.id },
         data: {
@@ -421,11 +422,12 @@ async function lockExchangeConnection(
   const connections = await transaction.$queryRaw<
     Array<{
       id: string;
+      status: "UNVERIFIED" | "ACTIVE" | "INVALID";
       credentialRevision: number;
       verificationLeaseOwner: string | null;
     }>
   >(Prisma.sql`
-    SELECT "id", "credentialRevision", "verificationLeaseOwner"
+    SELECT "id", "status", "credentialRevision", "verificationLeaseOwner"
     FROM "ExchangeConnection"
     WHERE "id" = ${connectionId} AND "workspaceId" = ${workspaceId} AND "revokedAt" IS NULL
     FOR UPDATE
@@ -462,4 +464,31 @@ async function assertConnectionNotInUse(
     select: { id: true },
   });
   if (deployment) throw new ExchangeConnectionInUseError();
+}
+
+async function assertConnectionSafeToRotate(
+  transaction: Prisma.TransactionClient,
+  workspaceId: string,
+  connection: { id: string; status: "UNVERIFIED" | "ACTIVE" | "INVALID" },
+) {
+  const deployments = await transaction.deployment.findMany({
+    where: {
+      workspaceId,
+      exchangeConnectionId: connection.id,
+      status: { in: ["READY", "RUNNING", "PAUSED"] },
+    },
+    select: { status: true },
+  });
+  if (
+    deployments.some(({ status }) => deploymentBlocksCredentialRotation(connection.status, status))
+  ) {
+    throw new ExchangeConnectionInUseError();
+  }
+}
+
+export function deploymentBlocksCredentialRotation(
+  connectionStatus: "UNVERIFIED" | "ACTIVE" | "INVALID",
+  deploymentStatus: DeploymentStatus,
+) {
+  return deploymentStatus !== "PAUSED" || connectionStatus !== "INVALID";
 }

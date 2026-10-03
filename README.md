@@ -347,7 +347,9 @@ passed-валидацию с тем же config hash. Каждая страте�
 pause/resume продолжают тот же run, stop завершает его. Каждая команда требует
 `expectedStatus`, reason и idempotency key, а результат и audit event записываются в той
 же транзакции. Runtime остаётся `dry-run`: привязка не отправляет приватные ордера. Start
-и resume повторно проверяют connection; rotate/revoke блокируются до остановки deployment.
+и resume повторно проверяют connection. Замена истёкших ключей разрешена при
+приостановленных deployment без остановки сопровождения открытых позиций; для активного
+connection замена ключей, а также отзыв любого connection блокируются до остановки deployment.
 
 Worker получает отдельные сделки `publicTrade` и подтверждённые закрытия свечей через
 public Bybit WebSocket. Каждый полученный trade сохраняется в `MarketPriceEvent` с уникальным

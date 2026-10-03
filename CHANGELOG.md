@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Разрешена безопасная замена недействительного ключа Bybit при приостановленных deployment; работающие deployment и отзыв подключений по-прежнему защищены.
 - Backtest можно запускать для действующей стратегии без смены её статуса и остановки dry-run deployment.
 - Overview KPI cards are consolidated into one equal-weight summary panel with compact
   single-line values.

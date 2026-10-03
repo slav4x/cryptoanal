@@ -1229,9 +1229,11 @@ function ExchangeConnectionRow({
             size="icon"
             variant="ghost"
             aria-label={`Заменить ключи ${connection.label}`}
-            disabled={disabled || connection.activeDeployments > 0}
+            disabled={
+              disabled || (connection.activeDeployments > 0 && connection.status !== "invalid")
+            }
             title={
-              connection.activeDeployments > 0
+              connection.activeDeployments > 0 && connection.status !== "invalid"
                 ? "Сначала остановите связанный deployment"
                 : undefined
             }

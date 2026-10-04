@@ -656,6 +656,7 @@ model ExecutionRun {
 }
 
 model Position {
+  indicatorState   Json?
   signalCandleAt    DateTime?          @db.Timestamptz(3)
   priceEventId      BigInt?
   priceStreamId     String?

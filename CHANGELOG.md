@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- У открытой позиции отдельный checkpoint EMA/RSI: свечной cursor запуска больше не
+  пропускает необработанные сигнальные выходы; restart/recovery продолжают состояние позиции.
+  Обновление атомарно с signal/price progress и защищено runtimeVersion, future finality не
+  продвигает checkpoint.
+
 - Runtime начинает EMA/RSI от immutable validation dataset запуска; checkpoint и factors
   сохраняют anchor, missing/changed snapshot не заменяется новым окном.
 - Walk-forward больше не пересоздаёт seed EMA/RSI при сдвиге training window;

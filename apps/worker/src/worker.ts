@@ -1,4 +1,8 @@
 import {
+  positionIndicatorCheckpoint,
+  replayPositionIndicators,
+} from "./runtime-position-indicators";
+import {
   buildDecisionMarketFrame,
   createDecisionContextSnapshot,
   decisionContextSchemaVersion,
@@ -728,9 +732,14 @@ async function processRealtimePosition(
     target.priceEventId,
     target.managedThroughAt ?? target.openedAt,
   );
+  let signalReplay: ReturnType<typeof replayPositionIndicators> | null = null;
   const loadPositionSignals = async (lastOpen: Date, deadline: AbortSignal) => {
-    const checkpoint = readExecutionIndicatorCheckpoint(
-      await runtimeRepository.getIndicatorState(target.executionRunId, target.symbol),
+    const checkpoint = positionIndicatorCheckpoint(
+      target.indicatorState,
+      target.indicatorState == null
+        ? await runtimeRepository.getIndicatorState(target.executionRunId, target.symbol)
+        : null,
+      target.signalCandleAt,
       strategyConfig,
       target.symbol,
     );
@@ -782,20 +791,14 @@ async function processRealtimePosition(
       ? history.filter((candle) => +candle.openTime > Date.parse(checkpoint.lastCandleAt))
       : history;
     const availability = signalAvailabilityTimes(newHistory, signalIntervalMs, new Date());
-    return advanceExecutionIndicators(
+    signalReplay = replayPositionIndicators(
       newHistory.map(toExecutionCandle),
+      availability,
+      signalIntervalMs,
       strategyConfig,
       checkpoint,
-    ).candles.map((candle, index) => ({
-      candle,
-      closedAt: new Date(+candle.openTime + signalIntervalMs),
-      availableAt: new Date(
-        Math.max(
-          +availability[index]!,
-          checkpoint?.availableAt ? Date.parse(checkpoint.availableAt) : 0,
-        ),
-      ),
-    }));
+    );
+    return signalReplay.signals;
   };
   let version = target.runtimeVersion;
   await processRuntimePriceEvents({
@@ -880,6 +883,9 @@ async function processRealtimePosition(
       signalExit,
     }) => {
       const decidedAt = new Date();
+      const indicatorState = signalCandleAt
+        ? signalReplay?.checkpointThrough(signalCandleAt)
+        : null;
       const result = await runtimeRepository.persistRealtimeQuote({
         workspaceId: target.workspaceId,
         deploymentId: target.executionRun.deployment.id,
@@ -892,6 +898,7 @@ async function processRealtimePosition(
         quoteAt: through,
         processedPrice: { eventId: event.id, streamId, throughAt: through },
         signalCandleAt,
+        ...(indicatorState ? { indicatorState } : {}),
         decidedAt,
         ...(recovery ? { recoveryEvidence: recovery } : {}),
         factors: {

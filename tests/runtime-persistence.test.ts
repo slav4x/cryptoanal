@@ -865,18 +865,131 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       },
     );
     await t.test(
+      "realtime entry copies its indicator seed independently of future deployment cycles",
+      async () => {
+        const context = await setup();
+        const config = strategyConfigSchema.parse(fixture.config);
+        const source = fixture.candles.map((candle, index) => ({
+          ...candle,
+          symbol: context.symbol,
+          openTime: new Date(+candleAt - (fixture.candles.length - 1 - index) * 900000),
+        }));
+        const indicatorState = advanceExecutionIndicators(source, config).checkpoint!;
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+          data: { indicatorState },
+        });
+        assert.equal((await runtime.persistRealtimeEntry(context.entry)).applied, true);
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+          data: { indicatorState: { overwritten: true } },
+        });
+        const stored = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.deepEqual(stored.indicatorState, indicatorState);
+        assert.equal(
+          stored.indicatorState && indicatorState.lastCandleAt,
+          stored.signalCandleAt!.toISOString(),
+        );
+      },
+    );
+    await t.test(
+      "candle entry stores its own indicator seed and signal close retains the consumed state",
+      async () => {
+        const context = await setup();
+        const config = strategyConfigSchema.parse(fixture.config);
+        const source = fixture.candles.map((candle, index) => ({
+          ...candle,
+          symbol: context.symbol,
+          openTime: new Date(+quoteAt - (fixture.candles.length - 1 - index) * 900000),
+        }));
+        const indicatorState = advanceExecutionIndicators(source, config).checkpoint!;
+        const cycle: PersistRuntimeCycleInput = {
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: quoteAt,
+          indicatorState,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal: null,
+          decision: { action: "OPEN", reasonCode: "TEST", summary: "Test", factors: {} },
+          positionAction: {
+            kind: "open",
+            position: context.entry.position,
+            markPrice: "100",
+            unrealizedPnl: "0",
+            immediateSettlement: null,
+          },
+        };
+        assert.equal((await runtime.persistCycle(cycle)).applied, true);
+        const stored = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.deepEqual(stored.indicatorState, indicatorState);
+        const nextAt = new Date(+quoteAt + 900000);
+        const nextState = advanceExecutionIndicators(
+          [{ ...source.at(-1)!, openTime: nextAt }],
+          config,
+          indicatorState,
+        ).checkpoint!;
+        const result = await runtime.persistRealtimeQuote({
+          ...context.entry,
+          positionId: stored.id,
+          expectedPositionVersion: stored.runtimeVersion,
+          signalCandleAt: nextAt,
+          indicatorState: nextState,
+          processedPrice: {
+            eventId: context.entry.entryPriceEventId,
+            streamId: context.deployment.exchangeAccountId,
+            throughAt: nextAt,
+          },
+          action: {
+            kind: "close",
+            settlement: {
+              exitPrice: "103",
+              grossPnl: "3",
+              netPnl: "2.8782",
+              fees: "0.1218",
+              slippage: "0",
+              exitReason: "signal-exit",
+              closedAt: nextAt,
+            },
+          },
+        });
+        assert.equal(result.closed, true);
+        const closed = await prisma.position.findUniqueOrThrow({ where: { id: stored.id } });
+        assert.deepEqual(closed.indicatorState, nextState);
+        assert.equal(+closed.signalCandleAt!, +nextAt);
+      },
+    );
+    await t.test(
       "signal progress is atomic with price progress and survives stale writes",
       async () => {
         const context = await open();
         assert.equal(+context.position.signalCandleAt!, +context.entry.expectedCandleAt);
         const signalCandleAt = new Date(+context.entry.expectedCandleAt + 900000);
-        const update = { ...context.quote, signalCandleAt };
+        const config = strategyConfigSchema.parse(fixture.config);
+        const source = fixture.candles.map((candle, index) => ({
+          ...candle,
+          symbol: context.symbol,
+          openTime: new Date(+signalCandleAt - (fixture.candles.length - 1 - index) * 900000),
+        }));
+        const indicatorState = advanceExecutionIndicators(source, config).checkpoint!;
+        const update = { ...context.quote, signalCandleAt, indicatorState };
         assert.equal((await runtime.persistRealtimeQuote(update)).applied, true);
         assert.equal(
           (
             await runtime.persistRealtimeQuote({
               ...update,
               signalCandleAt: context.entry.expectedCandleAt,
+              indicatorState: { stale: true },
             })
           ).applied,
           false,
@@ -886,8 +999,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         });
         assert.equal(+stored.signalCandleAt!, +signalCandleAt);
         assert.equal(stored.priceEventId, update.processedPrice.eventId);
+        assert.deepEqual(stored.indicatorState, indicatorState);
         const listed = await runtime.listRealtimePositions(context.workspace.id);
         assert.equal(+listed[0]!.signalCandleAt!, +signalCandleAt);
+        assert.deepEqual(listed[0]!.indicatorState, indicatorState);
       },
     );
     await t.test(

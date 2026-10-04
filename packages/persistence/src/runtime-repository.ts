@@ -94,6 +94,7 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  indicatorState?: Prisma.InputJsonValue;
   signalCandleAt?: Date | null;
   decidedAt?: Date;
   recoveryEvidence?: Prisma.InputJsonValue;
@@ -333,6 +334,7 @@ export class RuntimeRepository {
       orderBy: { openedAt: "asc" },
       select: {
         signalCandleAt: true,
+        indicatorState: true,
         id: true,
         runtimeVersion: true,
         priceEventId: true,
@@ -440,6 +442,7 @@ export class RuntimeRepository {
             stopPrice: input.action.stopPrice,
             runtimeVersion: { increment: 1 },
             ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
+            ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
             trailingPrice: input.action.trailingPrice,
           },
         });
@@ -484,10 +487,13 @@ export class RuntimeRepository {
           decidedAt: input.decidedAt ?? input.quoteAt,
         },
       });
-      if (input.signalCandleAt !== undefined)
+      if (input.signalCandleAt !== undefined || input.indicatorState !== undefined)
         await transaction.position.update({
           where: { id: position.id },
-          data: { signalCandleAt: input.signalCandleAt },
+          data: {
+            ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
+            ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
+          },
         });
       await clearRecoveredCursor(transaction, input, true);
       return { applied: true, closed: true };
@@ -525,7 +531,7 @@ export class RuntimeRepository {
               symbol: input.symbol,
             },
           },
-          select: { lastEvaluatedAt: true, pendingSignal: true },
+          select: { lastEvaluatedAt: true, pendingSignal: true, indicatorState: true },
         }),
         transaction.position.findFirst({
           where: {
@@ -588,6 +594,9 @@ export class RuntimeRepository {
           priceStreamId: entryEvent.streamId,
           managedThroughAt: entryEvent.observedAt,
           signalCandleAt: input.expectedCandleAt,
+          ...(cursor?.indicatorState == null
+            ? {}
+            : { indicatorState: cursor.indicatorState as Prisma.InputJsonValue }),
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
           symbol: input.symbol,
@@ -864,6 +873,7 @@ export class RuntimeRepository {
             priceStreamId: entryEvent.streamId,
             managedThroughAt: entryEvent.observedAt,
             signalCandleAt: input.candleAt,
+            ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
             side: action.position.side,
             entryRegime: action.position.entryRegime,
             entrySession: action.position.entrySession,

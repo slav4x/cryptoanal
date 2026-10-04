@@ -16,6 +16,33 @@ function createBybitFetch(proxyUrl?: string): BybitFetch {
     }) as unknown as Promise<Response>;
 }
 
+const publicResponseEnvelopeSchema = z.object({
+  retCode: z.number().int(),
+  retMsg: z.string(),
+});
+
+export class BybitPublicRequestError extends Error {
+  public constructor(
+    public readonly endpoint: string,
+    public readonly retCode: number,
+    public readonly retMsg: string,
+  ) {
+    super(`Bybit ${endpoint} request failed: ${retCode} ${retMsg}`);
+    this.name = "BybitPublicRequestError";
+  }
+}
+
+function parsePublicResponse<T>(body: unknown, schema: z.ZodType<T>, endpoint: string): T {
+  const envelope = publicResponseEnvelopeSchema.safeParse(body);
+  if (!envelope.success) throw new Error(`Bybit ${endpoint} returned an invalid response envelope`);
+  if (envelope.data.retCode !== 0) {
+    throw new BybitPublicRequestError(endpoint, envelope.data.retCode, envelope.data.retMsg);
+  }
+  const payload = schema.safeParse(body);
+  if (!payload.success) throw new Error(`Bybit ${endpoint} returned an invalid success payload`);
+  return payload.data;
+}
+
 const tickerResponseSchema = z.object({
   retCode: z.number(),
   retMsg: z.string(),
@@ -379,9 +406,9 @@ export class BybitPublicMarketClient {
       throw new Error(`Bybit tickers request failed with HTTP ${response.status}`);
     }
 
-    const payload = tickerResponseSchema.parse(await response.json());
-    if (payload.retCode !== 0) {
-      throw new Error(`Bybit tickers request failed: ${payload.retCode} ${payload.retMsg}`);
+    const payload = parsePublicResponse(await response.json(), tickerResponseSchema, "tickers");
+    if (payload.result.category !== "linear") {
+      throw new Error("Bybit tickers returned an unexpected market category");
     }
 
     const observedAt = new Date(payload.time);
@@ -435,9 +462,13 @@ export class BybitPublicMarketClient {
         throw new Error(`Bybit instruments request failed with HTTP ${response.status}`);
       }
 
-      const payload = instrumentInfoResponseSchema.parse(await response.json());
-      if (payload.retCode !== 0) {
-        throw new Error(`Bybit instruments request failed: ${payload.retCode} ${payload.retMsg}`);
+      const payload = parsePublicResponse(
+        await response.json(),
+        instrumentInfoResponseSchema,
+        "instruments",
+      );
+      if (payload.result.category !== "linear") {
+        throw new Error("Bybit instruments returned an unexpected market category");
       }
 
       for (const instrument of payload.result.list) {
@@ -553,9 +584,13 @@ export class BybitPublicMarketClient {
       throw new Error(`Bybit kline request failed with HTTP ${response.status}`);
     }
 
-    const payload = klineResponseSchema.parse(await response.json());
-    if (payload.retCode !== 0) {
-      throw new Error(`Bybit kline request failed: ${payload.retCode} ${payload.retMsg}`);
+    const payload = parsePublicResponse(await response.json(), klineResponseSchema, "kline");
+    if (payload.result.category !== "linear") {
+      throw new Error("Bybit kline returned an unexpected market category");
+    }
+
+    if (payload.result.symbol !== symbol) {
+      throw new Error(`Bybit kline returned an unexpected symbol for ${symbol}`);
     }
 
     return payload.result.list

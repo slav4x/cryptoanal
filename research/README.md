@@ -48,6 +48,19 @@ EMA, breakout, mean-reversion и momentum проверено точное рав
 ещё предстоит связать с seed anchor runtime. Исправленная формула Z-score может изменить
 mean-reversion решения старых исследований; сохранённые результаты не пересчитываются.
 
+## Общая начальная история — 4 октября 2026
+
+Runtime без сохранённого checkpoint инициализируется от полного immutable validation
+snapshot из execution context. ID/hash и версия source validation сохраняются в anchor;
+будущие, изменённые, отсутствующие и недостаточно прогретые данные отклоняются. Полный
+snapshot плюс последующие свечи даёт одинаковые признаки с непрерывным расчётом всей
+истории; проверены все четыре семейства и JSON restart. Legacy run без snapshot или с уже
+сохранённым legacy checkpoint остаётся явно отделённым и не получает выдуманную историю.
+Walk-forward 0.7.0 один раз считает индикаторы полного dataset и выбирает признаки для
+каждого окна. Контрольный momentum fixture сохранил dataset, решения, сделки и метрики;
+обновлена только версия validation engine. Исторические результаты source validation
+0.2/0.3/0.4 не пересчитываются; новая версия seed не означает нового подтверждения их PnL.
+
 ## Funding policy
 
 Funding имеет статус `disabled` (`cryptoanal-funding@disabled-v1`). Runtime сохраняет

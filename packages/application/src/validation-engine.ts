@@ -15,7 +15,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.6.0";
+export const validationEngineVersion = "cryptoanal-validation@0.7.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -94,6 +94,15 @@ function runWalkForward(
     },
     { datasetStart: Number.POSITIVE_INFINITY, datasetEnd: Number.NEGATIVE_INFINITY },
   );
+  const indicatorHistory = new Map<string, EnrichedExecutionCandle[]>();
+  for (const candle of input.candles) {
+    const history = indicatorHistory.get(candle.symbol) ?? [];
+    history.push(candle as EnrichedExecutionCandle);
+    indicatorHistory.set(candle.symbol, history);
+  }
+  for (const [symbol, history] of indicatorHistory) {
+    indicatorHistory.set(symbol, enrichExecutionCandles(history, input.config));
+  }
   const dayMs = 86_400_000;
   const trades: ValidationTrade[] = [];
   const equitySeries: Array<{ observedAt: string; equity: number }> = [];
@@ -111,6 +120,7 @@ function runWalkForward(
       { ...input, candles: windowCandles, initialCapital: windowCapital },
       testStart,
       testEnd,
+      indicatorHistory,
     );
     trades.push(...result.trades);
     equitySeries.push(...result.equitySeries);
@@ -140,6 +150,7 @@ function runBacktest(
   input: ValidationEngineInput,
   entryFrom: number | null,
   entryTo: number | null,
+  indicatorHistory?: Map<string, EnrichedExecutionCandle[]>,
 ): { trades: ValidationTrade[]; equitySeries: Array<{ observedAt: string; equity: number }> } {
   const bySymbol = new Map<string, EnrichedExecutionCandle[]>();
   for (const candle of input.candles) {
@@ -148,7 +159,14 @@ function runBacktest(
     bySymbol.set(candle.symbol, candles);
   }
   for (const [symbol, candles] of bySymbol) {
-    bySymbol.set(symbol, enrichExecutionCandles(candles, input.config));
+    const shared = indicatorHistory?.get(symbol);
+    const times = new Set(candles.map((candle) => +candle.openTime));
+    bySymbol.set(
+      symbol,
+      shared
+        ? shared.filter((candle) => times.has(+candle.openTime))
+        : enrichExecutionCandles(candles, input.config),
+    );
   }
 
   const groups = new Map<number, EnrichedExecutionCandle[]>();

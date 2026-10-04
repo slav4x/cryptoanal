@@ -170,7 +170,7 @@ export class RuntimeRepository {
           where: { status: "RUNNING" },
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { id: true, contextHash: true, engineVersion: true },
+          select: { id: true, context: true, contextHash: true, engineVersion: true },
         },
       },
     });

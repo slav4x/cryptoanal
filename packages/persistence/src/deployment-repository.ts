@@ -276,6 +276,8 @@ export class DeploymentRepository {
           select: {
             id: true,
             datasetId: true,
+            datasetSnapshotId: true,
+            datasetSnapshot: { select: { contentHash: true } },
             engineVersion: true,
             completedAt: true,
           },
@@ -304,6 +306,8 @@ export class DeploymentRepository {
           validation: {
             runId: validation.id,
             datasetId: validation.datasetId,
+            datasetSnapshotId: validation.datasetSnapshotId,
+            datasetContentHash: validation.datasetSnapshot?.contentHash ?? null,
             engineVersion: validation.engineVersion,
             completedAt: validation.completedAt?.toISOString() ?? null,
           },

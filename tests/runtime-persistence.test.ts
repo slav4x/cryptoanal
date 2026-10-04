@@ -3,6 +3,15 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import fixture from "../research/golden/v1/momentum-reversal.json";
 import { test } from "node:test";
 import { createPrismaClient } from "../packages/persistence/src/client";
+import {
+  validationIndicatorSource,
+  loadValidationIndicatorSeed,
+} from "../apps/worker/src/runtime-indicator-seed";
+import { DeploymentRepository } from "../packages/persistence/src/deployment-repository";
+import {
+  ValidationRepository,
+  ValidationDatasetConflictError,
+} from "../packages/persistence/src/validation-repository";
 import { advanceExecutionIndicators } from "../packages/application/src/index";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
@@ -239,6 +248,152 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
     } satisfies Pick<PersistRuntimeCycleInput, "providerVersion" | "candidate" | "contextSnapshot">;
   }
   try {
+    await t.test(
+      "deployment pins its immutable validation seed and changed snapshot data is rejected",
+      async () => {
+        const context = await setup();
+        const version = await prisma.strategyVersion.findUniqueOrThrow({
+          where: { id: context.entry.strategyVersionId },
+        });
+        const validations = new ValidationRepository(prisma);
+        const validation = await prisma.validationRun.create({
+          data: {
+            workspaceId: context.workspace.id,
+            strategyId: version.strategyId,
+            strategyVersionId: version.id,
+            kind: "BACKTEST",
+            status: "RUNNING",
+            datasetId: "seed-test",
+            datasetAsOf: quoteAt,
+            engineVersion: "current",
+            configHash: version.configHash,
+            input: {},
+            createdByActorId: "test",
+          },
+        });
+        const job = await prisma.job.create({
+          data: {
+            workspaceId: context.workspace.id,
+            kind: "BACKTEST",
+            status: "RUNNING",
+            lockedBy: "seed-test",
+            lockedAt: quoteAt,
+            input: {},
+            idempotencyKey: randomUUID(),
+            createdByActorId: "test",
+          },
+        });
+        const materialized = await validations.materializeDataset({
+          workspaceId: context.workspace.id,
+          runId: validation.id,
+          jobId: job.id,
+          workerId: "seed-test",
+          source: "bybit-public-linear-klines",
+          exchange: "bybit",
+          instrumentType: "linear-perpetual",
+          timeframe: "15m",
+          symbols: [context.symbol],
+          candles: fixture.candles.map((candle) => ({
+            ...candle,
+            symbol: context.symbol,
+            openTime: new Date(candle.openTime),
+            open: String(candle.open),
+            high: String(candle.high),
+            low: String(candle.low),
+            close: String(candle.close),
+            turnover: String(candle.turnover),
+            volume: "1",
+          })),
+        });
+        await prisma.validationRun.update({
+          where: { id: validation.id },
+          data: { status: "COMPLETED", verdict: "PASSED", completedAt: quoteAt },
+        });
+        await prisma.job.update({ where: { id: job.id }, data: { status: "COMPLETED" } });
+        await prisma.executionRun.update({
+          where: { id: context.run.id },
+          data: { status: "COMPLETED" },
+        });
+        await prisma.deployment.update({
+          where: { id: context.deployment.id },
+          data: { status: "READY" },
+        });
+        await prisma.exchangeConnection.update({
+          where: { id: context.connection.id },
+          data: { lastVerifiedAt: quoteAt },
+        });
+        const deployments = new DeploymentRepository(prisma);
+        await deployments.applyCommand({
+          workspaceId: context.workspace.id,
+          deploymentId: context.deployment.id,
+          command: "START",
+          expectedStatus: "READY",
+          actorId: "test",
+          requestId: "seed-test",
+          reason: "Seed test",
+          idempotencyKey: randomUUID(),
+          engineVersion: "current",
+        });
+        const started = await prisma.executionRun.findFirstOrThrow({
+          where: { deploymentId: context.deployment.id, status: "RUNNING" },
+        });
+        const source = validationIndicatorSource(started.context)!;
+        assert.equal(source.datasetSnapshotId, materialized.id);
+        const snapshot = await validations.getDatasetSnapshot(
+          context.workspace.id,
+          source.datasetSnapshotId,
+        );
+        assert.ok(snapshot);
+        assert.equal(source.contentHash, snapshot.contentHash);
+        const loadSnapshot = async (id: string) => {
+          const value = await validations.getDatasetSnapshot(context.workspace.id, id);
+          return (
+            value && {
+              ...value,
+              candles: value.candles.map((candle) => ({
+                ...candle,
+                open: candle.open.toNumber(),
+                high: candle.high.toNumber(),
+                low: candle.low.toNumber(),
+                close: candle.close.toNumber(),
+                turnover: candle.turnover.toNumber(),
+              })),
+            }
+          );
+        };
+        const seed = await loadValidationIndicatorSeed({
+          source,
+          symbol: context.symbol,
+          config: strategyConfigSchema.parse(fixture.config),
+          availableAt: quoteAt,
+          loadSnapshot,
+        });
+        assert.equal(seed.checkpoint.anchor?.contentHash, snapshot.contentHash);
+        assert.equal(seed.checkpoint.anchor?.validationRunId, validation.id);
+        const target = (await runtime.listActiveTargets(context.workspace.id))[0]!;
+        assert.deepEqual(validationIndicatorSource(target.executionRuns[0]!.context), source);
+        await prisma.datasetSnapshotCandle.update({
+          where: {
+            datasetSnapshotId_symbol_openTime: {
+              datasetSnapshotId: snapshot.id,
+              symbol: context.symbol,
+              openTime: snapshot.candles[0]!.openTime,
+            },
+          },
+          data: { close: "99" },
+        });
+        await assert.rejects(
+          loadValidationIndicatorSeed({
+            source,
+            symbol: context.symbol,
+            config: strategyConfigSchema.parse(fixture.config),
+            availableAt: quoteAt,
+            loadSnapshot,
+          }),
+          ValidationDatasetConflictError,
+        );
+      },
+    );
     await t.test(
       "indicator checkpoint commits with its decision and stale writers cannot replace it",
       async () => {

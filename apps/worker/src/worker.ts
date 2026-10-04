@@ -20,6 +20,8 @@ import {
   openExecutionPositionAtQuote,
   runValidationEngine,
   validationEngineVersion,
+  type ExecutionIndicatorCheckpoint,
+  type EnrichedExecutionCandle,
   type ExecutionMarketRegime,
   type ExecutionPosition,
   type ExecutionQuote,
@@ -73,6 +75,7 @@ import { OrderedPriceJournal } from "./price-journal";
 import { forEachConcurrent, processRuntimePriceEvents } from "./runtime-price-processor";
 import { RecoveryRequestCache } from "./recovery-request-cache";
 import { processRuntimeSymbols } from "./runtime-symbol-loop";
+import { loadValidationIndicatorSeed, validationIndicatorSource } from "./runtime-indicator-seed";
 import { signalAvailabilityTimes } from "./runtime-signal-order";
 import {
   recoverRuntimeGap,
@@ -86,6 +89,9 @@ const workerId = `worker-${randomUUID()}`;
 const watchdogId = `${workerId}:watchdog`;
 const config = loadServerConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
+const indicatorSeedCache = new RecoveryRequestCache<
+  Record<string, { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }>
+>(Date.now, 64, 86400_000);
 const marketDataRepository = new MarketDataRepository(prisma);
 const marketUniverseRepository = new MarketUniverseRepository(prisma);
 const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
@@ -1180,11 +1186,64 @@ async function processRuntimeTarget(
         );
       }
 
-      const initialCheckpoint = readExecutionIndicatorCheckpoint(
+      if (state.cursor?.lastEvaluatedAt && state.cursor.lastEvaluatedAt >= lastCompleteCandleAt)
+        return;
+      let initialCheckpoint = readExecutionIndicatorCheckpoint(
         state.cursor?.indicatorState,
         strategyConfig,
         symbol,
       );
+      let seedCandle: EnrichedExecutionCandle | null = null;
+      if (!initialCheckpoint) {
+        const source = validationIndicatorSource(executionRun.context);
+        if (source) {
+          const seeds = await indicatorSeedCache.get(
+            `${target.workspaceId}:${source.datasetSnapshotId}:${source.contentHash}:${source.validationRunId}:${target.strategyVersion.configHash}`,
+            async () => {
+              const snapshot = await validationRepository.getDatasetSnapshot(
+                target.workspaceId,
+                source.datasetSnapshotId,
+              );
+              if (!snapshot)
+                throw new RuntimeWorkerError(
+                  "RUNTIME_INDICATOR_SEED_MISSING",
+                  "Validation seed snapshot is missing",
+                );
+              const availableAt = new Date();
+              const dataset = { ...snapshot, candles: snapshot.candles.map(toExecutionCandle) };
+              const result: Record<
+                string,
+                { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }
+              > = {};
+              for (const seedSymbol of [
+                ...new Set(dataset.candles.map((candle) => candle.symbol)),
+              ]) {
+                result[seedSymbol] = await loadValidationIndicatorSeed({
+                  source,
+                  symbol: seedSymbol,
+                  config: strategyConfig,
+                  availableAt,
+                  loadSnapshot: async () => dataset,
+                });
+              }
+              return result;
+            },
+          );
+          const seed = seeds[symbol];
+          if (!seed)
+            throw new RuntimeWorkerError(
+              "RUNTIME_INDICATOR_SYMBOL_NOT_VALIDATED",
+              `${symbol} is missing from the validation seed`,
+            );
+          initialCheckpoint = seed.checkpoint;
+          seedCandle = seed.candle;
+          if (Date.parse(initialCheckpoint.lastCandleAt) > +lastCompleteCandleAt)
+            throw new RuntimeWorkerError(
+              "RUNTIME_INDICATOR_SEED_AHEAD",
+              "Validation seed is ahead of runtime evaluation boundary",
+            );
+        }
+      }
       if (initialCheckpoint) {
         const replayCount = Math.floor(
           (+lastCompleteCandleAt - Date.parse(initialCheckpoint.lastCandleAt)) / intervalMs,
@@ -1277,12 +1336,16 @@ async function processRuntimeTarget(
         close: candle.close.toNumber(),
         turnover: candle.turnover.toNumber(),
       }));
-      const checkpoint = readExecutionIndicatorCheckpoint(
+      const persistedCheckpoint = readExecutionIndicatorCheckpoint(
         state.cursor?.indicatorState,
         strategyConfig,
         symbol,
       );
-      if (checkpoint && checkpoint.lastCandleAt !== state.cursor?.lastEvaluatedAt?.toISOString()) {
+      const checkpoint = persistedCheckpoint ?? initialCheckpoint;
+      if (
+        persistedCheckpoint &&
+        persistedCheckpoint.lastCandleAt !== state.cursor?.lastEvaluatedAt?.toISOString()
+      ) {
         throw new RuntimeWorkerError(
           "RUNTIME_INDICATOR_CURSOR_MISMATCH",
           "Indicator checkpoint does not match decision cursor",
@@ -1306,7 +1369,12 @@ async function processRuntimeTarget(
       }
       const indicators = advanceExecutionIndicators(newCandles, strategyConfig, checkpoint);
       const candles = indicators.candles;
-      const candle = candles.at(-1)!;
+      const candle = candles.at(-1) ?? seedCandle;
+      if (!candle || +candle.openTime !== +latest.openTime)
+        throw new RuntimeWorkerError(
+          "RUNTIME_INDICATOR_REPLAY_GAP",
+          "Indicator replay did not reach the latest candle",
+        );
       const candleClosedAt = new Date(candle.openTime.getTime() + intervalMs);
       const signalAvailableAt = new Date(
         Math.max(
@@ -1353,7 +1421,13 @@ async function processRuntimeTarget(
           target.status === "PAUSED"
             ? "Новые входы отключены: deployment на паузе"
             : "Условий для действия нет",
-        factors: runtimeFactors(candle, dailyPnl, equity, signalAvailableAt),
+        factors: runtimeFactors(
+          candle,
+          dailyPnl,
+          equity,
+          signalAvailableAt,
+          indicators.checkpoint!,
+        ),
       };
       let pendingSignalAfter: RuntimePendingSignal | null = null;
       let entryPriceEventId: bigint | undefined;
@@ -1364,7 +1438,13 @@ async function processRuntimeTarget(
           action: "SKIP",
           reasonCode: "LEGACY_SIGNAL_DISCARDED",
           summary: "Устаревший сигнал сброшен; ожидается новый сигнал со свежей котировкой",
-          factors: runtimeFactors(candle, dailyPnl, equity, signalAvailableAt),
+          factors: runtimeFactors(
+            candle,
+            dailyPnl,
+            equity,
+            signalAvailableAt,
+            indicators.checkpoint!,
+          ),
         };
       }
 
@@ -1376,7 +1456,13 @@ async function processRuntimeTarget(
             action: "SKIP",
             reasonCode: riskAssessment.reason ?? "ENTRY_GATE_CLOSED",
             summary: "Торговый сигнал отклонён до исполнения общим risk gate",
-            factors: runtimeFactors(candle, dailyPnl, equity, signalAvailableAt),
+            factors: runtimeFactors(
+              candle,
+              dailyPnl,
+              equity,
+              signalAvailableAt,
+              indicators.checkpoint!,
+            ),
           };
         } else if (signal) {
           const quote = getFreshQuote(symbol);
@@ -1417,7 +1503,13 @@ async function processRuntimeTarget(
               reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
               summary: `Открыта ${opened.side} позиция сразу после закрытия сигнальной свечи`,
               factors: {
-                ...runtimeFactors(candle, dailyPnl, equity, signalAvailableAt),
+                ...runtimeFactors(
+                  candle,
+                  dailyPnl,
+                  equity,
+                  signalAvailableAt,
+                  indicators.checkpoint!,
+                ),
                 executionQuote: realtimeQuoteFactors(quote!),
               },
             };
@@ -1434,7 +1526,13 @@ async function processRuntimeTarget(
                 action: "OPEN",
                 reasonCode: "ENTRY_SIGNAL_PENDING",
                 summary: `Зафиксирован ${signal.side} сигнал; ожидается realtime quote`,
-                factors: runtimeFactors(candle, dailyPnl, equity, signalAvailableAt),
+                factors: runtimeFactors(
+                  candle,
+                  dailyPnl,
+                  equity,
+                  signalAvailableAt,
+                  indicators.checkpoint!,
+                ),
               };
             }
           }
@@ -2107,8 +2205,10 @@ function runtimeFactors(
   dailyPnl: number,
   equity: number,
   signalAvailableAt: Date,
+  indicatorState: ExecutionIndicatorCheckpoint,
 ) {
   return {
+    indicatorAnchor: indicatorState.anchor ?? { mode: "legacy-window" },
     signalAvailableAt: signalAvailableAt.toISOString(),
     candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close },
     market: {

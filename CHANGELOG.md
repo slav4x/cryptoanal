@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Runtime начинает EMA/RSI от immutable validation dataset запуска; checkpoint и factors
+  сохраняют anchor, missing/changed snapshot не заменяется новым окном.
+- Walk-forward больше не пересоздаёт seed EMA/RSI при сдвиге training window;
+  индикаторы полного датасета считаются один раз и выбираются по периоду окна.
+
 - EMA/RSI продолжаются из durable checkpoint после рестарта и backfill, без повторного
   SMA seed на каждом скользящем окне; stale cycle не перезаписывает новое состояние.
 - Rolling объём и Z-score больше не зависят от размера пакета; двухпроходная дисперсия
@@ -33,6 +38,9 @@
   limited to markets with active positions instead of listing the entire Market Universe.
 
 ### Added
+
+- Pinned snapshot ID/hash в execution context и компактный bounded cache validation seeds;
+  отдельная маркировка legacy runs без immutable snapshot.
 
 - Миграция `RuntimeCursor.indicatorState`, version/config validation и проверка пересмотра
   хвоста истории; общий checkpoint входа для signal exits и recovery новых позиций.
@@ -213,6 +221,8 @@
 - Lease-based periodic Bybit credential verification with retry scheduling and health incidents.
 
 ### Changed
+
+- Validation engine 0.7.0 отражает общий seed walk-forward; контрольные backtest сделки и PnL сохранены.
 
 - Indicator engine 2.0.0, validation 0.6.0 и candle replay 1.2.0 используют общий
   checkpoint/replay; прежние сделки контрольного momentum набора сохранены.

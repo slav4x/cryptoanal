@@ -127,7 +127,18 @@ type EmaCheckpoint = { count: number; sum: number; value: number | null };
 type RsiCheckpoint = { count: number; gain: number; loss: number; value: number | null };
 type StoredIndicatorCandle = Omit<ExecutionCandle, "openTime"> & { openTime: string };
 
+export type ExecutionIndicatorAnchor = {
+  mode: "validation-dataset";
+  datasetSnapshotId: string;
+  contentHash: string;
+  startsAt: string;
+  seededThroughAt: string;
+  validationRunId: string | null;
+  validationEngineVersion: string | null;
+};
+
 export type ExecutionIndicatorCheckpoint = {
+  anchor?: ExecutionIndicatorAnchor;
   version: string;
   configKey: string;
   symbol: string;
@@ -194,6 +205,26 @@ export function readExecutionIndicatorCheckpoint(
     !Array.isArray(state.tail) ||
     state.tail.length === 0 ||
     state.tail.length > minimumExecutionCandleCount(config)
+  )
+    return fail();
+  const source = state.anchor;
+  if (
+    source !== undefined &&
+    (!source ||
+      source.mode !== "validation-dataset" ||
+      typeof source.datasetSnapshotId !== "string" ||
+      !source.datasetSnapshotId ||
+      typeof source.contentHash !== "string" ||
+      !/^[a-f0-9]{64}$/.test(source.contentHash) ||
+      !time(source.startsAt) ||
+      !time(source.seededThroughAt) ||
+      Date.parse(source.startsAt) > Date.parse(source.seededThroughAt) ||
+      Date.parse(source.seededThroughAt) > Date.parse(state.lastCandleAt) ||
+      !(source.validationRunId === null || typeof source.validationRunId === "string") ||
+      !(
+        source.validationEngineVersion === null ||
+        typeof source.validationEngineVersion === "string"
+      ))
   )
     return fail();
   const intervalMs = timeframeMinutes[config.universe.timeframe] * 60_000;
@@ -341,7 +372,15 @@ export function advanceExecutionIndicators(
     result.rsi = state.rsi.value;
     state.previousClose = candle.close;
     state.lastCandleAt = candle.openTime.toISOString();
-    tail.push({ ...candle, openTime: state.lastCandleAt });
+    tail.push({
+      symbol: candle.symbol,
+      openTime: state.lastCandleAt,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      turnover: candle.turnover,
+    });
     if (tail.length > tailLimit) tail = tail.slice(-tailLimit);
   }
   state!.tail = tail;

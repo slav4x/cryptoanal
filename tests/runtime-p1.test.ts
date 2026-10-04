@@ -6,12 +6,12 @@ import {
   evaluateExecutionPriceExit,
   openExecutionPositionAtQuote,
   settleExecutionPosition,
+  limitExecutionPositionRisk,
 } from "../packages/application/src/index";
 import { OrderedPriceJournal } from "../apps/worker/src/price-journal";
 import {
   recoverRuntimeGap,
   RuntimeRecoveryIncompleteError,
-  limitRuntimePositionRisk,
   runtimeRecoveryMinuteRange,
 } from "../apps/worker/src/runtime-recovery";
 
@@ -236,10 +236,10 @@ test("complete-minute protection activation with unknown intrabar order stays am
 });
 
 test("runtime sizing budgets stop fees and slippage as well as account exposure", () => {
-  const limited = limitRuntimePositionRisk(position(), 10000, 3000, config);
+  const limited = limitExecutionPositionRisk(position(), 10000, 3000, config);
   assert.ok(limited);
   const stopped = settleExecutionPosition(limited, limited.stopPrice, at, "stop-loss", config);
   assert.ok(-stopped.netPnl <= 100 + 1e-8);
   assert.ok(limited.quantity * limited.entryPrice + limited.entryFee <= 3000 + 1e-8);
-  assert.equal(limitRuntimePositionRisk(position(), 0, 3000, config), null);
+  assert.equal(limitExecutionPositionRisk(position(), 0, 3000, config), null);
 });

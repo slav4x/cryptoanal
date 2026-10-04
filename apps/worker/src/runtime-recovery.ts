@@ -181,34 +181,3 @@ function asPriceCandle(candle: ExecutionCandle): EnrichedExecutionCandle {
     previousMomentumPercent: null,
   };
 }
-
-export function limitRuntimePositionRisk(
-  position: ExecutionPosition,
-  equity: number,
-  maximumNotional: number,
-  config: ExecutionStrategyConfig,
-): ExecutionPosition | null {
-  const stopFill =
-    position.stopPrice *
-    (position.side === "long"
-      ? 1 - config.costs.slippageBps / 10_000
-      : 1 + config.costs.slippageBps / 10_000);
-  const feePerUnit = position.entryFee / position.quantity;
-  const unitLoss =
-    Math.max(0, (position.entryPrice - stopFill) * (position.side === "long" ? 1 : -1)) +
-    feePerUnit +
-    (stopFill * config.costs.takerFeeBps) / 10_000;
-  const quantity = Math.min(
-    position.quantity,
-    maximumNotional / (position.entryPrice + feePerUnit),
-    (Math.max(0, equity) * config.risk.riskPerTradePercent) / 100 / unitLoss,
-  );
-  if (!Number.isFinite(quantity) || quantity <= 0) return null;
-  const scale = quantity / position.quantity;
-  return {
-    ...position,
-    quantity,
-    entryFee: position.entryFee * scale,
-    entrySlippage: position.entrySlippage * scale,
-  };
-}

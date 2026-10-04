@@ -14,7 +14,7 @@ import {
 } from "./execution-engine";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.2.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.3.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",

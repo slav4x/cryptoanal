@@ -14,6 +14,7 @@ import {
   executionIndicatorVersion,
   evaluateHealth,
   settleExecutionPosition,
+  limitExecutionPositionRisk,
   executionUnrealizedPnl,
   getExecutionSignal,
   getExecutionMarketRegime,
@@ -89,7 +90,6 @@ import { signalAvailabilityTimes } from "./runtime-signal-order";
 import {
   recoverRuntimeGap,
   runtimeRecoveryMinuteRange,
-  limitRuntimePositionRisk,
   RuntimeRecoveryIncompleteError,
 } from "./runtime-recovery";
 
@@ -1139,7 +1139,7 @@ async function processRealtimeEntry(
         strategyConfig,
       );
       if (!candidate) return { status: "no-touch" };
-      const position = limitRuntimePositionRisk(
+      const position = limitExecutionPositionRisk(
         candidate,
         risk.equity,
         Math.max(0, risk.maximumExposure - risk.exposure),
@@ -1646,7 +1646,7 @@ async function processRuntimeTarget(
               : null;
           const opened =
             candidate && !riskAssessment.reason
-              ? limitRuntimePositionRisk(
+              ? limitExecutionPositionRisk(
                   candidate,
                   riskAssessment.equity,
                   Math.max(0, riskAssessment.maximumExposure - riskAssessment.exposure),

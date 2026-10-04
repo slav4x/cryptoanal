@@ -687,20 +687,82 @@ function createExecutionPosition({
     (side === "long"
       ? 1 + config.exit.takeProfitPercent / 100
       : 1 - config.exit.takeProfitPercent / 100);
+  return limitExecutionPositionRisk(
+    {
+      symbol,
+      side,
+      entryRegime,
+      entrySession,
+      openedAt,
+      entryPrice,
+      quantity,
+      stopPrice,
+      takePrice,
+      trailingPrice: null,
+      bestPrice: entryPrice,
+      entryFee: entryPrice * quantity * (feeBps / 10_000),
+      entrySlippage: Math.abs(entryPrice - referencePrice) * quantity,
+    },
+    equity,
+    maximumNotional,
+    config,
+  );
+}
+
+export function limitExecutionPositionRisk(
+  position: ExecutionPosition,
+  equity: number,
+  maximumNotional: number,
+  config: ExecutionStrategyConfig,
+): ExecutionPosition | null {
+  if (
+    ![
+      position.quantity,
+      position.entryPrice,
+      position.stopPrice,
+      position.entryFee,
+      position.entrySlippage,
+      equity,
+      maximumNotional,
+      config.risk.riskPerTradePercent,
+      config.costs.takerFeeBps,
+      config.costs.slippageBps,
+    ].every(Number.isFinite) ||
+    position.quantity <= 0 ||
+    position.entryPrice <= 0 ||
+    position.stopPrice <= 0 ||
+    position.entryFee < 0 ||
+    position.entrySlippage < 0 ||
+    equity <= 0 ||
+    maximumNotional <= 0 ||
+    config.risk.riskPerTradePercent <= 0 ||
+    config.costs.takerFeeBps < 0 ||
+    config.costs.slippageBps < 0
+  )
+    return null;
+  const stopFill =
+    position.stopPrice *
+    (position.side === "long"
+      ? 1 - config.costs.slippageBps / 10_000
+      : 1 + config.costs.slippageBps / 10_000);
+  const feePerUnit = position.entryFee / position.quantity;
+  const unitLoss =
+    Math.max(0, (position.entryPrice - stopFill) * (position.side === "long" ? 1 : -1)) +
+    feePerUnit +
+    (stopFill * config.costs.takerFeeBps) / 10_000;
+  if (stopFill <= 0 || !Number.isFinite(unitLoss) || unitLoss <= 0) return null;
+  const quantity = Math.min(
+    position.quantity,
+    maximumNotional / (position.entryPrice + feePerUnit),
+    (Math.max(0, equity) * config.risk.riskPerTradePercent) / 100 / unitLoss,
+  );
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  const scale = quantity / position.quantity;
   return {
-    symbol,
-    side,
-    entryRegime,
-    entrySession,
-    openedAt,
-    entryPrice,
+    ...position,
     quantity,
-    stopPrice,
-    takePrice,
-    trailingPrice: null,
-    bestPrice: entryPrice,
-    entryFee: entryPrice * quantity * (feeBps / 10_000),
-    entrySlippage: Math.abs(entryPrice - referencePrice) * quantity,
+    entryFee: position.entryFee * scale,
+    entrySlippage: position.entrySlippage * scale,
   };
 }
 

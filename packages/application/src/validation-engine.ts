@@ -16,7 +16,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.8.0";
+export const validationEngineVersion = "cryptoanal-validation@0.9.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;

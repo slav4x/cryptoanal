@@ -3,8 +3,8 @@
   "id": "momentum-reversal-v1",
   "datasetVersion": "momentum-reversal-with-continuous-24h-warmup@2",
   "datasetHash": "ff2a6179a32adf0067decf2121d2b234b5010710de6a7d2515ecaed28f0a44b6",
-  "engineVersion": "cryptoanal-validation@0.8.0",
-  "runtimeEngineVersion": "cryptoanal-runtime-replay@1.2.0",
+  "engineVersion": "cryptoanal-validation@0.9.0",
+  "runtimeEngineVersion": "cryptoanal-runtime-replay@1.3.0",
   "initialCapital": 10000,
   "config": {
     "schemaVersion": 1,
@@ -1235,9 +1235,9 @@
         "closedAt": "2026-01-01T04:15:00.000Z",
         "entryPrice": 102.55125,
         "exitPrice": 106.59997335,
-        "quantity": 48.75610975,
-        "netPnl": 191.28156,
-        "fees": 6.11844,
+        "quantity": 44.98272073,
+        "netPnl": 176.47767711,
+        "fees": 5.64491464,
         "exitReason": "take-profit"
       },
       {
@@ -1247,9 +1247,9 @@
         "closedAt": "2026-01-01T05:15:00.000Z",
         "entryPrice": 102.9485,
         "exitPrice": 98.87997528,
-        "quantity": 49.49698908,
-        "netPnl": 195.38578252,
-        "fees": 5.9939411,
+        "quantity": 45.50630087,
+        "netPnl": 179.6328296,
+        "fees": 5.51068039,
         "exitReason": "take-profit"
       },
       {
@@ -1259,9 +1259,9 @@
         "closedAt": "2026-01-01T06:30:00.000Z",
         "entryPrice": 99.0495,
         "exitPrice": 102.95997426,
-        "quantity": 52.43170002,
-        "netPnl": 198.67779325,
-        "fees": 6.35502009,
+        "quantity": 48.23153307,
+        "netPnl": 182.76223261,
+        "fees": 5.84593598,
         "exitReason": "take-profit"
       }
     ],
@@ -1270,18 +1270,25 @@
       "wins": 3,
       "losses": 0,
       "winRatePercent": 100,
-      "netPnl": 585.34513577,
-      "returnPercent": 5.85345136,
+      "netPnl": 538.87273932,
+      "returnPercent": 5.38872739,
       "maxDrawdownPercent": 0,
       "profitFactor": null,
-      "expectancy": 195.11504526,
-      "totalFees": 18.46740119,
+      "expectancy": 179.62424644,
+      "totalFees": 17.00153101,
       "candleCount": 26,
+      "evaluation": {
+        "startsAt": "2026-01-01T00:30:00.000Z",
+        "endsAt": "2026-01-01T07:00:00.000Z",
+        "datasetCandleCount": 124,
+        "warmupCandleCount": 98,
+        "excludedCandleCount": 0
+      },
       "windows": 1,
       "perSymbol": {
         "BTCUSDT": {
           "trades": 3,
-          "netPnl": 585.34513577
+          "netPnl": 538.87273932
         }
       },
       "equitySeries": [
@@ -1291,16 +1298,9 @@
         },
         {
           "observedAt": "2026-01-01T06:45:00.000Z",
-          "equity": 10585.34513577
+          "equity": 10538.87273932
         }
-      ],
-      "evaluation": {
-        "startsAt": "2026-01-01T00:30:00.000Z",
-        "endsAt": "2026-01-01T07:00:00.000Z",
-        "datasetCandleCount": 124,
-        "warmupCandleCount": 98,
-        "excludedCandleCount": 0
-      }
+      ]
     }
   }
 }

@@ -123,7 +123,232 @@ export type ExecutionSettlement<Reason extends ExecutionExitReason = ExecutionEx
   exitReason: Reason;
 };
 
+type EmaCheckpoint = { count: number; sum: number; value: number | null };
+type RsiCheckpoint = { count: number; gain: number; loss: number; value: number | null };
+type StoredIndicatorCandle = Omit<ExecutionCandle, "openTime"> & { openTime: string };
+
+export type ExecutionIndicatorCheckpoint = {
+  version: string;
+  configKey: string;
+  symbol: string;
+  lastCandleAt: string;
+  fast: EmaCheckpoint;
+  slow: EmaCheckpoint;
+  rsi: RsiCheckpoint;
+  previousClose: number;
+  tail: StoredIndicatorCandle[];
+  availableAt: string | null;
+};
+
+function indicatorConfigKey(config: ExecutionStrategyConfig): string {
+  return JSON.stringify([
+    config.universe.timeframe,
+    config.signal.emaFastPeriod,
+    config.signal.emaSlowPeriod,
+    config.signal.rsiPeriod,
+    config.signal.breakoutLookbackPeriod,
+    config.signal.meanReversionLookbackPeriod,
+    config.signal.momentumLookbackPeriod,
+  ]);
+}
+
+export function readExecutionIndicatorCheckpoint(
+  value: unknown,
+  config: ExecutionStrategyConfig,
+  symbol: string,
+): ExecutionIndicatorCheckpoint | null {
+  if (value === null || value === undefined) return null;
+  const fail = (): never => {
+    throw new Error("Invalid or incompatible indicator checkpoint");
+  };
+  if (typeof value !== "object" || Array.isArray(value)) return fail();
+  const state = value as ExecutionIndicatorCheckpoint;
+  const finite = (number: unknown) => typeof number === "number" && Number.isFinite(number);
+  const time = (date: unknown) => typeof date === "string" && Number.isFinite(Date.parse(date));
+  const ema = (part: EmaCheckpoint | undefined, period: number) =>
+    part &&
+    Number.isInteger(part.count) &&
+    part.count >= 0 &&
+    part.count <= period &&
+    finite(part.sum) &&
+    (part.count < period ? part.value === null : finite(part.value));
+  const rsi = state.rsi;
+  if (
+    state.version !== executionIndicatorVersion ||
+    state.configKey !== indicatorConfigKey(config) ||
+    state.symbol !== symbol ||
+    !time(state.lastCandleAt) ||
+    !finite(state.previousClose) ||
+    !ema(state.fast, config.signal.emaFastPeriod) ||
+    !ema(state.slow, config.signal.emaSlowPeriod) ||
+    !rsi ||
+    !Number.isInteger(rsi.count) ||
+    rsi.count < 0 ||
+    rsi.count > config.signal.rsiPeriod ||
+    !finite(rsi.gain) ||
+    !finite(rsi.loss) ||
+    rsi.gain < 0 ||
+    rsi.loss < 0 ||
+    (rsi.count < config.signal.rsiPeriod ? rsi.value !== null : !finite(rsi.value)) ||
+    !(state.availableAt === null || time(state.availableAt)) ||
+    !Array.isArray(state.tail) ||
+    state.tail.length === 0 ||
+    state.tail.length > minimumExecutionCandleCount(config)
+  )
+    return fail();
+  const intervalMs = timeframeMinutes[config.universe.timeframe] * 60_000;
+  for (let index = 0; index < state.tail.length; index += 1) {
+    const candle = state.tail[index];
+    if (
+      !candle ||
+      candle.symbol !== symbol ||
+      !time(candle.openTime) ||
+      ![candle.open, candle.high, candle.low, candle.close, candle.turnover].every(finite) ||
+      (index > 0 &&
+        Date.parse(candle.openTime) - Date.parse(state.tail[index - 1]!.openTime) !== intervalMs)
+    )
+      return fail();
+  }
+  if (
+    state.fast.count !== Math.min(config.signal.emaFastPeriod, state.tail.length) ||
+    state.slow.count !== Math.min(config.signal.emaSlowPeriod, state.tail.length) ||
+    state.rsi.count !== Math.min(config.signal.rsiPeriod, state.tail.length - 1) ||
+    (state.rsi.value !== null && state.rsi.value !== rsiValue(state.rsi.gain, state.rsi.loss)) ||
+    state.tail.at(-1)!.openTime !== state.lastCandleAt ||
+    state.tail.at(-1)!.close !== state.previousClose
+  )
+    return fail();
+  return structuredClone(state);
+}
+
+export function assertExecutionIndicatorHistory(
+  candles: ExecutionCandle[],
+  checkpoint: ExecutionIndicatorCheckpoint | null,
+): void {
+  if (!checkpoint) return;
+  const tail = new Map(checkpoint.tail.map((candle) => [Date.parse(candle.openTime), candle]));
+  for (const candle of candles) {
+    const stored = tail.get(+candle.openTime);
+    if (
+      stored &&
+      (stored.symbol !== candle.symbol ||
+        stored.open !== candle.open ||
+        stored.high !== candle.high ||
+        stored.low !== candle.low ||
+        stored.close !== candle.close ||
+        stored.turnover !== candle.turnover)
+    ) {
+      throw new Error("Indicator checkpoint history was revised; explicit replay required");
+    }
+  }
+}
+
 export function enrichExecutionCandles(
+  candles: ExecutionCandle[],
+  config: ExecutionStrategyConfig,
+): EnrichedExecutionCandle[] {
+  const bySymbol = new Map<string, ExecutionCandle[]>();
+  for (const candle of candles) {
+    const history = bySymbol.get(candle.symbol) ?? [];
+    history.push(candle);
+    bySymbol.set(candle.symbol, history);
+  }
+  const result: EnrichedExecutionCandle[] = [];
+  for (const history of bySymbol.values()) {
+    for (const candle of advanceExecutionIndicators(history, config).candles) result.push(candle);
+  }
+  return result.sort((left, right) => +left.openTime - +right.openTime);
+}
+
+export function advanceExecutionIndicators(
+  candles: ExecutionCandle[],
+  config: ExecutionStrategyConfig,
+  checkpoint: ExecutionIndicatorCheckpoint | null = null,
+): { candles: EnrichedExecutionCandle[]; checkpoint: ExecutionIndicatorCheckpoint | null } {
+  const ordered = [...candles].sort((left, right) => +left.openTime - +right.openTime);
+  if (!ordered.length)
+    return {
+      candles: [],
+      checkpoint: checkpoint
+        ? readExecutionIndicatorCheckpoint(checkpoint, config, checkpoint.symbol)
+        : null,
+    };
+  const symbol = ordered[0]!.symbol;
+  let state = readExecutionIndicatorCheckpoint(checkpoint, config, symbol);
+  if (ordered.some((candle) => candle.symbol !== symbol))
+    throw new Error("Indicator checkpoint requires one symbol");
+  if (state && +ordered[0]!.openTime <= Date.parse(state.lastCandleAt))
+    throw new Error("Indicator replay must advance past checkpoint");
+  const prefix =
+    state?.tail.map((candle) => ({ ...candle, openTime: new Date(candle.openTime) })) ?? [];
+  const enriched = enrichWindowCandles([...prefix, ...ordered], config).slice(prefix.length);
+  const intervalMs = timeframeMinutes[config.universe.timeframe] * 60_000;
+  const tailLimit = minimumExecutionCandleCount(config);
+  let tail = state?.tail ?? [];
+  for (let index = 0; index < ordered.length; index += 1) {
+    const candle = ordered[index]!;
+    if (!state || +candle.openTime - Date.parse(state.lastCandleAt) !== intervalMs) {
+      state = {
+        version: executionIndicatorVersion,
+        configKey: indicatorConfigKey(config),
+        symbol,
+        lastCandleAt: candle.openTime.toISOString(),
+        previousClose: candle.close,
+        fast: { count: 0, sum: 0, value: null },
+        slow: { count: 0, sum: 0, value: null },
+        rsi: { count: 0, gain: 0, loss: 0, value: null },
+        tail: [],
+        availableAt: null,
+      };
+      tail = [];
+    } else {
+      const change = candle.close - state.previousClose;
+      const rsi = state.rsi;
+      const period = config.signal.rsiPeriod;
+      if (rsi.count < period) {
+        rsi.gain += Math.max(change, 0);
+        rsi.loss += Math.max(-change, 0);
+        rsi.count += 1;
+        if (rsi.count === period) {
+          rsi.gain /= period;
+          rsi.loss /= period;
+        }
+      } else {
+        rsi.gain = (rsi.gain * (period - 1) + Math.max(change, 0)) / period;
+        rsi.loss = (rsi.loss * (period - 1) + Math.max(-change, 0)) / period;
+      }
+    }
+    const result = enriched[index]!;
+    result.previousEmaFast = state.fast.value;
+    result.previousEmaSlow = state.slow.value;
+    result.previousRsi = state.rsi.value;
+    for (const [part, period] of [
+      [state.fast, config.signal.emaFastPeriod],
+      [state.slow, config.signal.emaSlowPeriod],
+    ] as const) {
+      if (part.count < period) {
+        part.sum += candle.close;
+        part.count += 1;
+        if (part.count === period) part.value = part.sum / period;
+      } else {
+        part.value = (candle.close - part.value!) * (2 / (period + 1)) + part.value!;
+      }
+    }
+    if (state.rsi.count === config.signal.rsiPeriod)
+      state.rsi.value = rsiValue(state.rsi.gain, state.rsi.loss);
+    result.emaFast = state.fast.value;
+    result.emaSlow = state.slow.value;
+    result.rsi = state.rsi.value;
+    state.previousClose = candle.close;
+    state.lastCandleAt = candle.openTime.toISOString();
+    tail.push({ ...candle, openTime: state.lastCandleAt });
+    if (tail.length > tailLimit) tail = tail.slice(-tailLimit);
+  }
+  state!.tail = tail;
+  return { candles: enriched, checkpoint: state };
+}
+
+function enrichWindowCandles(
   candles: ExecutionCandle[],
   config: ExecutionStrategyConfig,
 ): EnrichedExecutionCandle[] {
@@ -156,16 +381,13 @@ export function enrichExecutionCandles(
   return result.sort((left, right) => left.openTime.getTime() - right.openTime.getTime());
 }
 
-export const executionIndicatorVersion = "cryptoanal-indicators@1.0.0";
+export const executionIndicatorVersion = "cryptoanal-indicators@2.0.0";
 
 function enrichContinuousCandles(
   ordered: ExecutionCandle[],
   config: ExecutionStrategyConfig,
 ): EnrichedExecutionCandle[] {
   const closes = ordered.map((candle) => candle.close);
-  const fast = emaSeries(closes, config.signal.emaFastPeriod);
-  const slow = emaSeries(closes, config.signal.emaSlowPeriod);
-  const rsi = rsiSeries(closes, config.signal.rsiPeriod);
   const atr = atrSeries(ordered, 14);
   const breakoutHigh = rollingExtremeSeries(
     ordered,
@@ -185,19 +407,18 @@ function enrichContinuousCandles(
   );
   const momentumPercent = momentumSeries(closes, config.signal.momentumLookbackPeriod);
   const volumeBars = Math.max(1, Math.round(1_440 / timeframeMinutes[config.universe.timeframe]));
-  let rollingVolume = 0;
-
   return ordered.map((candle, index) => {
-    rollingVolume += candle.turnover;
-    if (index >= volumeBars) rollingVolume -= ordered[index - volumeBars]!.turnover;
+    const rollingVolume = ordered
+      .slice(Math.max(0, index - volumeBars + 1), index + 1)
+      .reduce((sum, value) => sum + value.turnover, 0);
     return {
       ...candle,
-      emaFast: fast[index] ?? null,
-      emaSlow: slow[index] ?? null,
-      previousEmaFast: index > 0 ? (fast[index - 1] ?? null) : null,
-      previousEmaSlow: index > 0 ? (slow[index - 1] ?? null) : null,
-      rsi: rsi[index] ?? null,
-      previousRsi: index > 0 ? (rsi[index - 1] ?? null) : null,
+      emaFast: null,
+      emaSlow: null,
+      previousEmaFast: null,
+      previousEmaSlow: null,
+      rsi: null,
+      previousRsi: null,
       atrPercent:
         atr[index] === null || candle.close === 0 ? null : (atr[index]! / candle.close) * 100,
       volume24h: index + 1 >= volumeBars ? rollingVolume : null,
@@ -805,25 +1026,14 @@ function rollingExtremeSeries(
 }
 
 function rollingZScoreSeries(values: number[], period: number): Array<number | null> {
-  const result = Array<number | null>(values.length).fill(null);
-  let sum = 0;
-  let sumSquares = 0;
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index]!;
-    sum += value;
-    sumSquares += value * value;
-    if (index >= period) {
-      const removed = values[index - period]!;
-      sum -= removed;
-      sumSquares -= removed * removed;
-    }
-    if (index < period - 1) continue;
-    const mean = sum / period;
-    const variance = Math.max(0, sumSquares / period - mean * mean);
+  return values.map((value, index) => {
+    if (index < period - 1) return null;
+    const window = values.slice(index - period + 1, index + 1);
+    const mean = window.reduce((sum, current) => sum + current, 0) / period;
+    const variance = window.reduce((sum, current) => sum + (current - mean) ** 2, 0) / period;
     const deviation = Math.sqrt(variance);
-    result[index] = deviation === 0 ? 0 : (value - mean) / deviation;
-  }
-  return result;
+    return deviation === 0 ? 0 : (value - mean) / deviation;
+  });
 }
 
 function momentumSeries(values: number[], period: number): Array<number | null> {
@@ -832,41 +1042,6 @@ function momentumSeries(values: number[], period: number): Array<number | null> 
     const previous = values[index - period]!;
     return previous === 0 ? null : (value / previous - 1) * 100;
   });
-}
-
-function emaSeries(values: number[], period: number): Array<number | null> {
-  const result = Array<number | null>(values.length).fill(null);
-  if (values.length < period) return result;
-  let ema = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
-  result[period - 1] = ema;
-  const multiplier = 2 / (period + 1);
-  for (let index = period; index < values.length; index += 1) {
-    ema = (values[index]! - ema) * multiplier + ema;
-    result[index] = ema;
-  }
-  return result;
-}
-
-function rsiSeries(values: number[], period: number): Array<number | null> {
-  const result = Array<number | null>(values.length).fill(null);
-  if (values.length <= period) return result;
-  let gains = 0;
-  let losses = 0;
-  for (let index = 1; index <= period; index += 1) {
-    const change = values[index]! - values[index - 1]!;
-    gains += Math.max(change, 0);
-    losses += Math.max(-change, 0);
-  }
-  let averageGain = gains / period;
-  let averageLoss = losses / period;
-  result[period] = rsiValue(averageGain, averageLoss);
-  for (let index = period + 1; index < values.length; index += 1) {
-    const change = values[index]! - values[index - 1]!;
-    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
-    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
-    result[index] = rsiValue(averageGain, averageLoss);
-  }
-  return result;
 }
 
 function rsiValue(gain: number, loss: number): number {

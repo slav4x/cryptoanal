@@ -37,6 +37,17 @@ Validation 0.5.0 и candle replay 1.1.0 запрещают входы до по�
 даёт ноль сделок и отдельно проверяется runtime-тестом. Эта проверка не доказывает
 равенство EMA/RSI при разных начальных точках истории.
 
+## Checkpoint индикаторов — 4 октября 2026
+
+Indicator engine 2.0.0, validation 0.6.0 и candle replay 1.2.0 используют общий
+SMA-seeded EMA/Wilder RSI расчёт с JSON checkpoint. Контрольный dataset и его решения,
+сделки, комиссии и PnL не изменены; обновлены только версии движков. На 1500 свечах
+EMA, breakout, mean-reversion и momentum проверено точное равенство всех признаков и
+сигналов между batch и пакетами 1/13/102/287 с восстановлением checkpoint после каждого
+пакета. При разных начальных историях равенство не гарантируется: validation dataset
+ещё предстоит связать с seed anchor runtime. Исправленная формула Z-score может изменить
+mean-reversion решения старых исследований; сохранённые результаты не пересчитываются.
+
 ## Funding policy
 
 Funding имеет статус `disabled` (`cryptoanal-funding@disabled-v1`). Runtime сохраняет

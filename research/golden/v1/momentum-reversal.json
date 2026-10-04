@@ -3,8 +3,8 @@
   "id": "momentum-reversal-v1",
   "datasetVersion": "momentum-reversal-with-continuous-24h-warmup@2",
   "datasetHash": "ff2a6179a32adf0067decf2121d2b234b5010710de6a7d2515ecaed28f0a44b6",
-  "engineVersion": "cryptoanal-validation@0.5.0",
-  "runtimeEngineVersion": "cryptoanal-runtime-replay@1.1.0",
+  "engineVersion": "cryptoanal-validation@0.6.0",
+  "runtimeEngineVersion": "cryptoanal-runtime-replay@1.2.0",
   "initialCapital": 10000,
   "config": {
     "schemaVersion": 1,

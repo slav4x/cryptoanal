@@ -998,6 +998,7 @@ model RuntimeCursor {
   symbol              String
   lastEvaluatedAt     DateTime?        @db.Timestamptz(3)
   pendingSignal       Json?
+  indicatorState      Json?
   lastDecisionId      String?
   lastFailureCode     String?
   lastFailureMessage  String?

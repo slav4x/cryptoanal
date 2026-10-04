@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- EMA/RSI продолжаются из durable checkpoint после рестарта и backfill, без повторного
+  SMA seed на каждом скользящем окне; stale cycle не перезаписывает новое состояние.
+- Rolling объём и Z-score больше не зависят от размера пакета; двухпроходная дисперсия
+  сохраняет малый разброс на больших ценах вместо вычитания почти равных квадратов.
+
 - Новые сигналы всех семейств требуют полного непрерывного 24h объёма даже при нулевом
   пороге; пропуск свечи сбрасывает прогрев, символы изолированы, дубли времени отклоняются.
 
@@ -28,6 +33,9 @@
   limited to markets with active positions instead of listing the entire Market Universe.
 
 ### Added
+
+- Миграция `RuntimeCursor.indicatorState`, version/config validation и проверка пересмотра
+  хвоста истории; общий checkpoint входа для signal exits и recovery новых позиций.
 
 - Durable `signalCandleAt` позиции и первое `finalizedAt` закрытой свечи, отдельные времена
   сигнала/котировки/решения и явная маркировка старого journal replay; миграция signal order.
@@ -205,6 +213,9 @@
 - Lease-based periodic Bybit credential verification with retry scheduling and health incidents.
 
 ### Changed
+
+- Indicator engine 2.0.0, validation 0.6.0 и candle replay 1.2.0 используют общий
+  checkpoint/replay; прежние сделки контрольного momentum набора сохранены.
 
 - Версии validation 0.5.0 и candle replay 1.1.0 отражают новое правило прогрева;
   momentum fixture дополнен 24h историей с сохранением трёх сделок и итогового PnL.

@@ -3,7 +3,9 @@ import {
   createDecisionContextSnapshot,
   decisionContextSchemaVersion,
   decisionFeatureSetVersion,
-  enrichExecutionCandles,
+  advanceExecutionIndicators,
+  assertExecutionIndicatorHistory,
+  readExecutionIndicatorCheckpoint,
   executionIndicatorVersion,
   evaluateHealth,
   settleExecutionPosition,
@@ -720,6 +722,75 @@ async function processRealtimePosition(
     target.priceEventId,
     target.managedThroughAt ?? target.openedAt,
   );
+  const loadPositionSignals = async (lastOpen: Date, deadline: AbortSignal) => {
+    const checkpoint = readExecutionIndicatorCheckpoint(
+      await runtimeRepository.getIndicatorState(target.executionRunId, target.symbol),
+      strategyConfig,
+      target.symbol,
+    );
+    const start = checkpoint
+      ? new Date(checkpoint.tail[0]!.openTime)
+      : new Date(
+          Math.floor(+target.openedAt / signalIntervalMs) * signalIntervalMs -
+            minimumExecutionCandleCount(strategyConfig) * signalIntervalMs,
+        );
+    if (+lastOpen < +start || (checkpoint && +lastOpen <= Date.parse(checkpoint.lastCandleAt)))
+      return [];
+    const count = Math.floor((+lastOpen - +start) / signalIntervalMs) + 1;
+    if (count > 50_000)
+      throw new RuntimeRecoveryIncompleteError("Signal replay exceeds 50000 candles");
+    const interval = bybitIntervals[strategyConfig.universe.timeframe];
+    await loadRecoveryCandles(target.symbol, interval, start, lastOpen, deadline);
+    let history = await marketDataRepository.listRecoveryCandles(
+      target.symbol,
+      interval,
+      start,
+      lastOpen,
+    );
+    if (!assessCandleContinuity(history, signalIntervalMs, lastOpen, count).complete)
+      throw new RuntimeRecoveryIncompleteError(
+        "Signal history is incomplete after indicator checkpoint",
+      );
+    const unconfirmed = history.filter((candle) => !candle.finalizedAt);
+    if (unconfirmed.length) {
+      await marketDataRepository.saveCandles(
+        unconfirmed.map((candle) => ({
+          ...candle,
+          open: String(candle.open),
+          high: String(candle.high),
+          low: String(candle.low),
+          close: String(candle.close),
+          volume: String(candle.volume),
+          turnover: String(candle.turnover),
+        })),
+      );
+      history = await marketDataRepository.listRecoveryCandles(
+        target.symbol,
+        interval,
+        start,
+        lastOpen,
+      );
+    }
+    assertExecutionIndicatorHistory(history.map(toExecutionCandle), checkpoint);
+    const newHistory = checkpoint
+      ? history.filter((candle) => +candle.openTime > Date.parse(checkpoint.lastCandleAt))
+      : history;
+    const availability = signalAvailabilityTimes(newHistory, signalIntervalMs, new Date());
+    return advanceExecutionIndicators(
+      newHistory.map(toExecutionCandle),
+      strategyConfig,
+      checkpoint,
+    ).candles.map((candle, index) => ({
+      candle,
+      closedAt: new Date(+candle.openTime + signalIntervalMs),
+      availableAt: new Date(
+        Math.max(
+          +availability[index]!,
+          checkpoint?.availableAt ? Date.parse(checkpoint.availableAt) : 0,
+        ),
+      ),
+    }));
+  };
   let version = target.runtimeVersion;
   await processRuntimePriceEvents({
     position: deserializeExecutionPosition(target),
@@ -750,59 +821,11 @@ async function processRealtimePosition(
               throw new RuntimeRecoveryIncompleteError(
                 "Signal backlog exceeds configured recovery window",
               );
-            // The entry anchor keeps enrichment identical across batches and restarts.
-            const start = new Date(
-              Math.floor(+target.openedAt / signalIntervalMs) * signalIntervalMs -
-                minimumExecutionCandleCount(strategyConfig) * signalIntervalMs,
-            );
-            const count = Math.floor((+lastOpen - +start) / signalIntervalMs) + 1;
-            if (count > 50_000)
-              throw new RuntimeRecoveryIncompleteError(
-                "Signal history exceeds 50000 candles; checkpointed indicators required",
-              );
             const deadline = AbortSignal.any([
               marketStreamAbortController.signal,
               AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
             ]);
-            const interval = bybitIntervals[strategyConfig.universe.timeframe];
-            await loadRecoveryCandles(target.symbol, interval, start, lastOpen, deadline);
-            let history = await marketDataRepository.listRecoveryCandles(
-              target.symbol,
-              interval,
-              start,
-              lastOpen,
-            );
-            if (!assessCandleContinuity(history, signalIntervalMs, lastOpen, count).complete)
-              throw new RuntimeRecoveryIncompleteError(
-                "Signal history is incomplete at the price boundary",
-              );
-            const unconfirmed = history.filter((candle) => !candle.finalizedAt);
-            if (unconfirmed.length) {
-              await marketDataRepository.saveCandles(
-                unconfirmed.map((candle) => ({
-                  ...candle,
-                  open: String(candle.open),
-                  high: String(candle.high),
-                  low: String(candle.low),
-                  close: String(candle.close),
-                  volume: String(candle.volume),
-                  turnover: String(candle.turnover),
-                })),
-              );
-              history = await marketDataRepository.listRecoveryCandles(
-                target.symbol,
-                interval,
-                start,
-                lastOpen,
-              );
-            }
-            const availability = signalAvailabilityTimes(history, signalIntervalMs, new Date());
-            return enrichExecutionCandles(history.map(toExecutionCandle), strategyConfig).map(
-              (candle, index) => {
-                const closedAt = new Date(+candle.openTime + signalIntervalMs);
-                return { candle, closedAt, availableAt: availability[index]! };
-              },
-            );
+            return loadPositionSignals(lastOpen, deadline);
           },
         }
       : {}),
@@ -819,45 +842,21 @@ async function processRealtimePosition(
       ]);
       const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
       const intervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
-      const signalStart = new Date(
-        Math.floor(+position.openedAt / intervalMs) * intervalMs -
-          minimumExecutionCandleCount(strategyConfig) * intervalMs,
-      );
       const lastSignal = new Date(
         Math.floor(+quote.observedAt / intervalMs) * intervalMs - intervalMs,
       );
-      if (Math.floor((+lastSignal - +signalStart) / intervalMs) + 1 > 50_000)
-        throw new RuntimeRecoveryIncompleteError(
-          "Signal recovery exceeds 50000-candle history limit",
-        );
-      const [minutes, history] = await Promise.all([
+      const [minutes, signals] = await Promise.all([
         +quote.observedAt === +through
           ? Promise.resolve([])
           : loadRecoveryCandles(target.symbol, "1", minuteRange.start, minuteRange.end, deadline),
-        loadRecoveryCandles(
-          target.symbol,
-          bybitIntervals[strategyConfig.universe.timeframe],
-          signalStart,
-          lastSignal,
-          deadline,
-        ),
+        loadPositionSignals(lastSignal, deadline),
       ]);
-      if (
-        !assessCandleContinuity(
-          history,
-          intervalMs,
-          lastSignal,
-          Math.floor((+lastSignal - +signalStart) / intervalMs) + 1,
-        ).complete
-      ) {
-        throw new RuntimeRecoveryIncompleteError("Signal history is incomplete during recovery");
-      }
       return recoverRuntimeGap({
         position,
         since: through,
         quote,
         minutes: minutes.map(toExecutionCandle),
-        signals: enrichExecutionCandles(history.map(toExecutionCandle), strategyConfig),
+        signals: signals.map((signal) => signal.candle),
         signalIntervalMs: intervalMs,
         config: strategyConfig,
       });
@@ -1158,10 +1157,11 @@ async function processRuntimeTarget(
   const lastCompleteCandleAt = new Date(
     Math.floor(Date.now() / intervalMs) * intervalMs - intervalMs,
   );
-  const candleLimit = minimumExecutionCandleCount(strategyConfig);
+  const minimumCandles = minimumExecutionCandleCount(strategyConfig);
 
   await processRuntimeSymbols([...strategyConfig.universe.symbols].sort(), {
     process: async (symbol) => {
+      let candleLimit = minimumCandles;
       let state = await runtimeRepository.getCycleState({
         workspaceId: target.workspaceId,
         exchangeAccountId: target.exchangeAccountId,
@@ -1178,6 +1178,34 @@ async function processRuntimeTarget(
           "RUNTIME_INSTRUMENT_UNAVAILABLE",
           `${symbol} недоступен для новых сигналов: статус ${state.instrument?.status ?? "Unknown"}`,
         );
+      }
+
+      const initialCheckpoint = readExecutionIndicatorCheckpoint(
+        state.cursor?.indicatorState,
+        strategyConfig,
+        symbol,
+      );
+      if (initialCheckpoint) {
+        const replayCount = Math.floor(
+          (+lastCompleteCandleAt - Date.parse(initialCheckpoint.lastCandleAt)) / intervalMs,
+        );
+        if (replayCount > 50_000)
+          throw new RuntimeWorkerError(
+            "RUNTIME_INDICATOR_BACKLOG",
+            "Indicator replay exceeds 50000 candles",
+          );
+        candleLimit = Math.max(minimumCandles, replayCount + initialCheckpoint.tail.length);
+        if (candleLimit > minimumCandles) {
+          state = await runtimeRepository.getCycleState({
+            workspaceId: target.workspaceId,
+            exchangeAccountId: target.exchangeAccountId,
+            executionRunId: executionRun.id,
+            symbol,
+            interval,
+            lastCompleteCandleAt,
+            candleLimit,
+          });
+        }
       }
 
       const continuity = assessCandleContinuity(
@@ -1249,12 +1277,44 @@ async function processRuntimeTarget(
         close: candle.close.toNumber(),
         turnover: candle.turnover.toNumber(),
       }));
-      const candles = enrichExecutionCandles(executionCandles, strategyConfig);
+      const checkpoint = readExecutionIndicatorCheckpoint(
+        state.cursor?.indicatorState,
+        strategyConfig,
+        symbol,
+      );
+      if (checkpoint && checkpoint.lastCandleAt !== state.cursor?.lastEvaluatedAt?.toISOString()) {
+        throw new RuntimeWorkerError(
+          "RUNTIME_INDICATOR_CURSOR_MISMATCH",
+          "Indicator checkpoint does not match decision cursor",
+        );
+      }
+      assertExecutionIndicatorHistory(executionCandles, checkpoint);
+      const newCandles = checkpoint
+        ? executionCandles.filter(
+            (candle) => +candle.openTime > Date.parse(checkpoint.lastCandleAt),
+          )
+        : executionCandles;
+      if (
+        checkpoint &&
+        newCandles[0] &&
+        +newCandles[0].openTime !== Date.parse(checkpoint.lastCandleAt) + intervalMs
+      ) {
+        throw new RuntimeWorkerError(
+          "RUNTIME_INDICATOR_REPLAY_GAP",
+          "Missing candles after indicator checkpoint",
+        );
+      }
+      const indicators = advanceExecutionIndicators(newCandles, strategyConfig, checkpoint);
+      const candles = indicators.candles;
       const candle = candles.at(-1)!;
       const candleClosedAt = new Date(candle.openTime.getTime() + intervalMs);
-      const signalAvailableAt = signalAvailabilityTimes(state.candles, intervalMs, new Date()).at(
-        -1,
-      )!;
+      const signalAvailableAt = new Date(
+        Math.max(
+          +signalAvailabilityTimes(state.candles, intervalMs, new Date()).at(-1)!,
+          checkpoint?.availableAt ? Date.parse(checkpoint.availableAt) : 0,
+        ),
+      );
+      indicators.checkpoint!.availableAt = signalAvailableAt.toISOString();
       const pendingSignal = parsePendingSignal(state.cursor?.pendingSignal ?? null);
       const realtimePendingSignal = parseRealtimePendingSignal(state.cursor?.pendingSignal ?? null);
       const equity = await runtimeRepository.getDryRunEquity(
@@ -1474,6 +1534,8 @@ async function processRuntimeTarget(
         symbol,
         interval,
         candleAt: candle.openTime,
+        indicatorState: indicators.checkpoint!,
+        expectedLastEvaluatedAt: state.cursor?.lastEvaluatedAt ?? null,
         expectedDeploymentStatus,
         expectedPositionId: null,
         expectedPositionVersion: null,

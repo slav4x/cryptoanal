@@ -3,6 +3,8 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import fixture from "../research/golden/v1/momentum-reversal.json";
 import { test } from "node:test";
 import { createPrismaClient } from "../packages/persistence/src/client";
+import { advanceExecutionIndicators } from "../packages/application/src/index";
+import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
 import { AccountSnapshotRepository } from "../packages/persistence/src/account-snapshot-repository";
 import { DecisionRepository } from "../packages/persistence/src/decision-repository";
@@ -237,6 +239,80 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
     } satisfies Pick<PersistRuntimeCycleInput, "providerVersion" | "candidate" | "contextSnapshot">;
   }
   try {
+    await t.test(
+      "indicator checkpoint commits with its decision and stale writers cannot replace it",
+      async () => {
+        const context = await setup();
+        const config = strategyConfigSchema.parse(fixture.config);
+        const candles = fixture.candles.map((candle, index) => ({
+          ...candle,
+          symbol: context.symbol,
+          openTime: new Date(+quoteAt - (fixture.candles.length - 1 - index) * 900_000),
+        }));
+        const checkpoint = advanceExecutionIndicators(candles, config).checkpoint!;
+        const cycle: PersistRuntimeCycleInput = {
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: quoteAt,
+          indicatorState: checkpoint,
+          expectedLastEvaluatedAt: candleAt,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal: null,
+          decision: { action: "HOLD", reasonCode: "TEST", summary: "Test", factors: {} },
+          positionAction: { kind: "none" },
+        };
+        assert.equal((await runtime.persistCycle(cycle)).applied, true);
+        assert.deepEqual(
+          await runtime.getIndicatorState(context.run.id, context.symbol),
+          checkpoint,
+        );
+        const stored = await prisma.runtimeCursor.findUniqueOrThrow({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+        });
+        assert.equal(+stored.lastEvaluatedAt!, +quoteAt);
+        assert.ok(stored.lastDecisionId);
+        const nextAt = new Date(+quoteAt + 900_000);
+        const nextCheckpoint = advanceExecutionIndicators(
+          [{ ...candles.at(-1)!, openTime: nextAt, close: 101 }],
+          config,
+          checkpoint,
+        ).checkpoint!;
+        await assert.rejects(
+          runtime.persistCycle({ ...cycle, candleAt: nextAt, indicatorState: nextCheckpoint }),
+          RuntimeStateConflictError,
+        );
+        assert.deepEqual(
+          await runtime.getIndicatorState(context.run.id, context.symbol),
+          checkpoint,
+        );
+        assert.equal(await prisma.decision.count({ where: { executionRunId: context.run.id } }), 1);
+        assert.equal(
+          (
+            await runtime.persistCycle({
+              ...cycle,
+              candleAt: nextAt,
+              expectedLastEvaluatedAt: quoteAt,
+              indicatorState: nextCheckpoint,
+            })
+          ).applied,
+          true,
+        );
+        assert.deepEqual(
+          await runtime.getIndicatorState(context.run.id, context.symbol),
+          nextCheckpoint,
+        );
+        assert.equal((await runtime.persistCycle(cycle)).applied, false);
+        assert.deepEqual(
+          await runtime.getIndicatorState(context.run.id, context.symbol),
+          nextCheckpoint,
+        );
+      },
+    );
     await t.test(
       "recovery remains unresolved after a prefix or candle cycle and clears only at the journal tail",
       async () => {

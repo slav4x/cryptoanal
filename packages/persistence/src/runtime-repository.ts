@@ -64,6 +64,8 @@ type RuntimePositionAction =
     };
 
 export type PersistRuntimeCycleInput = {
+  indicatorState?: Prisma.InputJsonValue;
+  expectedLastEvaluatedAt?: Date | null;
   signalAvailableAt?: Date;
   workspaceId: string;
   deploymentId: string;
@@ -174,6 +176,14 @@ export class RuntimeRepository {
     });
   }
 
+  public async getIndicatorState(executionRunId: string, symbol: string) {
+    const cursor = await this.prisma.runtimeCursor.findUnique({
+      where: { executionRunId_symbol: { executionRunId, symbol } },
+      select: { indicatorState: true },
+    });
+    return cursor?.indicatorState ?? null;
+  }
+
   public async getCycleState(input: {
     workspaceId: string;
     exchangeAccountId: string;
@@ -191,7 +201,7 @@ export class RuntimeRepository {
             symbol: input.symbol,
           },
         },
-        select: { lastEvaluatedAt: true, pendingSignal: true },
+        select: { lastEvaluatedAt: true, pendingSignal: true, indicatorState: true },
       }),
       this.prisma.position.findFirst({
         where: {
@@ -733,6 +743,14 @@ export class RuntimeRepository {
         return { applied: false, decisionId: null };
       }
 
+      if (
+        input.expectedLastEvaluatedAt !== undefined &&
+        (cursor?.lastEvaluatedAt?.getTime() ?? null) !==
+          (input.expectedLastEvaluatedAt?.getTime() ?? null)
+      ) {
+        throw new RuntimeStateConflictError();
+      }
+
       const currentPosition = await transaction.position.findFirst({
         where: {
           workspaceId: input.workspaceId,
@@ -978,11 +996,13 @@ export class RuntimeRepository {
           executionRunId: input.executionRunId,
           symbol: input.symbol,
           lastEvaluatedAt: input.candleAt,
+          ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
           pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
           lastDecisionId: persistedDecision.id,
         },
         update: {
           lastEvaluatedAt: input.candleAt,
+          ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
           pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
           lastDecisionId: persistedDecision.id,
           ...(cursor?.lastFailureCode === "RUNTIME_RECOVERY_REQUIRED" &&

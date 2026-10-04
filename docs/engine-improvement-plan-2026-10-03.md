@@ -505,6 +505,22 @@ Observation SIGNAL сохраняется в auditEvent с resourceType runtime-
 невозможность подменить ID в pending/factors. Typecheck/lint/format/research integrity прошли.
 Полные причины недоступного источника/подключения и отдельный market TTL/deviation остаются E06.
 
+**Применение второго этапа E06 — 4 октября 2026, UTC:** backup
+`var/backups/cryptoanal-2026-10-04T15-56-33-226Z.dump` (240 805 395 байт,
+SHA-256 `2b92b1560e0b6ddc91466315b0a0dbcd14cd0606a86d5c0e431de011c2ad4b84`),
+restore-check подтвердил 47 таблиц и 32 миграции. Обновлены API/worker из `d58bb45`;
+SHA-256 runtime-repository/runtime-signal внутри контейнера совпадает с checkout.
+API health подтверждает подключение БД, public stream подключён. Все 34 deployment
+сохранены в RUNNING/DRY_RUN. На 16:03:02 UTC сопровождаются 29 открытых позиций,
+максимальный возраст managedThrough — 3.05 секунды, runtime cursor failures отсутствуют.
+В рабочей базе наблюдались три SIGNAL observation и три REJECTED decision;
+соединение записей по signal ID подтвердило все три пары. Новая цепочка
+SIGNAL → PENDING → FILLED подтверждена DB-тестами, в рабочем окружении пока не наблюдалась.
+При REST-восстановлении после запуска один ответ Bybit не прошёл проверку структуры
+result.category/symbol/list; сопровождение продолжилось. Причина ответа не установлена,
+обработку таких ответов нужно отдельно проверить в рамках E01/E14.
+Тестовая база и контейнер проверки восстановления удалены.
+
 **Приёмка:** быстрый touch/rebound, повторный пакет, restart с pending, истечение TTL
 во время ожидания транзакции и pause/resume дают ровно одно объяснимое состояние.
 

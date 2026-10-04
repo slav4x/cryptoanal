@@ -13,6 +13,8 @@
 
 ### Added
 
+- Аудит торгового движка от 3 октября 2026: read-only проверка работающего runtime,
+  воспроизведения ошибок и отдельный план исправлений с приоритетами и критериями приёмки.
 - Идемпотентная постановка годовых backtest всех запущенных стратегий в штатную очередь «Проверок».
 - Reproducible full-year research backtest of all running strategies, with a documented
   34-strategy comparison and dataset provenance.

@@ -4,6 +4,9 @@ CryptoAnal — dashboard-first платформа для исследовани�
 криптоторговых стратегий. Private dashboard защищён database-backed сессиями, а данные
 разделены membership-based workspaces. Полный план находится в [docs/rebuild](docs/rebuild/README.md).
 
+Актуальный [аудит движка и план исправлений от 3 октября 2026](docs/engine-improvement-plan-2026-10-03.md)
+содержит подтверждённые проблемы сопровождения, сигналов и validation с порядком работ.
+
 ## Структура
 
 - `apps/dashboard` — React/Vite dashboard;

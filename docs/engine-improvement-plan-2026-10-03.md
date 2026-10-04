@@ -419,6 +419,20 @@ Metrics evaluation содержит фактический диапазон (end
 Проверено 132/132 runtime-теста без пропусков на отдельной PostgreSQL с 31 миграцией:
 границы оценки/settlement, прогрев нескольких символов, gaps, стабильный sampling,
 training/test counts, неполное последнее окно и совместимость старых metrics.
+Typecheck, lint, format check, research integrity и Docker build прошли.
+
+**Применение пятого этапа — 4 октября 2026, UTC:** backup
+`var/backups/cryptoanal-2026-10-04T13-34-54-807Z.dump` (235 840 960 байт),
+restore-check подтвердил 47 таблиц и 31 миграцию. Новых миграций в этом этапе нет.
+Worker остановлен перед заменой; API/worker/dashboard обновлены, health API/dashboard
+успешен и market stream подключён. Исходник validation внутри контейнера совпадает
+по SHA-256 с checkout `30ef331`. Контрольный расчёт в работающем контейнере подтвердил
+version 0.8.0, три сделки, PnL 585.34513577, 26 свечей оценки и 98 свечей прогрева.
+На 13:38:37 UTC все 34 deployment RUNNING/DRY_RUN, 29 позиций продолжают сопровождение;
+мгновенный максимальный возраст managedThrough — 3.43 секунды, runtime cursor failures
+отсутствуют, worker heartbeat обновлён на 13:38:33 UTC. Это не нагрузочная приёмка.
+Тестовая база удалена; исторические validation runs не пересчитывались. Новая загрузка
+Bybit предыстории через пользовательский validation job после обновления пока не наблюдалась.
 Повторная validation действующих стратегий и нагрузочная приёмка E01–E03 остаются открытыми.
 
 **Приёмка:** равенство сигналов для batch, streaming, rolling window и restart на всех

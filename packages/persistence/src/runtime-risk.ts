@@ -26,6 +26,14 @@ export function readRiskConfig(value: Prisma.JsonValue) {
   const config = value as Record<string, unknown> | null;
   const risk = config?.risk as Record<string, unknown> | undefined;
   const costs = config?.costs as Record<string, unknown> | undefined;
+  const schedule = config?.schedule as Record<string, unknown> | undefined;
+  const timezone = schedule?.timezone;
+  if (typeof timezone !== "string") return null;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: timezone });
+  } catch {
+    return null;
+  }
   const numbers = [
     risk?.maxDailyLossPercent,
     risk?.maxOpenPositions,
@@ -38,6 +46,7 @@ export function readRiskConfig(value: Prisma.JsonValue) {
   )
     return null;
   return {
+    timezone,
     maxDailyLossPercent: numbers[0] as number,
     maxOpenPositions: numbers[1] as number,
     riskPerTradePercent: numbers[2] as number,
@@ -56,8 +65,21 @@ export async function assessRuntimeRisk(
     now?: Date;
   },
 ) {
-  const now = input.now ?? new Date();
+  const configured = readRiskConfig(input.strategyConfig);
+  const [clock] = await tx.$queryRaw<Array<{ now: Date }>>(
+    input.now
+      ? Prisma.sql`SELECT ${input.now}::timestamptz AS now`
+      : Prisma.sql`SELECT clock_timestamp() AS now`,
+  );
+  const now = clock!.now;
   const day = now.toISOString().slice(0, 10);
+  const timezone = configured?.timezone ?? "UTC";
+  const [calendar] = await tx.$queryRaw<Array<{ day: string; startsAt: Date }>>(
+    Prisma.sql`SELECT
+      to_char(${now}::timestamptz AT TIME ZONE ${timezone}, 'YYYY-MM-DD') AS day,
+      (date_trunc('day', ${now}::timestamptz AT TIME ZONE ${timezone})
+        AT TIME ZONE ${timezone}) AS "startsAt"`,
+  );
   const scope = {
     workspaceId: input.workspaceId,
     environment: "DRY_RUN" as const,
@@ -71,8 +93,15 @@ export async function assessRuntimeRisk(
     include: { strategyVersion: { select: { config: true } } },
   });
   const realized = await tx.trade.aggregate({ where: scope, _sum: { netPnl: true } });
+  const strategyToday = await tx.trade.aggregate({
+    where: { ...scope, closedAt: { gte: calendar!.startsAt, lte: now } },
+    _sum: { netPnl: true },
+  });
+  const strategyDailyPnl = Number(strategyToday._sum.netPnl ?? 0);
+  const strategyLossLimit =
+    (input.policy.initialBalance * (configured?.maxDailyLossPercent ?? 0)) / 100;
   const today = await tx.trade.aggregate({
-    where: { ...scope, closedAt: { gte: new Date(`${day}T00:00:00Z`) } },
+    where: { ...scope, closedAt: { gte: new Date(`${day}T00:00:00Z`), lte: now } },
     _sum: { netPnl: true },
   });
   let equity = input.policy.initialBalance + Number(realized._sum.netPnl ?? 0);
@@ -123,7 +152,6 @@ export async function assessRuntimeRisk(
     )
       marketReady = false;
   }
-  const configured = readRiskConfig(input.strategyConfig);
   const dailyLimit =
     (input.policy.initialBalance *
       Math.min(
@@ -152,12 +180,25 @@ export async function assessRuntimeRisk(
       : null;
   const reason =
     forceCloseReason ??
-    (!configured ? "INVALID_RISK_CONFIG" : !marketReady ? "MARKET_RECOVERY_REQUIRED" : null);
+    (!configured
+      ? "INVALID_RISK_CONFIG"
+      : !marketReady
+        ? "MARKET_RECOVERY_REQUIRED"
+        : strategyDailyPnl <= -strategyLossLimit
+          ? "STRATEGY_DAILY_LOSS_LIMIT"
+          : null);
   return {
     reason,
     forceCloseReason,
     equity,
     dailyPnl,
+    strategyDay: {
+      timezone,
+      day: calendar!.day,
+      startsAt: calendar!.startsAt,
+      realizedPnl: strategyDailyPnl,
+      lossLimit: strategyLossLimit,
+    },
     exposure,
     positions: positions.length,
     maximumExposure: (Math.max(0, equity) * input.policy.maxAccountExposurePercent) / 100,

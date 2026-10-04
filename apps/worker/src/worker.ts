@@ -19,7 +19,6 @@ import {
   getExecutionSignal,
   getExecutionMarketRegime,
   getExecutionTradingSession,
-  getTradingDateKey,
   fundingPolicy,
   metricProvenanceSchemaVersion,
   minimumExecutionCandleCount,
@@ -1525,25 +1524,16 @@ async function processRuntimeTarget(
         target.exchangeAccountId,
         String(config.DRY_RUN_INITIAL_BALANCE),
       );
-      const tradingDay = getTradingDateKey(new Date(), strategyConfig.schedule.timezone);
-      const dailyPnl = state.recentTrades
-        .filter(
-          (trade) =>
-            getTradingDateKey(trade.closedAt, strategyConfig.schedule.timezone) === tradingDay,
-        )
-        .reduce((sum, trade) => sum + trade.netPnl.toNumber(), 0);
-      const lossLimit =
-        config.DRY_RUN_INITIAL_BALANCE * (strategyConfig.risk.maxDailyLossPercent / 100);
       const riskAssessment = await runtimeRiskRepository.assess(
         target.workspaceId,
         target.exchangeAccountId,
         target.strategyVersion.config,
       );
+      const dailyPnl = riskAssessment.strategyDay.realizedPnl;
       const entriesAllowed =
         target.status === "RUNNING" &&
         target.exchangeConnection?.status === "ACTIVE" &&
         target.exchangeConnection.revokedAt === null &&
-        dailyPnl > -lossLimit &&
         !riskAssessment.reason;
 
       let positionAction: Parameters<RuntimeRepository["persistCycle"]>[0]["positionAction"] = {
@@ -1593,9 +1583,11 @@ async function processRuntimeTarget(
               target.exchangeConnection?.status !== "ACTIVE" ||
               target.exchangeConnection.revokedAt !== null
                 ? "ENTRY_CONNECTION_UNAVAILABLE"
-                : (riskAssessment.reason ??
-                  (dailyPnl <= -lossLimit ? "STRATEGY_DAILY_LOSS_LIMIT" : "ENTRY_GATE_CLOSED")),
-            summary: "Торговый сигнал отклонён до исполнения общим risk gate",
+                : (riskAssessment.reason ?? "ENTRY_GATE_CLOSED"),
+            summary:
+              riskAssessment.reason === "STRATEGY_DAILY_LOSS_LIMIT"
+                ? "Торговый сигнал отклонён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
+                : "Торговый сигнал отклонён до исполнения общим risk gate",
             factors: runtimeFactors(
               candle,
               dailyPnl,

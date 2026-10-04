@@ -13,7 +13,7 @@ import {
   ValidationRepository,
   ValidationDatasetConflictError,
 } from "../packages/persistence/src/validation-repository";
-import { advanceExecutionIndicators } from "../packages/application/src/index";
+import { advanceExecutionIndicators, getTradingDateKey } from "../packages/application/src/index";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
 import { AccountSnapshotRepository } from "../packages/persistence/src/account-snapshot-repository";
@@ -28,6 +28,7 @@ import {
 } from "../packages/persistence/src/runtime-repository";
 
 import {
+  assessRuntimeRisk,
   RuntimeRiskRepository,
   RuntimeRiskControlConflictError,
   defaultRuntimeRiskPolicy,
@@ -2189,6 +2190,208 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         await assert.rejects(journal.append(events, "other"), /lease lost/);
       },
     );
+    async function realizedTrade(
+      context: Awaited<ReturnType<typeof setup>>,
+      closedAt: Date,
+      netPnl: number,
+    ) {
+      const position = await prisma.position.create({
+        data: {
+          ...context.entry.position,
+          workspaceId: context.workspace.id,
+          executionRunId: context.run.id,
+          strategyVersionId: context.entry.strategyVersionId,
+          environment: "DRY_RUN",
+          status: "CLOSED",
+          closedAt,
+        },
+      });
+      return prisma.trade.create({
+        data: {
+          workspaceId: context.workspace.id,
+          executionRunId: context.run.id,
+          strategyVersionId: context.entry.strategyVersionId,
+          positionId: position.id,
+          symbol: context.symbol,
+          environment: "DRY_RUN",
+          side: "BUY",
+          quantity: "1",
+          averageEntryPrice: "100",
+          averageExitPrice: "100",
+          grossPnl: String(netPnl),
+          netPnl: String(netPnl),
+          exitReason: "test",
+          openedAt: new Date(+closedAt - 60_000),
+          closedAt,
+        },
+      });
+    }
+    async function assessAt(
+      context: Awaited<ReturnType<typeof setup>>,
+      now: Date,
+      timezone: string,
+    ) {
+      return prisma.$transaction((tx) =>
+        assessRuntimeRisk(tx, {
+          workspaceId: context.workspace.id,
+          exchangeAccountId: context.deployment.exchangeAccountId,
+          strategyConfig: { ...fixture.config, schedule: { ...fixture.config.schedule, timezone } },
+          policy: defaultRuntimeRiskPolicy,
+          now,
+        }),
+      );
+    }
+    await t.test(
+      "calendar risk agrees with execution dates at UTC/local midnight and DST",
+      async () => {
+        const context = await setup();
+        const cases = [
+          ["UTC", "2026-10-04T23:59:59.999Z", "2026-10-04T00:00:00.000Z"],
+          ["UTC", "2026-10-05T00:00:00.000Z", "2026-10-05T00:00:00.000Z"],
+          ["Asia/Novosibirsk", "2026-10-04T16:59:59.999Z", "2026-10-03T17:00:00.000Z"],
+          ["Asia/Novosibirsk", "2026-10-04T17:00:00.000Z", "2026-10-04T17:00:00.000Z"],
+          ["Europe/Berlin", "2026-03-29T12:00:00.000Z", "2026-03-28T23:00:00.000Z"],
+          ["Europe/Berlin", "2026-03-30T00:00:00.000Z", "2026-03-29T22:00:00.000Z"],
+          ["Europe/Berlin", "2026-10-25T12:00:00.000Z", "2026-10-24T22:00:00.000Z"],
+          ["Europe/Berlin", "2026-10-26T00:00:00.000Z", "2026-10-25T23:00:00.000Z"],
+        ];
+        for (const [timezone, time, start] of cases) {
+          const now = new Date(time!);
+          const risk = await assessAt(context, now, timezone!);
+          assert.equal(risk.strategyDay.day, getTradingDateKey(now, timezone!));
+          assert.equal(risk.strategyDay.startsAt.toISOString(), start);
+        }
+        const boundary = new Date("2026-10-04T17:00:00Z");
+        await realizedTrade(context, new Date(+boundary - 1), -10);
+        await realizedTrade(context, boundary, -20);
+        await realizedTrade(context, new Date(+boundary + 1), -30);
+        assert.equal(
+          (await assessAt(context, new Date(+boundary - 1), "Asia/Novosibirsk")).strategyDay
+            .realizedPnl,
+          -10,
+        );
+        assert.equal(
+          (await assessAt(context, boundary, "Asia/Novosibirsk")).strategyDay.realizedPnl,
+          -20,
+        );
+        assert.equal(
+          (await assessAt(context, new Date(+boundary + 1), "Asia/Novosibirsk")).strategyDay
+            .realizedPnl,
+          -50,
+        );
+      },
+    );
+    await t.test(
+      "both entry transactions enforce the same account calendar loss gate",
+      async () => {
+        const context = await setup();
+        const config = {
+          ...fixture.config,
+          schedule: { ...fixture.config.schedule, timezone: "Asia/Novosibirsk" },
+          risk: { ...fixture.config.risk, maxDailyLossPercent: 1 },
+        };
+        await prisma.strategyVersion.update({
+          where: { id: context.entry.strategyVersionId },
+          data: { config },
+        });
+        const guard = new RuntimeRiskRepository(prisma);
+        const initial = await guard.assess(
+          context.workspace.id,
+          context.deployment.exchangeAccountId,
+          config,
+        );
+        const utcStart = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+        const localStart = initial.strategyDay.startsAt;
+        const other = await setup({
+          workspace: context.workspace,
+          account: context.deployment.exchangeAccountId,
+        });
+        if (+localStart < +utcStart) {
+          await realizedTrade(other, localStart, -100);
+        } else {
+          await realizedTrade(other, utcStart, 200);
+          await realizedTrade(other, localStart, -100);
+        }
+        const risk = await guard.assess(
+          context.workspace.id,
+          context.deployment.exchangeAccountId,
+          config,
+        );
+        assert.equal(risk.reason, "STRATEGY_DAILY_LOSS_LIMIT");
+        assert.equal(risk.forceCloseReason, null);
+        assert.equal(risk.strategyDay.realizedPnl, -100);
+        assert.equal(
+          await prisma.runtimeRiskDay.count({ where: { workspaceId: context.workspace.id } }),
+          0,
+        );
+        const pending = await runtime.persistRealtimeEntry(context.entry);
+        assert.equal(pending.applied, false);
+        assert.equal("riskFailure" in pending && pending.riskFailure, "STRATEGY_DAILY_LOSS_LIMIT");
+        const cycle = await runtime.persistCycle({
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: quoteAt,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal: null,
+          decision: { action: "OPEN", reasonCode: "TEST", summary: "Test", factors: {} },
+          positionAction: {
+            kind: "open",
+            position: context.entry.position,
+            markPrice: "100",
+            unrealizedPnl: "0",
+            immediateSettlement: null,
+          },
+        });
+        assert.equal(cycle.applied, true);
+        assert.equal(
+          await prisma.position.count({
+            where: { executionRunId: context.run.id, status: "OPEN" },
+          }),
+          0,
+        );
+        const decision = await prisma.decision.findFirstOrThrow({
+          where: { executionRunId: context.run.id, contextSnapshotId: { not: null } },
+        });
+        assert.equal(decision.reasonCode, "STRATEGY_DAILY_LOSS_LIMIT");
+        const unrelated = await setup({ workspace: context.workspace, account: randomUUID() });
+        assert.equal(
+          (await guard.assess(context.workspace.id, unrelated.deployment.exchangeAccountId, config))
+            .strategyDay.realizedPnl,
+          0,
+        );
+      },
+    );
+    await t.test(
+      "UTC safety latch survives realized rebound and resets only at UTC midnight",
+      async () => {
+        const context = await setup();
+        const now = new Date("2026-10-04T23:59:59Z");
+        const trade = await realizedTrade(context, now, -1000);
+        assert.equal(
+          (await assessAt(context, now, "Asia/Novosibirsk")).forceCloseReason,
+          "daily-loss-limit",
+        );
+        await prisma.trade.update({ where: { id: trade.id }, data: { netPnl: "1000" } });
+        assert.equal(
+          (await assessAt(context, now, "Asia/Novosibirsk")).forceCloseReason,
+          "daily-loss-limit",
+        );
+        const next = await assessAt(context, new Date("2026-10-05T00:00:00Z"), "Asia/Novosibirsk");
+        assert.equal(next.forceCloseReason, null);
+        assert.equal(next.strategyDay.day, "2026-10-05");
+        assert.equal(next.strategyDay.realizedPnl, 1000);
+      },
+    );
+    await t.test("invalid strategy timezone fails closed", async () => {
+      const context = await setup();
+      assert.equal(
+        (await assessAt(context, new Date(), "Invalid/Timezone")).reason,
+        "INVALID_RISK_CONFIG",
+      );
+    });
     await t.test(
       "persistent kill switch blocks both entry paths and rejects stale control updates",
       async () => {

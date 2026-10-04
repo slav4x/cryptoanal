@@ -205,7 +205,7 @@ export class RuntimeRepository {
     lastCompleteCandleAt: Date;
     candleLimit: number;
   }) {
-    const [cursor, position, instrument, candles, recentTrades] = await Promise.all([
+    const [cursor, position, instrument, candles] = await Promise.all([
       this.prisma.runtimeCursor.findUnique({
         where: {
           executionRunId_symbol: {
@@ -274,19 +274,9 @@ export class RuntimeRepository {
           finalizedAt: true,
         },
       }),
-      this.prisma.trade.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          executionRun: {
-            deployment: { exchangeAccountId: input.exchangeAccountId },
-          },
-          closedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1_000) },
-        },
-        select: { closedAt: true, netPnl: true },
-      }),
     ]);
 
-    return { cursor, position, instrument, candles: candles.reverse(), recentTrades };
+    return { cursor, position, instrument, candles: candles.reverse() };
   }
 
   public async getDryRunEquity(
@@ -887,7 +877,10 @@ export class RuntimeRepository {
             symbol: input.symbol,
             action: "SKIP",
             reasonCode: reason,
-            summary: `Отложенный вход отменён: ${reason}`,
+            summary:
+              reason === "STRATEGY_DAILY_LOSS_LIMIT"
+                ? "Отложенный вход отменён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
+                : `Отложенный вход отменён: ${reason}`,
             factors: withRuntimeSignal(
               {
                 source: "durable-price-events",
@@ -1183,7 +1176,10 @@ export class RuntimeRepository {
           decision = {
             action: "SKIP",
             reasonCode: riskFailure,
-            summary: "Вход запрещён независимым риск-контролем",
+            summary:
+              riskFailure === "STRATEGY_DAILY_LOSS_LIMIT"
+                ? "Вход запрещён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
+                : "Вход запрещён независимым риск-контролем",
             factors: input.decision.factors,
           };
         }

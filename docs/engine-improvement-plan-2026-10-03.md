@@ -459,7 +459,7 @@ Bybit предыстории через пользовательский validat
       недоступное подключение, expiry, отсутствие касания.
 - [x] Определить TTL рыночного входа и допустимое отклонение от signal price отдельно
       от длительности свечи. Пропущенные при простое сигналы не исполнять задним числом.
-- [ ] Атомарно завершать прежний pending при замене новой сигнальной свечой;
+- [x] Атомарно завершать прежний pending при замене новой сигнальной свечой;
       проверить гонку candle cycle с pending expiry, чтобы старый ID не терял terminal state.
 
 **Первый этап E06:** `RuntimeCursor.pendingPriceEventId` и миграция
@@ -604,6 +604,27 @@ decision и отсутствие активных pending. Новые waiting de
 пока не наблюдались; deduplication/gate/expiry проверены отдельными DB-тестами.
 Тестовая база и проверочный контейнер удалены. Замена прежнего pending новой свечой
 и нагрузочная приёмка остаются открытыми.
+
+**Пятый этап E06 — 5 октября 2026, Новосибирск:** persistCycle читает прежние
+pending/price cursor/lastDecisionId под тем же runtime lock, что и отдельный pending цикл.
+При обработке новой свечи прежний realtime pending получает terminal decision до замены:
+ENTRY_SIGNAL_EXPIRED/EXPIRED по DB clock либо ENTRY_SIGNAL_SUPERSEDED/REJECTED при
+досрочной замене. Повреждённый срок даёт INVALID_PENDING_SIGNAL. Сохраняются прежний
+signal ID, pending JSON, lastEventId, lastWaitingReason и replacementCandleAt.
+Terminal correlation совпадает с отдельным expiry path. Новое решение, завершение
+старого сигнала и cursor входят в одну транзакцию; ошибка откатывает весь набор.
+Повтор candle cycle не создаёт terminal; проигравший expiry CAS не очищает новый pending.
+Работает при новой свече с сигналом и без сигнала. Уточнение PAUSED: отдельный quote
+цикл заморожен, а candle цикл может продвинуть checkpoint и завершить прежний pending;
+разрешения на вход это не даёт. Уже потерянная историческая signal history не создаётся.
+Проверено 169/169 runtime-тестов без пропусков на отдельной PostgreSQL с 32 миграциями:
+expiry/superseded, сохранение старого ID/ожидания, замена сигналом/NO_SIGNAL, повтор,
+конкурентный expiry/candle в обоих порядках запуска, сохранение нового pending и rollback
+при ошибке создания контекста новой свечи. Старые проверки выбирают решения своей свечи
+или своего signal ID, учитывая новую terminal history. Typecheck/lint/research integrity
+прошли; контрольные три сделки, PnL 585.34513577 и dataset hash сохранены.
+Тестовая база удалена. Кодовые пункты E06 закрыты, нагрузочная и fault-приёмка остаётся
+в E01–E03/E15. Новых миграций/зависимостей нет.
 
 ## E07 · P1 · Объединить риск и торговые сутки в runtime и validation
 

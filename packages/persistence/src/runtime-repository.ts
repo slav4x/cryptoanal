@@ -1064,7 +1064,13 @@ export class RuntimeRepository {
             symbol: input.symbol,
           },
         },
-        select: { lastEvaluatedAt: true, lastFailureCode: true },
+        select: {
+          lastEvaluatedAt: true,
+          lastFailureCode: true,
+          pendingSignal: true,
+          pendingPriceEventId: true,
+          lastDecisionId: true,
+        },
       });
       if (cursor?.lastEvaluatedAt && cursor.lastEvaluatedAt >= input.candleAt) {
         return { applied: false, decisionId: null };
@@ -1382,6 +1388,74 @@ export class RuntimeRepository {
             factors: input.decision.factors,
           };
         }
+      }
+      const previousPending =
+        cursor?.pendingSignal &&
+        typeof cursor.pendingSignal === "object" &&
+        !Array.isArray(cursor.pendingSignal)
+          ? (cursor.pendingSignal as Prisma.InputJsonObject)
+          : null;
+      if (cursor?.lastEvaluatedAt && previousPending?.mode === "realtime") {
+        const now = (
+          await transaction.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`
+        )[0]!.now;
+        const expiresAt = runtimeEntryExpiresAt(
+          configuredEntryOrderType,
+          new Date(
+            typeof previousPending.detectedAt === "string" ? previousPending.detectedAt : NaN,
+          ),
+          new Date(typeof previousPending.expiresAt === "string" ? previousPending.expiresAt : NaN),
+          this.marketEntryPolicy,
+        );
+        const reason = !Number.isFinite(+expiresAt)
+          ? "INVALID_PENDING_SIGNAL"
+          : +now >= +expiresAt
+            ? "ENTRY_SIGNAL_EXPIRED"
+            : "ENTRY_SIGNAL_SUPERSEDED";
+        const previousDecision = cursor.lastDecisionId
+          ? await transaction.decision.findUnique({
+              where: { id: cursor.lastDecisionId },
+              select: { reasonCode: true },
+            })
+          : null;
+        await transaction.decision.create({
+          data: {
+            workspaceId: input.workspaceId,
+            executionRunId: input.executionRunId,
+            strategyVersionId: input.strategyVersionId,
+            symbol: input.symbol,
+            action: "SKIP",
+            reasonCode: reason,
+            summary:
+              reason === "ENTRY_SIGNAL_SUPERSEDED"
+                ? "Прежний сигнал завершён при обработке новой свечи"
+                : `Прежний сигнал завершён: ${reason}`,
+            factors: withRuntimeSignal(
+              {
+                source: "runtime-candle-replacement",
+                pendingSignal: previousPending,
+                lastEventId:
+                  cursor.pendingPriceEventId === null ? null : String(cursor.pendingPriceEventId),
+                lastWaitingReason: previousDecision?.reasonCode ?? null,
+                replacementCandleAt: input.candleAt.toISOString(),
+                ...(configuredEntryOrderType === "MARKET"
+                  ? { marketEntryPolicy: this.marketEntryPolicy }
+                  : {}),
+              },
+              runtimeSignalState({
+                executionRunId: input.executionRunId,
+                symbol: input.symbol,
+                candleAt: cursor.lastEvaluatedAt,
+                status: reason === "ENTRY_SIGNAL_EXPIRED" ? "EXPIRED" : "REJECTED",
+                observedAt: now,
+                reasonCode: reason,
+                pending: previousPending,
+              }),
+            ),
+            correlationId: `runtime-pending:${input.executionRunId}:${input.symbol}:${cursor.lastEvaluatedAt.toISOString()}:terminal`,
+            decidedAt: now,
+          },
+        });
       }
       const contextSnapshot = await ensureDecisionContextSnapshot(
         transaction,

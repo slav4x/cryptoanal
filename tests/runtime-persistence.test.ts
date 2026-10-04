@@ -447,7 +447,12 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           await runtime.getIndicatorState(context.run.id, context.symbol),
           checkpoint,
         );
-        assert.equal(await prisma.decision.count({ where: { executionRunId: context.run.id } }), 1);
+        assert.equal(
+          await prisma.decision.count({
+            where: { executionRunId: context.run.id, contextSnapshotId: { not: null } },
+          }),
+          1,
+        );
         assert.equal(
           (
             await runtime.persistCycle({
@@ -717,8 +722,11 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       });
       assert.equal(await prisma.position.count({ where: { executionRunId: candle.run.id } }), 0);
       assert.equal(
-        (await prisma.decision.findFirstOrThrow({ where: { executionRunId: candle.run.id } }))
-          .reasonCode,
+        (
+          await prisma.decision.findFirstOrThrow({
+            where: { executionRunId: candle.run.id, contextSnapshotId: { not: null } },
+          })
+        ).reasonCode,
         "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY",
       );
     });
@@ -839,7 +847,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           positionAction: { kind: "none" },
         });
         const decision = await prisma.decision.findFirstOrThrow({
-          where: { executionRunId: context.run.id },
+          where: { executionRunId: context.run.id, contextSnapshotId: { not: null } },
         });
         assert.equal(decision.reasonCode, "ENTRY_CONNECTION_UNAVAILABLE");
         assert.equal(decision.action, "SKIP");
@@ -884,7 +892,11 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       await runtime.persistCycle(cycle);
       assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
       const storedDecision = await prisma.decision.findFirstOrThrow({
-        where: { executionRunId: context.run.id, mode: "EXECUTION" },
+        where: {
+          executionRunId: context.run.id,
+          mode: "EXECUTION",
+          contextSnapshotId: { not: null },
+        },
       });
       assert.equal(storedDecision.providerId, "cryptoanal-rule-engine");
       assert.ok(storedDecision.contextSnapshotId);
@@ -1388,7 +1400,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           };
           assert.equal((await runtime.persistCycle(cycle)).applied, true);
           const decision = await prisma.decision.findFirstOrThrow({
-            where: { executionRunId: context.run.id },
+            where: { executionRunId: context.run.id, contextSnapshotId: { not: null } },
           });
           assert.equal(decision.reasonCode, reason);
           assert.equal(decision.action, "SKIP");
@@ -1447,13 +1459,214 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           else {
             assert.equal(cursor.pendingSignal, null);
             const decision = await prisma.decision.findFirstOrThrow({
-              where: { executionRunId: context.run.id },
+              where: { executionRunId: context.run.id, contextSnapshotId: { not: null } },
             });
             assert.equal(decision.reasonCode, "ENTRY_SIGNAL_EXPIRED");
           }
         }
       },
     );
+    await t.test(
+      "new candle terminates expired or superseded pending with its old signal identity",
+      async () => {
+        for (const expired of [false, true])
+          for (const replacement of [false, true]) {
+            const context = await setup();
+            const progress = {
+              workspaceId: context.workspace.id,
+              executionRunId: context.run.id,
+              symbol: context.symbol,
+              expectedCandleAt: candleAt,
+              expectedPendingPriceEventId: null,
+              throughEventId: null,
+              waitingReason: "ENTRY_QUOTE_MISSING" as const,
+            };
+            await runtime.advancePendingEntry(progress);
+            const where = {
+              executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+            };
+            const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+            if (expired)
+              await prisma.runtimeCursor.update({
+                where,
+                data: {
+                  pendingSignal: {
+                    ...(cursor.pendingSignal as object),
+                    detectedAt: new Date(+quoteAt - 120000).toISOString(),
+                    expiresAt: new Date(+quoteAt - 1).toISOString(),
+                  },
+                },
+              });
+            const nextAt = new Date(+quoteAt - 900000);
+            const fields = decisionEngineFields(context);
+            const pending = {
+              mode: "realtime",
+              side: "long",
+              signalPrice: 100,
+              detectedAt: quoteAt.toISOString(),
+              availableAt: quoteAt.toISOString(),
+              expiresAt: new Date(Date.now() + 60000).toISOString(),
+              entryRegime: "neutral",
+            };
+            const cycle: PersistRuntimeCycleInput = {
+              ...context.entry,
+              ...fields,
+              interval: "15",
+              candleAt: nextAt,
+              expectedLastEvaluatedAt: candleAt,
+              expectedDeploymentStatus: "RUNNING",
+              expectedPositionId: null,
+              expectedPositionVersion: null,
+              pendingSignal: replacement ? pending : null,
+              candidate: replacement
+                ? fields.candidate
+                : { ...fields.candidate, side: null, action: "HOLD" },
+              decision: {
+                action: "HOLD",
+                reasonCode: replacement ? "ENTRY_SIGNAL_PENDING" : "NO_SIGNAL",
+                summary: "Next candle",
+                factors: {},
+              },
+              positionAction: { kind: "none" },
+            };
+            assert.equal((await runtime.persistCycle(cycle)).applied, true);
+            assert.equal((await runtime.persistCycle(cycle)).applied, false);
+            const terminal = await prisma.decision.findMany({
+              where: {
+                executionRunId: context.run.id,
+                correlationId: `runtime-pending:${context.run.id}:${context.symbol}:${candleAt.toISOString()}:terminal`,
+              },
+            });
+            assert.equal(terminal.length, 1);
+            const factors = terminal[0]!.factors as {
+              lastWaitingReason: string;
+              runtimeSignal: { id: string; status: string };
+              replacementCandleAt: string;
+            };
+            assert.equal(
+              terminal[0]!.reasonCode,
+              expired ? "ENTRY_SIGNAL_EXPIRED" : "ENTRY_SIGNAL_SUPERSEDED",
+            );
+            assert.equal(
+              factors.runtimeSignal.id,
+              `runtime-signal:${context.run.id}:${context.symbol}:${candleAt.toISOString()}`,
+            );
+            assert.equal(factors.runtimeSignal.status, expired ? "EXPIRED" : "REJECTED");
+            assert.equal(factors.lastWaitingReason, "ENTRY_QUOTE_MISSING");
+            assert.equal(factors.replacementCandleAt, nextAt.toISOString());
+            const updated = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+            assert.equal(+updated.lastEvaluatedAt!, +nextAt);
+            if (replacement)
+              assert.equal(
+                (updated.pendingSignal as { signalId: string }).signalId,
+                `runtime-signal:${context.run.id}:${context.symbol}:${nextAt.toISOString()}`,
+              );
+            else assert.equal(updated.pendingSignal, null);
+          }
+      },
+    );
+    await t.test(
+      "new candle and pending expiry race creates one terminal and preserves the replacement",
+      async () => {
+        for (const candleFirst of [false, true]) {
+          const context = await setup();
+          const where = {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          };
+          const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+          await prisma.runtimeCursor.update({
+            where,
+            data: {
+              pendingSignal: {
+                ...(cursor.pendingSignal as object),
+                detectedAt: new Date(+quoteAt - 120000).toISOString(),
+                expiresAt: new Date(+quoteAt - 1).toISOString(),
+              },
+            },
+          });
+          const nextAt = new Date(+quoteAt - 900000);
+          const cycle: PersistRuntimeCycleInput = {
+            ...context.entry,
+            ...decisionEngineFields(context),
+            interval: "15",
+            candleAt: nextAt,
+            expectedLastEvaluatedAt: candleAt,
+            expectedDeploymentStatus: "RUNNING",
+            expectedPositionId: null,
+            expectedPositionVersion: null,
+            pendingSignal: {
+              mode: "realtime",
+              side: "long",
+              signalPrice: 100,
+              detectedAt: quoteAt.toISOString(),
+              availableAt: quoteAt.toISOString(),
+              expiresAt: new Date(Date.now() + 60000).toISOString(),
+              entryRegime: "neutral",
+            },
+            decision: {
+              action: "HOLD",
+              reasonCode: "ENTRY_SIGNAL_PENDING",
+              summary: "Next",
+              factors: {},
+            },
+            positionAction: { kind: "none" },
+          };
+          const expire = () =>
+            runtime.advancePendingEntry({
+              workspaceId: context.workspace.id,
+              executionRunId: context.run.id,
+              symbol: context.symbol,
+              expectedCandleAt: candleAt,
+              expectedPendingPriceEventId: null,
+              throughEventId: null,
+            });
+          await Promise.all(
+            candleFirst
+              ? [runtime.persistCycle(cycle), expire()]
+              : [expire(), runtime.persistCycle(cycle)],
+          );
+          assert.equal(
+            await prisma.decision.count({
+              where: { executionRunId: context.run.id, reasonCode: "ENTRY_SIGNAL_EXPIRED" },
+            }),
+            1,
+          );
+          const updated = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+          assert.equal(
+            (updated.pendingSignal as { signalId: string }).signalId,
+            `runtime-signal:${context.run.id}:${context.symbol}:${nextAt.toISOString()}`,
+          );
+        }
+      },
+    );
+    await t.test("failed new candle transaction rolls back old signal finalization", async () => {
+      const context = await setup();
+      const fields = decisionEngineFields(context);
+      await assert.rejects(
+        runtime.persistCycle({
+          ...context.entry,
+          ...fields,
+          contextSnapshot: { ...fields.contextSnapshot, strategyVersionId: randomUUID() },
+          interval: "15",
+          candleAt: new Date(+quoteAt - 900000),
+          expectedLastEvaluatedAt: candleAt,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal: null,
+          decision: { action: "HOLD", reasonCode: "NO_SIGNAL", summary: "Next", factors: {} },
+          positionAction: { kind: "none" },
+        }),
+      );
+      assert.equal(await prisma.decision.count({ where: { executionRunId: context.run.id } }), 0);
+      const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+        where: {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        },
+      });
+      assert.equal(+cursor.lastEvaluatedAt!, +candleAt);
+      assert.ok(cursor.pendingSignal);
+    });
     await t.test(
       "one stable signal identity links observation, pending and fill across retries",
       async () => {
@@ -1506,7 +1719,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           true,
         );
         const decisions = await prisma.decision.findMany({
-          where: { executionRunId: context.run.id },
+          where: {
+            executionRunId: context.run.id,
+            factors: { path: ["runtimeSignal", "id"], equals: signalId },
+          },
           orderBy: { createdAt: "asc" },
         });
         assert.equal(decisions.length, 2);

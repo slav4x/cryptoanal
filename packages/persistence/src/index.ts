@@ -147,3 +147,9 @@ export {
   runtimeMarketEntryFailure,
   type RuntimeMarketEntryPolicy,
 } from "./runtime-entry-policy";
+
+export {
+  runtimeEntryWaitSummary,
+  runtimeEntryQuoteWaitReason,
+  type RuntimeEntryWaitReason,
+} from "./runtime-entry-wait";

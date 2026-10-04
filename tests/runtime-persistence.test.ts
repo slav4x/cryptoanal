@@ -805,6 +805,56 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(stored.providerId, "shadow-test");
       },
     );
+    await t.test(
+      "connection closure during pending creation rejects the new signal with its actual gate reason",
+      async () => {
+        const context = await setup();
+        await prisma.exchangeConnection.update({
+          where: { id: context.connection.id },
+          data: { status: "INVALID" },
+        });
+        await runtime.persistCycle({
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: new Date(+quoteAt - 900000),
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal: {
+            mode: "realtime",
+            side: "long",
+            signalPrice: 100,
+            detectedAt: quoteAt.toISOString(),
+            availableAt: quoteAt.toISOString(),
+            expiresAt: new Date(Date.now() + 60000).toISOString(),
+            entryRegime: "neutral",
+          },
+          decision: {
+            action: "HOLD",
+            reasonCode: "ENTRY_QUOTE_MISSING",
+            summary: "Pending",
+            factors: {},
+          },
+          positionAction: { kind: "none" },
+        });
+        const decision = await prisma.decision.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.equal(decision.reasonCode, "ENTRY_CONNECTION_UNAVAILABLE");
+        assert.equal(decision.action, "SKIP");
+        assert.equal(
+          (decision.factors as { runtimeSignal: { status: string } }).runtimeSignal.status,
+          "REJECTED",
+        );
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+        });
+        assert.equal(cursor.pendingSignal, null);
+      },
+    );
     await t.test("invalid connection blocks pending and candle entries", async () => {
       const context = await setup();
       await prisma.exchangeConnection.update({
@@ -812,7 +862,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         data: { status: "INVALID" },
       });
       assert.equal((await runtime.persistRealtimeEntry(context.entry)).applied, false);
-      assert.equal((await runtime.listRealtimePendingEntries(context.workspace.id)).length, 0);
+      assert.equal((await runtime.listRealtimePendingEntries(context.workspace.id)).length, 1);
       const cycle: PersistRuntimeCycleInput = {
         ...context.entry,
         ...decisionEngineFields(context),
@@ -970,6 +1020,156 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         const closed = await prisma.position.findUniqueOrThrow({ where: { id: stored.id } });
         assert.deepEqual(closed.indicatorState, nextState);
         assert.equal(+closed.signalCandleAt!, +nextAt);
+      },
+    );
+    await t.test(
+      "waiting decisions deduplicate across restart, retain signal ID and explain expiry",
+      async () => {
+        const context = await setup();
+        const progress = {
+          workspaceId: context.workspace.id,
+          executionRunId: context.run.id,
+          symbol: context.symbol,
+          expectedCandleAt: candleAt,
+          expectedPendingPriceEventId: null,
+          throughEventId: null,
+        };
+        await Promise.all([
+          runtime.advancePendingEntry({ ...progress, waitingReason: "ENTRY_LIMIT_NOT_TOUCHED" }),
+          runtime.advancePendingEntry({ ...progress, waitingReason: "ENTRY_LIMIT_NOT_TOUCHED" }),
+        ]);
+        await new RuntimeRepository(prisma).advancePendingEntry({
+          ...progress,
+          waitingReason: "ENTRY_LIMIT_NOT_TOUCHED",
+        });
+        await runtime.advancePendingEntry({
+          ...progress,
+          throughEventId: context.entry.entryPriceEventId,
+          waitingReason: "ENTRY_LIMIT_NOT_TOUCHED",
+        });
+        assert.equal(await prisma.decision.count({ where: { executionRunId: context.run.id } }), 1);
+        assert.equal(
+          await runtime.advancePendingEntry({ ...progress, waitingReason: "STALE_ENTRY_QUOTE" }),
+          false,
+        );
+        const advanced = {
+          ...progress,
+          expectedPendingPriceEventId: context.entry.entryPriceEventId,
+          throughEventId: context.entry.entryPriceEventId,
+        };
+        await runtime.advancePendingEntry({ ...advanced, waitingReason: "STALE_ENTRY_QUOTE" });
+        await runtime.advancePendingEntry({
+          ...advanced,
+          waitingReason: "ENTRY_LIMIT_NOT_TOUCHED",
+        });
+        const rows = await prisma.decision.findMany({
+          where: { executionRunId: context.run.id },
+          orderBy: { createdAt: "asc" },
+        });
+        assert.deepEqual(
+          rows.map((row) => row.reasonCode),
+          ["ENTRY_LIMIT_NOT_TOUCHED", "STALE_ENTRY_QUOTE", "ENTRY_LIMIT_NOT_TOUCHED"],
+        );
+        const states = rows.map(
+          (row) => (row.factors as { runtimeSignal: { id: string; status: string } }).runtimeSignal,
+        );
+        assert.ok(rows.every((row) => row.action === "HOLD"));
+        assert.ok(
+          states.every((state) => state.status === "PENDING" && state.id === states[0]!.id),
+        );
+        const where = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+        await prisma.runtimeCursor.update({
+          where,
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as object),
+              expiresAt: new Date(Date.now() - 1).toISOString(),
+            },
+          },
+        });
+        assert.equal(await runtime.advancePendingEntry(advanced), true);
+        assert.equal(await runtime.advancePendingEntry(advanced), false);
+        const terminal = await prisma.decision.findFirstOrThrow({
+          where: { executionRunId: context.run.id, action: "SKIP" },
+        });
+        assert.equal(terminal.reasonCode, "ENTRY_SIGNAL_EXPIRED");
+        assert.equal(
+          (terminal.factors as { lastWaitingReason: string }).lastWaitingReason,
+          "ENTRY_LIMIT_NOT_TOUCHED",
+        );
+        assert.equal(
+          (terminal.factors as { runtimeSignal: { id: string } }).runtimeSignal.id,
+          states[0]!.id,
+        );
+      },
+    );
+    await t.test(
+      "unavailable connection/instrument leaves events unread and expires without permitting execution",
+      async () => {
+        for (const reason of ["ENTRY_CONNECTION_UNAVAILABLE", "INSTRUMENT_UNAVAILABLE"] as const) {
+          const context = await setup();
+          if (reason === "ENTRY_CONNECTION_UNAVAILABLE")
+            await prisma.exchangeConnection.update({
+              where: { id: context.connection.id },
+              data: { status: "INVALID" },
+            });
+          else
+            await prisma.marketInstrument.update({
+              where: { symbol: context.symbol },
+              data: { enabled: false },
+            });
+          assert.equal((await runtime.listRealtimePendingEntries(context.workspace.id)).length, 1);
+          assert.equal((await runtime.persistRealtimeEntry(context.entry)).waitingReason, reason);
+          const progress = {
+            workspaceId: context.workspace.id,
+            executionRunId: context.run.id,
+            symbol: context.symbol,
+            expectedCandleAt: candleAt,
+            expectedPendingPriceEventId: null,
+            throughEventId: context.entry.entryPriceEventId,
+            waitingReason: "ENTRY_LIMIT_NOT_TOUCHED" as const,
+          };
+          await runtime.advancePendingEntry(progress);
+          await runtime.advancePendingEntry(progress);
+          const where = {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          };
+          const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+          assert.equal(cursor.pendingPriceEventId, null);
+          assert.ok(cursor.pendingSignal);
+          const rows = await prisma.decision.findMany({
+            where: { executionRunId: context.run.id },
+          });
+          assert.equal(rows.length, 1);
+          assert.equal(rows[0]!.reasonCode, reason);
+          await prisma.runtimeCursor.update({
+            where,
+            data: {
+              pendingSignal: {
+                ...(cursor.pendingSignal as object),
+                expiresAt: new Date(Date.now() - 1).toISOString(),
+              },
+            },
+          });
+          await runtime.advancePendingEntry(progress);
+          assert.equal(
+            (await prisma.runtimeCursor.findUniqueOrThrow({ where })).pendingSignal,
+            null,
+          );
+          assert.equal(
+            await prisma.decision.count({
+              where: { executionRunId: context.run.id, reasonCode: "ENTRY_SIGNAL_EXPIRED" },
+            }),
+            1,
+          );
+          assert.equal(
+            await prisma.position.count({ where: { executionRunId: context.run.id } }),
+            0,
+          );
+        }
       },
     );
     await t.test(

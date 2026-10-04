@@ -1,3 +1,4 @@
+import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-entry-wait";
 import {
   defaultRuntimeMarketEntryPolicy,
   runtimeEntryExpiresAt,
@@ -570,8 +571,6 @@ export class RuntimeRepository {
       if (
         deployment?.status !== "RUNNING" ||
         deployment.environment !== "DRY_RUN" ||
-        deployment.exchangeConnection?.status !== "ACTIVE" ||
-        deployment.exchangeConnection.revokedAt !== null ||
         executionRun?.status !== "RUNNING" ||
         !cursor ||
         !cursor.pendingSignal ||
@@ -580,12 +579,25 @@ export class RuntimeRepository {
           cursor.pendingPriceEventId !== input.expectedPendingPriceEventId) ||
         (cursor.pendingPriceEventId !== null &&
           input.entryPriceEventId <= cursor.pendingPriceEventId) ||
-        currentPosition ||
-        !instrument?.enabled ||
-        instrument.status !== "Trading"
+        currentPosition
       ) {
         return { applied: false, capacityReached: false };
       }
+      if (
+        deployment.exchangeConnection?.status !== "ACTIVE" ||
+        deployment.exchangeConnection.revokedAt !== null
+      )
+        return {
+          applied: false,
+          capacityReached: false,
+          waitingReason: "ENTRY_CONNECTION_UNAVAILABLE" as const,
+        };
+      if (!instrument?.enabled || instrument.status !== "Trading")
+        return {
+          applied: false,
+          capacityReached: false,
+          waitingReason: "INSTRUMENT_UNAVAILABLE" as const,
+        };
       const pending = cursor.pendingSignal as Record<string, unknown>;
       const configuredOrderType = (
         executionRun.strategyVersion.config as { entry?: { orderType?: string } }
@@ -775,6 +787,7 @@ export class RuntimeRepository {
     expectedPendingPriceEventId: bigint | null;
     throughEventId: bigint | null;
     rejectionReason?: string;
+    waitingReason?: RuntimeEntryWaitReason;
   }) {
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw(
@@ -789,6 +802,8 @@ export class RuntimeRepository {
           pendingSignal: true,
           lastEvaluatedAt: true,
           pendingPriceEventId: true,
+          lastDecisionId: true,
+          instrument: { select: { enabled: true, status: true } },
           executionRun: {
             select: {
               id: true,
@@ -819,18 +834,24 @@ export class RuntimeRepository {
       if (
         run.status !== "RUNNING" ||
         deployment.status !== "RUNNING" ||
-        deployment.environment !== "DRY_RUN" ||
-        deployment.exchangeConnection?.status !== "ACTIVE" ||
-        deployment.exchangeConnection.revokedAt !== null
+        deployment.environment !== "DRY_RUN"
       )
         return false;
+      const gateReason: RuntimeEntryWaitReason | null =
+        deployment.exchangeConnection?.status !== "ACTIVE" ||
+        deployment.exchangeConnection.revokedAt !== null
+          ? "ENTRY_CONNECTION_UNAVAILABLE"
+          : !cursor.instrument.enabled || cursor.instrument.status !== "Trading"
+            ? "INSTRUMENT_UNAVAILABLE"
+            : null;
+      const throughEventId = gateReason ? cursor.pendingPriceEventId : input.throughEventId;
       if (
-        input.throughEventId !== null &&
-        (cursor.pendingPriceEventId === null || input.throughEventId > cursor.pendingPriceEventId)
+        throughEventId !== null &&
+        (cursor.pendingPriceEventId === null || throughEventId > cursor.pendingPriceEventId)
       ) {
-        const event = await tx.marketPriceEvent.findUnique({ where: { id: input.throughEventId } });
+        const event = await tx.marketPriceEvent.findUnique({ where: { id: throughEventId } });
         if (!event || event.symbol !== input.symbol) return false;
-      } else if (input.throughEventId !== cursor.pendingPriceEventId) return false;
+      } else if (throughEventId !== cursor.pendingPriceEventId) return false;
       const pending = cursor.pendingSignal as Record<string, unknown>;
       const configuredOrderType = (run.strategyVersion.config as { entry?: { orderType?: string } })
         .entry?.orderType;
@@ -846,7 +867,16 @@ export class RuntimeRepository {
         ? "INVALID_PENDING_SIGNAL"
         : +now >= expiresAt
           ? "ENTRY_SIGNAL_EXPIRED"
-          : input.rejectionReason;
+          : gateReason
+            ? undefined
+            : input.rejectionReason;
+      const previousDecision = cursor.lastDecisionId
+        ? await tx.decision.findUnique({
+            where: { id: cursor.lastDecisionId },
+            select: { reasonCode: true, factors: true },
+          })
+        : null;
+      const waitingReason = gateReason ?? input.waitingReason;
       let decisionId: string | undefined;
       if (reason) {
         const decision = await tx.decision.create({
@@ -865,7 +895,8 @@ export class RuntimeRepository {
                 ...(configuredOrderType === "market"
                   ? { marketEntryPolicy: this.marketEntryPolicy }
                   : {}),
-                lastEventId: input.throughEventId === null ? null : String(input.throughEventId),
+                lastWaitingReason: previousDecision?.reasonCode ?? null,
+                lastEventId: throughEventId === null ? null : String(throughEventId),
               },
               runtimeSignalState({
                 executionRunId: run.id,
@@ -884,11 +915,60 @@ export class RuntimeRepository {
         });
         decisionId = decision.id;
       }
+      if (!reason && waitingReason) {
+        const previousState =
+          previousDecision?.factors &&
+          typeof previousDecision.factors === "object" &&
+          !Array.isArray(previousDecision.factors)
+            ? (previousDecision.factors as { runtimeSignal?: { status?: string; id?: string } })
+                .runtimeSignal
+            : null;
+        const state = runtimeSignalState({
+          executionRunId: run.id,
+          symbol: input.symbol,
+          candleAt: input.expectedCandleAt,
+          status: "PENDING",
+          observedAt: now,
+          reasonCode: waitingReason,
+          pending: cursor.pendingSignal,
+        });
+        if (
+          previousDecision?.reasonCode !== waitingReason ||
+          previousState?.status !== "PENDING" ||
+          previousState.id !== state.id
+        ) {
+          const decision = await tx.decision.create({
+            data: {
+              workspaceId: input.workspaceId,
+              executionRunId: run.id,
+              strategyVersionId: run.strategyVersionId,
+              symbol: input.symbol,
+              action: "HOLD",
+              reasonCode: waitingReason,
+              summary: runtimeEntryWaitSummary(waitingReason),
+              factors: withRuntimeSignal(
+                {
+                  source: "durable-price-events",
+                  pendingSignal: cursor.pendingSignal as Prisma.InputJsonValue,
+                  lastEventId: throughEventId === null ? null : String(throughEventId),
+                },
+                state,
+              ),
+              correlationId: `runtime-pending:${run.id}:${input.symbol}:${input.expectedCandleAt.toISOString()}:wait:${waitingReason}:${cursor.lastDecisionId ?? "initial"}`,
+              decidedAt: now,
+            },
+            select: { id: true },
+          });
+          decisionId = decision.id;
+        }
+      }
+      if (!reason && !decisionId && throughEventId === cursor.pendingPriceEventId) return true;
       await tx.runtimeCursor.update({
         where: { executionRunId_symbol: { executionRunId: run.id, symbol: input.symbol } },
         data: {
-          pendingPriceEventId: input.throughEventId,
-          ...(reason ? { pendingSignal: Prisma.DbNull, lastDecisionId: decisionId! } : {}),
+          pendingPriceEventId: throughEventId,
+          ...(reason ? { pendingSignal: Prisma.DbNull } : {}),
+          ...(decisionId ? { lastDecisionId: decisionId } : {}),
         },
       });
       return true;
@@ -900,13 +980,11 @@ export class RuntimeRepository {
       where: {
         workspaceId,
         pendingSignal: { not: Prisma.DbNull },
-        instrument: { is: { enabled: true, status: "Trading" } },
         executionRun: {
           status: "RUNNING",
           deployment: {
             status: "RUNNING",
             environment: "DRY_RUN",
-            exchangeConnection: { is: { status: "ACTIVE", revokedAt: null } },
           },
         },
       },
@@ -915,13 +993,19 @@ export class RuntimeRepository {
         lastEvaluatedAt: true,
         pendingSignal: true,
         pendingPriceEventId: true,
+        instrument: { select: { enabled: true, status: true } },
         executionRun: {
           select: {
             id: true,
             strategyVersionId: true,
             strategyVersion: { select: { config: true } },
             deployment: {
-              select: { id: true, workspaceId: true, exchangeAccountId: true },
+              select: {
+                id: true,
+                workspaceId: true,
+                exchangeAccountId: true,
+                exchangeConnection: { select: { status: true, revokedAt: true } },
+              },
             },
           },
         },
@@ -1017,6 +1101,23 @@ export class RuntimeRepository {
 
       let decision = input.decision;
       let action = input.positionAction;
+      const proposedSignal =
+        input.candidate && typeof input.candidate === "object" && !Array.isArray(input.candidate)
+          ? (input.candidate as Prisma.InputJsonObject)
+          : null;
+      if (
+        !entriesAllowed &&
+        action.kind === "none" &&
+        (proposedSignal?.side === "long" || proposedSignal?.side === "short" || input.pendingSignal)
+      ) {
+        decision = {
+          action: "SKIP",
+          reasonCode:
+            deployment.status === "PAUSED" ? "DEPLOYMENT_PAUSED" : "ENTRY_CONNECTION_UNAVAILABLE",
+          summary: "Новый сигнал отклонён состоянием deployment или подключения",
+          factors: input.decision.factors,
+        };
+      }
       let decisionPositionId = currentPosition?.id ?? null;
       let decisionTradeId: string | null = null;
       if (action.kind === "open") {
@@ -1037,7 +1138,8 @@ export class RuntimeRepository {
           action = { kind: "none" };
           decision = {
             action: "SKIP",
-            reasonCode: "ENTRY_GATE_CLOSED",
+            reasonCode:
+              deployment.status === "PAUSED" ? "DEPLOYMENT_PAUSED" : "ENTRY_CONNECTION_UNAVAILABLE",
             summary: "Новый вход запрещён состоянием deployment или подключения",
             factors: input.decision.factors,
           };

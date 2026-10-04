@@ -65,6 +65,8 @@ import {
   MarketUniverseRepository,
   RuntimeRepository,
   runtimeEntryExpiresAt,
+  runtimeEntryQuoteWaitReason,
+  runtimeEntryWaitSummary,
   runtimeMarketEntryFailure,
   RuntimeRiskRepository,
   PriceEventRepository,
@@ -1076,7 +1078,22 @@ async function processRealtimeEntry(
     });
     return;
   }
-  if (!getFreshQuote(target.symbol)) return;
+  const deployment = target.executionRun.deployment;
+  const waitingReason =
+    deployment.exchangeConnection?.status !== "ACTIVE" ||
+    deployment.exchangeConnection.revokedAt !== null
+      ? "ENTRY_CONNECTION_UNAVAILABLE"
+      : !target.instrument.enabled || target.instrument.status !== "Trading"
+        ? "INSTRUMENT_UNAVAILABLE"
+        : entryQuoteWaitReason(target.symbol);
+  if (waitingReason) {
+    await runtimeRepository.advancePendingEntry({
+      ...progress,
+      throughEventId: target.pendingPriceEventId,
+      waitingReason,
+    });
+    return;
+  }
   const events = await priceEventRepository.after(
     target.symbol,
     target.pendingPriceEventId,
@@ -1129,8 +1146,18 @@ async function processRealtimeEntry(
         strategyConfig,
       );
       if (!position) return { status: "rejected", reason: "INVALID_ENTRY_SIZE" };
-      if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession)
+      if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession) {
+        await runtimeRepository.advancePendingEntry({
+          ...progress,
+          throughEventId: target.pendingPriceEventId,
+          waitingReason: !streamConnected
+            ? "ENTRY_STREAM_UNAVAILABLE"
+            : !priceJournal.healthy
+              ? "ENTRY_JOURNAL_UNAVAILABLE"
+              : "ENTRY_QUOTE_STREAM_MISMATCH",
+        });
         return { status: "conflict" };
+      }
       const result = await runtimeRepository.persistRealtimeEntry({
         ...progress,
         entryPriceEventId: quote.id,
@@ -1156,11 +1183,19 @@ async function processRealtimeEntry(
         );
         return { status: "filled" };
       }
+      if (result.waitingReason) {
+        await runtimeRepository.advancePendingEntry({
+          ...progress,
+          throughEventId: target.pendingPriceEventId,
+          waitingReason: result.waitingReason,
+        });
+        return { status: "conflict" };
+      }
       if (
         result.riskFailure === "STALE_ENTRY_QUOTE" ||
         result.riskFailure === "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY"
       )
-        return { status: "no-touch" };
+        return { status: "no-touch", reason: result.riskFailure };
       if (result.riskFailure || result.capacityReached)
         return { status: "rejected", reason: result.riskFailure ?? "MAX_OPEN_POSITIONS" };
       return { status: "conflict" };
@@ -1172,22 +1207,26 @@ async function processRealtimeEntry(
       ...progress,
       throughEventId: outcome.throughEventId,
       ...(outcome.status === "rejected" ? { rejectionReason: outcome.reason } : {}),
+      ...("waitingReason" in outcome && outcome.waitingReason
+        ? { waitingReason: outcome.waitingReason }
+        : {}),
     });
   }
 }
 
+function entryQuoteWaitReason(symbol: string) {
+  return runtimeEntryQuoteWaitReason({
+    streamConnected,
+    journalHealthy: priceJournal.healthy,
+    quote: latestQuotes.get(symbol),
+    streamId: streamSession,
+    now: Date.now(),
+    maximumQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
+  });
+}
+
 function getFreshQuote(symbol: string) {
-  const quote = latestQuotes.get(symbol);
-  if (
-    !streamConnected ||
-    !priceJournal.healthy ||
-    !quote ||
-    quote.streamId !== streamSession ||
-    quote.observedAt.getTime() < Date.now() - config.RUNTIME_QUOTE_MAX_AGE_MS
-  ) {
-    return null;
-  }
-  return quote;
+  return entryQuoteWaitReason(symbol) ? null : latestQuotes.get(symbol)!;
 }
 
 async function watchdogLoop() {
@@ -1550,7 +1589,12 @@ async function processRuntimeTarget(
         if (signal && !entriesAllowed && positionAction.kind === "none") {
           decision = {
             action: "SKIP",
-            reasonCode: riskAssessment.reason ?? "ENTRY_GATE_CLOSED",
+            reasonCode:
+              target.exchangeConnection?.status !== "ACTIVE" ||
+              target.exchangeConnection.revokedAt !== null
+                ? "ENTRY_CONNECTION_UNAVAILABLE"
+                : (riskAssessment.reason ??
+                  (dailyPnl <= -lossLimit ? "STRATEGY_DAILY_LOSS_LIMIT" : "ENTRY_GATE_CLOSED")),
             summary: "Торговый сигнал отклонён до исполнения общим risk gate",
             factors: runtimeFactors(
               candle,
@@ -1642,10 +1686,21 @@ async function processRuntimeTarget(
               signalAvailableAt,
             );
             if (positionAction.kind === "none") {
+              const reason =
+                entryQuoteWaitReason(symbol) ??
+                (quote &&
+                (quote.receivedAt < signalAvailableAt || quote.observedAt < candleClosedAt)
+                  ? "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY"
+                  : strategyConfig.entry.orderType === "limit"
+                    ? "ENTRY_LIMIT_NOT_TOUCHED"
+                    : "ENTRY_SIGNAL_PENDING");
               decision = {
                 action: "HOLD",
-                reasonCode: "ENTRY_SIGNAL_PENDING",
-                summary: `Зафиксирован ${signal.side} сигнал; ожидается событие цены`,
+                reasonCode: reason,
+                summary:
+                  reason === "ENTRY_SIGNAL_PENDING"
+                    ? `Зафиксирован ${signal.side} сигнал; ожидается событие цены`
+                    : runtimeEntryWaitSummary(reason),
                 factors: runtimeFactors(
                   candle,
                   dailyPnl,
@@ -1655,6 +1710,21 @@ async function processRuntimeTarget(
                 ),
               };
             }
+          }
+          if (candidate && !opened && positionAction.kind === "none") {
+            pendingSignalAfter = null;
+            decision = {
+              action: "SKIP",
+              reasonCode: "INVALID_ENTRY_SIZE",
+              summary: "Вход отклонён: размер позиции не укладывается в ограничения риска",
+              factors: runtimeFactors(
+                candle,
+                dailyPnl,
+                equity,
+                signalAvailableAt,
+                indicators.checkpoint!,
+              ),
+            };
           }
           if (marketFailure && positionAction.kind === "none") {
             pendingSignalAfter = null;

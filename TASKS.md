@@ -31,7 +31,9 @@
       учитывает полные тестовые окна, новые validation загружают предысторию до выбранной даты.
 - [x] Первый этап E06: pending event cursor, быстрый touch/rebound, CAS/restart,
       TTL внутри транзакции, причины expiry/risk/capacity и HOLD для ожидания цены.
-- [ ] Завершить E06: signal ID/status, полные причины отказов, отдельные TTL/deviation.
+- [x] E06: единый signal ID, observation SIGNAL и состояния PENDING/FILLED/EXPIRED/REJECTED
+      в решениях; retry не дублирует observation.
+- [ ] Завершить E06: полные причины отказов и отдельные TTL/deviation рыночного входа.
 - [ ] Выполнить P1/P2 по плану; затем повторно проверить стратегии через Validation Center.
 
 Текущий приоритет — E06 (pending entry по журналу событий) и приёмка E01–E03 нового плана. Детальные статусы будущих исправлений вести

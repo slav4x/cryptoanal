@@ -53,6 +53,9 @@
 
 ### Added
 
+- Stable signal ID и сохраняемые состояния SIGNAL/PENDING/FILLED/EXPIRED/REJECTED:
+  audit observation связан с decision factors и pending, повторный cycle не дублирует историю.
+
 - Pinned snapshot ID/hash в execution context и компактный bounded cache validation seeds;
   отдельная маркировка legacy runs без immutable snapshot.
 

@@ -453,7 +453,7 @@ Bybit предыстории через пользовательский validat
       диапазон после signal time, включая кратковременные касания limit.
 - [x] Повторять проверку TTL и жизненного цикла pending сигнала внутри транзакции;
       не ограничиваться проверкой перед ожиданиями/запросами.
-- [ ] Разделить SIGNAL/PENDING/FILLED/EXPIRED/REJECTED, связать их одним signal ID.
+- [x] Разделить SIGNAL/PENDING/FILLED/EXPIRED/REJECTED, связать их одним signal ID.
       OPEN в Activity не должен означать только ожидание цены.
 - [ ] Для каждого отказа сохранять конкретную причину: риск, capacity, stale quote,
       недоступное подключение, expiry, отсутствие касания.
@@ -490,6 +490,20 @@ restore-check подтвердил 47 таблиц и 31 прежнюю мигр
 INVALID_PENDING_SIGNAL, активных pending в этом срезе нет. Новое исполнение по touch/rebound
 после обновления в рабочем окружении пока не наблюдалось; оно проверено отдельными replay
 и DB-тестами, не искусственными рабочими сигналами. Тестовые базы удалены.
+
+**Второй этап E06 — история сигнала:** stable ID из executionRun/symbol/signal candle.
+Observation SIGNAL сохраняется в auditEvent с resourceType runtime-signal, остальные
+состояния — в Decision.factors.runtimeSignal; pending JSON закрепляет canonical signalId.
+Создание observation/decision/pending атомарно с candle cursor. Duplicate cycle не создаёт
+второй SIGNAL, fill/rejection/expiry продолжают тот же ID. Caller-supplied ID не подменяет
+канонический; прежние factors не теряются. Время pending fill decision отражает DB clock
+решения, а fill сохраняет время ценового события. Legacy pending получает выводимый ID
+при обработке, но отсутствующий исторический SIGNAL не изобретается.
+Новых таблиц/миграций нет: используются существующие immutable audit/decision записи.
+Проверено 144/144 runtime-теста без пропусков на отдельной PostgreSQL с 32 миграциями,
+включая цепочку SIGNAL → PENDING → FILLED, CAS retry, expiry state, namespace identity и
+невозможность подменить ID в pending/factors. Typecheck/lint/format/research integrity прошли.
+Полные причины недоступного источника/подключения и отдельный market TTL/deviation остаются E06.
 
 **Приёмка:** быстрый touch/rebound, повторный пакет, restart с pending, истечение TTL
 во время ожидания транзакции и pause/resume дают ровно одно объяснимое состояние.

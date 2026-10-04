@@ -971,6 +971,81 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       },
     );
     await t.test(
+      "one stable signal identity links observation, pending and fill across retries",
+      async () => {
+        const context = await setup();
+        const signalAt = new Date(+quoteAt - 900000);
+        const pendingSignal = {
+          mode: "realtime",
+          side: "long",
+          signalPrice: 100,
+          detectedAt: quoteAt.toISOString(),
+          availableAt: quoteAt.toISOString(),
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+          entryRegime: "neutral",
+          signalId: "untrusted-id",
+        };
+        const cycle: PersistRuntimeCycleInput = {
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: signalAt,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: null,
+          expectedPositionVersion: null,
+          pendingSignal,
+          decision: {
+            action: "HOLD",
+            reasonCode: "ENTRY_SIGNAL_PENDING",
+            summary: "Pending",
+            factors: { retained: true },
+          },
+          positionAction: { kind: "none" },
+        };
+        assert.equal((await runtime.persistCycle(cycle)).applied, true);
+        assert.equal((await runtime.persistCycle(cycle)).applied, false);
+        const signalId = `runtime-signal:${context.run.id}:${context.symbol}:${signalAt.toISOString()}`;
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+        });
+        assert.equal((cursor.pendingSignal as { signalId: string }).signalId, signalId);
+        const observed = await prisma.auditEvent.findMany({
+          where: { resourceId: signalId, action: "runtime.signal.observed" },
+        });
+        assert.equal(observed.length, 1);
+        assert.equal((observed[0]!.metadata as { status: string }).status, "SIGNAL");
+        assert.equal(
+          (await runtime.persistRealtimeEntry({ ...context.entry, expectedCandleAt: signalAt }))
+            .applied,
+          true,
+        );
+        const decisions = await prisma.decision.findMany({
+          where: { executionRunId: context.run.id },
+          orderBy: { createdAt: "asc" },
+        });
+        assert.equal(decisions.length, 2);
+        const states = decisions.map(
+          (decision) =>
+            (decision.factors as { runtimeSignal: { id: string; status: string } }).runtimeSignal,
+        );
+        assert.deepEqual(
+          states.map((state) => state.id),
+          [signalId, signalId],
+        );
+        assert.deepEqual(
+          states.map((state) => state.status),
+          ["PENDING", "FILLED"],
+        );
+        assert.deepEqual(
+          decisions.map((decision) => decision.action),
+          ["HOLD", "OPEN"],
+        );
+        assert.equal((decisions[0]!.factors as { retained: boolean }).retained, true);
+      },
+    );
+    await t.test(
       "pending finality and direction are verified from stored signal, not trusted caller arguments",
       async () => {
         const context = await setup();
@@ -1130,6 +1205,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         });
         assert.equal(decisions.length, 1);
         assert.equal(decisions[0]!.reasonCode, "ENTRY_SIGNAL_EXPIRED");
+        assert.equal(
+          (decisions[0]!.factors as { runtimeSignal: { status: string } }).runtimeSignal.status,
+          "EXPIRED",
+        );
         assert.equal((await prisma.runtimeCursor.findUniqueOrThrow({ where })).pendingSignal, null);
       },
     );

@@ -416,8 +416,12 @@ expiresAt; устаревшие события и прежний stream проп
 Finality и направление сверяются с сохранённым pending, не только с входными аргументами.
 Expiry и terminal risk/capacity rejection очищают pending с одной SKIP decision и причиной;
 простое отсутствие касания продвигает cursor и оставляет ожидание. Ожидание цены — HOLD,
-OPEN — исполненный вход. Полная модель signal ID/status и отдельные TTL/deviation рыночного
-входа ещё не реализованы. Требуется миграция `20261004190000_pending_entry_event_cursor`.
+OPEN — исполненный вход. Новый сигнал получает стабильный ID из запуска/пары/сигнальной
+свечи: SIGNAL сохраняется в audit event, PENDING/FILLED/EXPIRED/REJECTED — в
+`Decision.factors.runtimeSignal` с тем же ID и причиной; pending JSON хранит `signalId`.
+Observation и decision записываются одной транзакцией, retry не дублирует SIGNAL.
+Для legacy pending ID выводится при обработке; отсутствующая старая история не создаётся.
+Отдельные TTL/deviation рыночного входа ещё не реализованы. Требуется миграция `20261004190000_pending_entry_event_cursor`.
 
 Индикаторы используют общий расчёт `cryptoanal-indicators@2.0.0`: EMA инициализируется
 через SMA, RSI — через Wilder. `RuntimeCursor.indicatorState` хранит рекурсивные значения,

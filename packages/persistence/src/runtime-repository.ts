@@ -1,3 +1,4 @@
+import { runtimeSignalState, withRuntimeSignal } from "./runtime-signal";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 import {
@@ -687,10 +688,21 @@ export class RuntimeRepository {
           action: "OPEN",
           reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
           summary: `Сигнал исполнен по realtime quote: ${input.position.side === "BUY" ? "long" : "short"}`,
-          factors: input.factors,
+          factors: withRuntimeSignal(
+            input.factors,
+            runtimeSignalState({
+              executionRunId: input.executionRunId,
+              symbol: input.symbol,
+              candleAt: input.expectedCandleAt,
+              status: "FILLED",
+              observedAt: fillAt,
+              reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
+              pending: cursor.pendingSignal,
+            }),
+          ),
           marketSnapshotRef: `market-ticker:${input.symbol}:${input.quoteAt.toISOString()}`,
           correlationId,
-          decidedAt: input.quoteAt,
+          decidedAt: fillAt,
         },
         select: { id: true },
       });
@@ -794,11 +806,22 @@ export class RuntimeRepository {
             action: "SKIP",
             reasonCode: reason,
             summary: `Отложенный вход отменён: ${reason}`,
-            factors: {
-              source: "durable-price-events",
-              pendingSignal: cursor.pendingSignal as Prisma.InputJsonValue,
-              lastEventId: input.throughEventId === null ? null : String(input.throughEventId),
-            },
+            factors: withRuntimeSignal(
+              {
+                source: "durable-price-events",
+                pendingSignal: cursor.pendingSignal as Prisma.InputJsonValue,
+                lastEventId: input.throughEventId === null ? null : String(input.throughEventId),
+              },
+              runtimeSignalState({
+                executionRunId: run.id,
+                symbol: input.symbol,
+                candleAt: input.expectedCandleAt,
+                status: reason === "ENTRY_SIGNAL_EXPIRED" ? "EXPIRED" : "REJECTED",
+                observedAt: now,
+                reasonCode: reason,
+                pending: cursor.pendingSignal,
+              }),
+            ),
             correlationId: `runtime-pending:${run.id}:${input.symbol}:${input.expectedCandleAt.toISOString()}:terminal`,
             decidedAt: now,
           },
@@ -1125,6 +1148,57 @@ export class RuntimeRepository {
         transaction,
         input.contextSnapshot,
       );
+      const proposed =
+        input.candidate && typeof input.candidate === "object" && !Array.isArray(input.candidate)
+          ? (input.candidate as Prisma.InputJsonObject)
+          : null;
+      const pending =
+        input.pendingSignal &&
+        typeof input.pendingSignal === "object" &&
+        !Array.isArray(input.pendingSignal)
+          ? (input.pendingSignal as Prisma.InputJsonObject)
+          : null;
+      const hasSignal =
+        proposed?.side === "long" ||
+        proposed?.side === "short" ||
+        pending?.mode === "realtime" ||
+        input.decision.reasonCode === "ENTRY_SIGNAL_FILLED_REALTIME";
+      const signalState = hasSignal
+        ? runtimeSignalState({
+            executionRunId: input.executionRunId,
+            symbol: input.symbol,
+            candleAt: input.candleAt,
+            status:
+              action.kind === "open"
+                ? "FILLED"
+                : entriesAllowed && pending?.mode === "realtime" && decision.action !== "SKIP"
+                  ? "PENDING"
+                  : "REJECTED",
+            observedAt: input.contextSnapshot.availableAt,
+            reasonCode: decision.reasonCode,
+            pending: input.pendingSignal,
+          })
+        : null;
+      if (signalState) {
+        await transaction.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorId: "worker",
+            action: "runtime.signal.observed",
+            resourceType: "runtime-signal",
+            resourceId: signalState.id,
+            outcome: "COMPLETED",
+            requestId: correlationId,
+            metadata: { ...signalState, status: "SIGNAL" },
+          },
+        });
+      }
+      const pendingToStore =
+        signalState && pending?.mode === "realtime"
+          ? signalState.status === "PENDING"
+            ? { ...pending, signalId: signalState.id }
+            : null
+          : input.pendingSignal;
       const persistedDecision = await transaction.decision.create({
         data: {
           workspaceId: input.workspaceId,
@@ -1141,7 +1215,9 @@ export class RuntimeRepository {
           providerVersion: input.providerVersion,
           reasonCode: decision.reasonCode,
           summary: decision.summary,
-          factors: decision.factors,
+          factors: signalState
+            ? withRuntimeSignal(decision.factors, signalState)
+            : decision.factors,
           candidate: input.candidate,
           verdictReasonCode: decision.reasonCode,
           marketSnapshotRef: `decision-context:${contextSnapshot.contentHash}`,
@@ -1163,14 +1239,14 @@ export class RuntimeRepository {
           symbol: input.symbol,
           lastEvaluatedAt: input.candleAt,
           ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
-          pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
+          pendingSignal: entriesAllowed ? (pendingToStore ?? Prisma.DbNull) : Prisma.DbNull,
           pendingPriceEventId: null,
           lastDecisionId: persistedDecision.id,
         },
         update: {
           lastEvaluatedAt: input.candleAt,
           ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
-          pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
+          pendingSignal: entriesAllowed ? (pendingToStore ?? Prisma.DbNull) : Prisma.DbNull,
           pendingPriceEventId: null,
           lastDecisionId: persistedDecision.id,
           ...(cursor?.lastFailureCode === "RUNTIME_RECOVERY_REQUIRED" &&

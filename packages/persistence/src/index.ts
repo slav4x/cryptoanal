@@ -138,3 +138,5 @@ export {
 } from "./runtime-repository";
 export * from "./price-event-repository";
 export * from "./runtime-risk";
+
+export { runtimeSignalId } from "./runtime-signal";

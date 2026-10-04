@@ -1194,6 +1194,24 @@ export const healthDashboardSchema = z.object({
   overallStatus: z.enum(["healthy", "degraded", "critical"]),
   checkedAt: z.iso.datetime(),
   watchdogLastSeenAt: z.iso.datetime().nullable(),
+  runtimeProgress: z
+    .array(
+      z.object({
+        positionId: z.string(),
+        executionRunId: z.string(),
+        symbol: z.string(),
+        managedThroughAt: z.iso.datetime().nullable(),
+        priceEventId: z.string().nullable(),
+        latestEventId: z.string().nullable(),
+        latestEventAt: z.iso.datetime().nullable(),
+        latestReceivedAt: z.iso.datetime().nullable(),
+        oldestPendingReceivedAt: z.iso.datetime().nullable(),
+        streamMatches: z.boolean().nullable(),
+        pendingEvents: z.number().int().nonnegative(),
+        pendingEventsCapped: z.boolean(),
+      }),
+    )
+    .default([]),
   domains: z.array(
     z.object({
       id: z.string(),

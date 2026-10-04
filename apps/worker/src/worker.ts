@@ -6,7 +6,6 @@ import {
   enrichExecutionCandles,
   evaluateHealth,
   settleExecutionPosition,
-  evaluateExecutionPriceExit,
   executionUnrealizedPnl,
   getExecutionSignal,
   getExecutionMarketRegime,
@@ -17,7 +16,6 @@ import {
   minimumExecutionCandleCount,
   openExecutionPositionAtQuote,
   runValidationEngine,
-  updateExecutionTrailingAtPrice,
   validationEngineVersion,
   type ExecutionMarketRegime,
   type ExecutionPosition,
@@ -70,6 +68,8 @@ import { randomUUID } from "node:crypto";
 import pino from "pino";
 import { evaluateRuntimeCandleExit } from "./runtime-position";
 import { OrderedPriceJournal } from "./price-journal";
+import { forEachConcurrent, processRuntimePriceEvents } from "./runtime-price-processor";
+import { RecoveryRequestCache } from "./recovery-request-cache";
 import {
   recoverRuntimeGap,
   limitRuntimePositionRisk,
@@ -113,6 +113,9 @@ const logger = pino({ level: config.LOG_LEVEL, name: "cryptoanal-worker" });
 const marketStreamAbortController = new AbortController();
 type JournalQuote = ExecutionQuote & { id: bigint; streamId: string };
 const latestQuotes = new Map<string, JournalQuote>();
+const recoveryRequests = new RecoveryRequestCache<
+  Awaited<ReturnType<BybitPublicMarketClient["getLinearKlinesRange"]>>
+>();
 let streamSession = randomUUID();
 let streamConnected = false;
 const priceJournal = new OrderedPriceJournal<PriceEventInput>(async (events) => {
@@ -623,23 +626,27 @@ async function runtimeQuoteLoop() {
           runtimeRepository.listRealtimePositions(workspaceId),
           runtimeRepository.listRealtimePendingEntries(workspaceId),
         ]);
-        for (const position of positions) {
-          try {
-            await processRealtimePosition(position);
-          } catch (error) {
-            await runtimeRepository.recordFailure({
-              workspaceId,
-              executionRunId: position.executionRunId,
-              symbol: position.symbol,
-              code: "RUNTIME_RECOVERY_REQUIRED",
-              message: errorMessage(error).slice(0, 500),
-            });
-            logger.error(
-              { err: error, workspaceId, positionId: position.id, symbol: position.symbol },
-              "Realtime position update failed",
-            );
-          }
-        }
+        await forEachConcurrent(
+          positions,
+          config.RUNTIME_POSITION_CONCURRENCY,
+          async (position) => {
+            try {
+              await processRealtimePosition(position);
+            } catch (error) {
+              await runtimeRepository.recordFailure({
+                workspaceId,
+                executionRunId: position.executionRunId,
+                symbol: position.symbol,
+                code: "RUNTIME_RECOVERY_REQUIRED",
+                message: errorMessage(error).slice(0, 500),
+              });
+              logger.error(
+                { err: error, workspaceId, positionId: position.id, symbol: position.symbol },
+                "Realtime position update failed",
+              );
+            }
+          },
+        );
         for (const pending of pendingEntries) {
           try {
             await processRealtimeEntry(pending);
@@ -663,141 +670,155 @@ async function runtimeQuoteLoop() {
   }
 }
 
+async function loadRecoveryCandles(
+  symbol: string,
+  interval: string,
+  start: Date,
+  end: Date,
+  signal: AbortSignal,
+) {
+  const intervalMs = Number(interval) * 60_000;
+  const lastOpen = new Date(Math.floor(end.getTime() / intervalMs) * intervalMs);
+  const count = Math.floor((lastOpen.getTime() - start.getTime()) / intervalMs) + 1;
+  const key = `${symbol}:${interval}:${start.toISOString()}:${end.toISOString()}`;
+  return recoveryRequests.get(key, async () => {
+    const stored = await marketDataRepository.listRecoveryCandles(symbol, interval, start, end);
+    if (assessCandleContinuity(stored, intervalMs, lastOpen, count).complete) {
+      return stored.map((candle) => ({
+        ...candle,
+        open: String(candle.open),
+        high: String(candle.high),
+        low: String(candle.low),
+        close: String(candle.close),
+        volume: String(candle.volume),
+        turnover: String(candle.turnover),
+      }));
+    }
+    const downloaded = await marketClient.getLinearKlinesRange(
+      symbol,
+      interval,
+      start,
+      end,
+      signal,
+    );
+    await marketDataRepository.saveCandles(downloaded);
+    return downloaded;
+  });
+}
+
 async function processRealtimePosition(
   target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
 ) {
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
-  let position = deserializeExecutionPosition(target);
-  let through = target.managedThroughAt ?? target.openedAt;
-  let streamId = target.priceStreamId;
-  let markPrice = Number(target.markPrice ?? target.entryPrice);
-  const events = await priceEventRepository.after(target.symbol, target.priceEventId, through);
-  let processed: (typeof events)[number] | null = null;
-  let settlement: ExecutionSettlement | null = null;
-  let recovered = false;
-  for (const event of events) {
-    if (event.observedAt < target.openedAt) {
-      processed = event;
-      continue;
-    }
-    const quote = {
-      symbol: event.symbol,
-      price: Number(event.price),
-      observedAt: new Date(Math.max(event.observedAt.getTime(), through.getTime())),
-    };
-    if (
-      streamId !== event.streamId ||
-      quote.observedAt.getTime() - through.getTime() > config.RUNTIME_QUOTE_MAX_AGE_MS
-    ) {
-      // A persisted stream change proves a possible missing interval, even after process restart.
-      if (
-        quote.observedAt.getTime() - through.getTime() >
-        config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000
-      ) {
+  const events = await priceEventRepository.after(
+    target.symbol,
+    target.priceEventId,
+    target.managedThroughAt ?? target.openedAt,
+  );
+  let version = target.runtimeVersion;
+  await processRuntimePriceEvents({
+    position: deserializeExecutionPosition(target),
+    through: target.managedThroughAt ?? target.openedAt,
+    streamId: target.priceStreamId,
+    markPrice: Number(target.markPrice ?? target.entryPrice),
+    events: events.map((event) => ({ ...event, price: Number(event.price) })),
+    maximumGapMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
+    config: strategyConfig,
+    recover: async (position, through, quote) => {
+      if (+quote.observedAt - +through > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000) {
         throw new RuntimeRecoveryIncompleteError(
           "Recovery window exceeds configured limit; manual position review required",
         );
       }
-      const minuteStart = new Date(Math.floor(through.getTime() / 60_000) * 60_000);
+      const deadline = AbortSignal.any([
+        marketStreamAbortController.signal,
+        AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
+      ]);
+      const minuteStart = new Date(Math.floor(+through / 60_000) * 60_000);
       const intervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
       const signalStart = new Date(
-        Math.floor(through.getTime() / intervalMs) * intervalMs -
+        Math.floor(+through / intervalMs) * intervalMs -
           minimumExecutionCandleCount(strategyConfig) * intervalMs,
       );
+      const lastSignal = new Date(
+        Math.floor(+quote.observedAt / intervalMs) * intervalMs - intervalMs,
+      );
       const [minutes, history] = await Promise.all([
-        marketClient.getLinearKlinesRange(target.symbol, "1", minuteStart, quote.observedAt),
-        marketClient.getLinearKlinesRange(
+        loadRecoveryCandles(target.symbol, "1", minuteStart, quote.observedAt, deadline),
+        loadRecoveryCandles(
           target.symbol,
           bybitIntervals[strategyConfig.universe.timeframe],
           signalStart,
-          quote.observedAt,
+          lastSignal,
+          deadline,
         ),
       ]);
-      const completeSignals = history.filter(
-        (candle) => candle.openTime.getTime() + intervalMs <= quote.observedAt.getTime(),
-      );
-      const lastSignal = new Date(
-        Math.floor(quote.observedAt.getTime() / intervalMs) * intervalMs - intervalMs,
-      );
       if (
         !assessCandleContinuity(
-          completeSignals,
+          history,
           intervalMs,
           lastSignal,
-          Math.ceil((lastSignal.getTime() - signalStart.getTime()) / intervalMs) + 1,
+          Math.floor((+lastSignal - +signalStart) / intervalMs) + 1,
         ).complete
       ) {
         throw new RuntimeRecoveryIncompleteError("Signal history is incomplete during recovery");
       }
-      const result = recoverRuntimeGap({
+      return recoverRuntimeGap({
         position,
         since: through,
         quote,
         minutes: minutes.map(toExecutionCandle),
-        signals: enrichExecutionCandles(completeSignals.map(toExecutionCandle), strategyConfig),
+        signals: enrichExecutionCandles(history.map(toExecutionCandle), strategyConfig),
         signalIntervalMs: intervalMs,
         config: strategyConfig,
       });
-      position = result.position;
-      settlement = result.settlement;
-      recovered = true;
-    }
-    if (!settlement) settlement = evaluateExecutionPriceExit(position, quote, strategyConfig);
-    if (!settlement)
-      position = updateExecutionTrailingAtPrice(position, quote.price, strategyConfig);
-    processed = event;
-    markPrice = quote.price;
-    through = quote.observedAt;
-    streamId = event.streamId;
-    if (settlement) break;
-  }
-  if (!processed) return;
-  const result = await runtimeRepository.persistRealtimeQuote({
-    workspaceId: target.workspaceId,
-    deploymentId: target.executionRun.deployment.id,
-    executionRunId: target.executionRunId,
-    strategyVersionId: target.strategyVersionId,
-    positionId: target.id,
-    expectedPositionVersion: target.runtimeVersion,
-    symbol: target.symbol,
-    quotePrice: String(markPrice),
-    quoteAt: through,
-    processedPrice: {
-      eventId: processed.id,
-      streamId: streamId ?? processed.streamId,
-      throughAt: through,
     },
-    factors: {
-      source: recovered ? "ohlc-recovery" : "durable-price-events",
-      lastEventId: String(processed.id),
+    checkpoint: async ({
+      position,
+      event,
+      through,
+      streamId,
+      markPrice,
+      settlement,
       recovered,
-    },
-    action: settlement
-      ? { kind: "close", settlement: serializeSettlement(settlement) }
-      : {
-          kind: "update",
-          markPrice: String(markPrice),
-          unrealizedPnl: String(executionUnrealizedPnl(position, markPrice)),
-          bestPrice: String(position.bestPrice),
-          stopPrice: String(position.stopPrice),
-          trailingPrice: position.trailingPrice === null ? null : String(position.trailingPrice),
-        },
-  });
-  if (result.applied) {
-    await prisma.runtimeCursor.updateMany({
-      where: {
+    }) => {
+      const result = await runtimeRepository.persistRealtimeQuote({
+        workspaceId: target.workspaceId,
+        deploymentId: target.executionRun.deployment.id,
         executionRunId: target.executionRunId,
+        strategyVersionId: target.strategyVersionId,
+        positionId: target.id,
+        expectedPositionVersion: version,
         symbol: target.symbol,
-        lastFailureCode: "RUNTIME_RECOVERY_REQUIRED",
-      },
-      data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
-    });
-  }
-  if (result.closed)
-    logger.info(
-      { positionId: target.id, symbol: target.symbol, reason: settlement?.exitReason },
-      "Position closed from price journal",
-    );
+        quotePrice: String(markPrice),
+        quoteAt: through,
+        processedPrice: { eventId: event.id, streamId, throughAt: through },
+        factors: {
+          source: recovered ? "ohlc-recovery" : "durable-price-events",
+          lastEventId: String(event.id),
+          recovered,
+        },
+        action: settlement
+          ? { kind: "close", settlement: serializeSettlement(settlement) }
+          : {
+              kind: "update",
+              markPrice: String(markPrice),
+              unrealizedPnl: String(executionUnrealizedPnl(position, markPrice)),
+              bestPrice: String(position.bestPrice),
+              stopPrice: String(position.stopPrice),
+              trailingPrice:
+                position.trailingPrice === null ? null : String(position.trailingPrice),
+            },
+      });
+      if (result.applied) version += 1;
+      if (result.closed)
+        logger.info(
+          { positionId: target.id, symbol: target.symbol, reason: settlement?.exitReason },
+          "Position closed from price journal",
+        );
+      return result.applied;
+    },
+  });
 }
 
 function toExecutionCandle(candle: {
@@ -2130,6 +2151,7 @@ function healthThresholds() {
     queueLagMs: 5 * 60_000,
     outboxLagMs: 5 * 60_000,
     exchangeVerificationOverdueMs: config.EXCHANGE_VERIFICATION_POLL_INTERVAL_MS * 3,
+    runtimeLagMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
   };
 }
 

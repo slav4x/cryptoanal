@@ -6,6 +6,7 @@ import { createPrismaClient } from "../packages/persistence/src/client";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
 import { AccountSnapshotRepository } from "../packages/persistence/src/account-snapshot-repository";
 import { DecisionRepository } from "../packages/persistence/src/decision-repository";
+import { HealthRepository } from "../packages/persistence/src/health-repository";
 import {
   RuntimeRepository,
   RuntimeStateConflictError,
@@ -237,6 +238,92 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
   }
   try {
     await t.test(
+      "recovery remains unresolved after a prefix or candle cycle and clears only at the journal tail",
+      async () => {
+        const context = await open();
+        const tail = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "103",
+            observedAt: new Date(+context.quote.quoteAt + 1),
+            receivedAt: new Date(Date.now() - 60000),
+            streamId: context.quote.processedPrice.streamId,
+          },
+        });
+        await runtime.recordFailure({
+          workspaceId: context.workspace.id,
+          executionRunId: context.run.id,
+          symbol: context.symbol,
+          code: "RUNTIME_RECOVERY_REQUIRED",
+          message: "missing range",
+        });
+        assert.equal((await runtime.persistRealtimeQuote(context.quote)).applied, true);
+        const cursorKey = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        assert.equal(
+          (await prisma.runtimeCursor.findUniqueOrThrow({ where: cursorKey })).lastFailureCode,
+          "RUNTIME_RECOVERY_REQUIRED",
+        );
+        assert.equal(
+          (
+            await new RuntimeRiskRepository(prisma).assess(
+              context.workspace.id,
+              context.deployment.exchangeAccountId,
+              fixture.config,
+            )
+          ).reason,
+          "MARKET_RECOVERY_REQUIRED",
+        );
+        const health = new HealthRepository(prisma);
+        const progress = await health.getRuntimeProgress(context.workspace.id);
+        assert.equal(progress.length, 1);
+        assert.equal(progress[0]!.pendingEvents, 1);
+        assert.equal(progress[0]!.latestEventId, String(tail.id));
+        assert.equal(progress[0]!.streamMatches, true);
+        assert.ok(+progress[0]!.oldestPendingReceivedAt! < Date.now() - 30000);
+        await runtime.persistCycle({
+          ...context.entry,
+          ...decisionEngineFields(context),
+          interval: "15",
+          candleAt: quoteAt,
+          expectedDeploymentStatus: "RUNNING",
+          expectedPositionId: context.position.id,
+          expectedPositionVersion: 1,
+          pendingSignal: null,
+          decision: { action: "HOLD", reasonCode: "TEST", summary: "Test", factors: {} },
+          positionAction: { kind: "none" },
+        });
+        assert.equal(
+          (await prisma.runtimeCursor.findUniqueOrThrow({ where: cursorKey })).lastFailureCode,
+          "RUNTIME_RECOVERY_REQUIRED",
+        );
+        assert.equal(
+          (
+            await runtime.persistRealtimeQuote({
+              ...context.quote,
+              expectedPositionVersion: 1,
+              quoteAt: tail.observedAt,
+              processedPrice: {
+                eventId: tail.id,
+                streamId: tail.streamId,
+                throughAt: tail.observedAt,
+              },
+            })
+          ).applied,
+          true,
+        );
+        assert.equal(
+          (await prisma.runtimeCursor.findUniqueOrThrow({ where: cursorKey })).lastFailureCode,
+          null,
+        );
+        assert.equal((await health.getRuntimeProgress(context.workspace.id))[0]!.pendingEvents, 0);
+        const other = await setup();
+        assert.deepEqual(await health.getRuntimeProgress(other.workspace.id), []);
+      },
+    );
+    await t.test(
       "closed candle replaces partial history and resists delayed partial snapshots",
       async () => {
         const context = await setup();
@@ -262,6 +349,14 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         });
         assert.equal(rows[0]!.close.toNumber(), 101);
         assert.equal(rows[0]!.isClosed, true);
+        const recoveryHistory = await candles.listRecoveryCandles(
+          context.symbol,
+          "15",
+          candleAt,
+          quoteAt,
+        );
+        assert.equal(recoveryHistory.length, 1);
+        assert.equal(recoveryHistory[0]!.isClosed, true);
         const state = await runtime.getCycleState({
           workspaceId: context.workspace.id,
           exchangeAccountId: context.deployment.exchangeAccountId,
@@ -274,6 +369,47 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(state.candles.length, 1);
       },
     );
+    await t.test("a completed candle close resolves recovery for the closed position", async () => {
+      const context = await open();
+      await runtime.recordFailure({
+        workspaceId: context.workspace.id,
+        executionRunId: context.run.id,
+        symbol: context.symbol,
+        code: "RUNTIME_RECOVERY_REQUIRED",
+        message: "missing range",
+      });
+      await runtime.persistCycle({
+        ...context.entry,
+        ...decisionEngineFields(context),
+        interval: "15",
+        candleAt: quoteAt,
+        expectedDeploymentStatus: "RUNNING",
+        expectedPositionId: context.position.id,
+        expectedPositionVersion: 0,
+        pendingSignal: null,
+        decision: { action: "CLOSE", reasonCode: "TEST", summary: "Test", factors: {} },
+        positionAction: {
+          kind: "close",
+          positionId: context.position.id,
+          settlement: {
+            exitPrice: "98",
+            grossPnl: "-2",
+            netPnl: "-2.1188",
+            fees: "0.1188",
+            slippage: "0",
+            exitReason: "stop-loss",
+            closedAt: quoteAt,
+          },
+        },
+      });
+      const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+        where: {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        },
+      });
+      assert.equal(cursor.lastFailureCode, null);
+      assert.equal(await prisma.trade.count({ where: { executionRunId: context.run.id } }), 1);
+    });
     await t.test("concurrent entry attempts create one position/order/fill", async () => {
       const context = await setup();
       const results = await Promise.all([

@@ -112,6 +112,72 @@ export default function HealthPage() {
       </Card>
 
       <Card>
+        <CardHeader className="border-b">
+          <CardTitle>Сопровождение позиций</CardTitle>
+          <CardDescription>
+            Свежесть источника и очередь цен, которые ещё не обработаны.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          {data.runtimeProgress.length === 0 ? (
+            <p className="px-4 py-8 text-sm text-muted-foreground">Открытых позиций нет.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px] text-left text-[13px]">
+                <thead>
+                  <tr className="text-xs text-muted-foreground">
+                    <th scope="col" className="px-4 py-3">
+                      Пара
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Последняя цена
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      В очереди
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Ожидание обработки
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Поток
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.runtimeProgress.map((progress) => (
+                    <tr key={progress.positionId} className="border-t border-row-border">
+                      <td className="px-4 py-3 font-medium">{progress.symbol}</td>
+                      <td className="px-4 py-3">
+                        {progress.latestEventAt
+                          ? formatDateTime(progress.latestEventAt)
+                          : "Нет данных"}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {progress.pendingEventsCapped ? "> " : ""}
+                        {progress.pendingEvents}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {progress.oldestPendingReceivedAt
+                          ? `${Math.max(0, Math.floor((Date.parse(data.checkedAt) - Date.parse(progress.oldestPendingReceivedAt)) / 1000))} с`
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        {progress.streamMatches === true
+                          ? "Подтверждён"
+                          : progress.streamMatches === false
+                            ? "Восстановление"
+                            : "Нет данных"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader className="flex-row items-start justify-between border-b">
           <div>
             <CardTitle>Drift относительно валидации</CardTitle>

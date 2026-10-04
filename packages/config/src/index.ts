@@ -63,6 +63,8 @@ const serverConfigSchema = z
     RUNTIME_MAX_ACCOUNT_EXPOSURE_PERCENT: z.coerce.number().positive().max(100).default(100),
     RUNTIME_MAX_OPEN_POSITIONS: z.coerce.number().int().positive().max(100).default(20),
     RUNTIME_RECOVERY_MAX_HOURS: z.coerce.number().int().positive().max(720).default(168),
+    RUNTIME_RECOVERY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
+    RUNTIME_POSITION_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
     RUNTIME_EVENT_RETENTION_HOURS: z.coerce.number().int().min(24).max(720).default(24),
     WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(10_000).default(30_000),
     DRY_RUN_ACCOUNT_ID: z.string().min(1).default("development-dry-run"),

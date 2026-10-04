@@ -407,6 +407,7 @@ export class RuntimeRepository {
             trailingPrice: input.action.trailingPrice,
           },
         });
+        await clearRecoveredCursor(transaction, input, false);
         return { applied: true, closed: false };
       }
 
@@ -447,6 +448,7 @@ export class RuntimeRepository {
           decidedAt: input.quoteAt,
         },
       });
+      await clearRecoveredCursor(transaction, input, true);
       return { applied: true, closed: true };
     });
   }
@@ -692,7 +694,7 @@ export class RuntimeRepository {
             symbol: input.symbol,
           },
         },
-        select: { lastEvaluatedAt: true },
+        select: { lastEvaluatedAt: true, lastFailureCode: true },
       });
       if (cursor?.lastEvaluatedAt && cursor.lastEvaluatedAt >= input.candleAt) {
         return { applied: false, decisionId: null };
@@ -948,9 +950,15 @@ export class RuntimeRepository {
           lastEvaluatedAt: input.candleAt,
           pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
           lastDecisionId: persistedDecision.id,
-          lastFailureCode: null,
-          lastFailureMessage: null,
-          consecutiveFailures: 0,
+          ...(cursor?.lastFailureCode === "RUNTIME_RECOVERY_REQUIRED" &&
+          currentPosition &&
+          action.kind !== "close"
+            ? {}
+            : {
+                lastFailureCode: null,
+                lastFailureMessage: null,
+                consecutiveFailures: 0,
+              }),
         },
       });
 
@@ -1187,6 +1195,34 @@ export class RuntimeRepository {
       },
     });
   }
+}
+
+async function clearRecoveredCursor(
+  tx: Prisma.TransactionClient,
+  input: PersistRuntimeQuoteInput,
+  closed: boolean,
+) {
+  const latest = closed
+    ? null
+    : await tx.marketPriceEvent.findFirst({
+        where: { symbol: input.symbol },
+        orderBy: { id: "desc" },
+        select: { id: true, streamId: true },
+      });
+  if (
+    !closed &&
+    latest &&
+    (latest.id > input.processedPrice.eventId || latest.streamId !== input.processedPrice.streamId)
+  )
+    return;
+  await tx.runtimeCursor.updateMany({
+    where: {
+      executionRunId: input.executionRunId,
+      symbol: input.symbol,
+      lastFailureCode: "RUNTIME_RECOVERY_REQUIRED",
+    },
+    data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
+  });
 }
 
 async function createFilledOrder(

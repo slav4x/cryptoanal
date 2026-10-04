@@ -1,6 +1,21 @@
 export type HealthLevel = "healthy" | "degraded" | "critical" | "unknown";
 export type IncidentSeverity = "warning" | "critical";
 
+export type RuntimeProgress = {
+  positionId: string;
+  executionRunId: string;
+  symbol: string;
+  managedThroughAt: Date | null;
+  priceEventId: string | null;
+  latestEventId: string | null;
+  latestEventAt: Date | null;
+  latestReceivedAt: Date | null;
+  oldestPendingReceivedAt: Date | null;
+  streamMatches: boolean | null;
+  pendingEvents: number;
+  pendingEventsCapped: boolean;
+};
+
 export type HealthCondition = {
   fingerprint: string;
   domain: string;
@@ -23,6 +38,7 @@ export type HealthMonitorInput = {
     queueLagMs: number;
     outboxLagMs: number;
     exchangeVerificationOverdueMs: number;
+    runtimeLagMs: number;
   };
   workerLastSeenAt: Date | null;
   markets: Array<{
@@ -43,6 +59,7 @@ export type HealthMonitorInput = {
     consecutiveFailures: number;
     updatedAt: Date;
   }>;
+  runtimeProgress: RuntimeProgress[];
   pendingOutbox: number;
   oldestPendingOutboxAt: Date | null;
   riskStops24h: number;
@@ -223,6 +240,65 @@ export function evaluateHealth(input: HealthMonitorInput) {
       },
     });
   }
+
+  const stalePriceSymbols = new Set<string>();
+  for (const progress of input.runtimeProgress) {
+    const metadata = {
+      symbol: progress.symbol,
+      pendingEvents: progress.pendingEvents,
+      pendingEventsCapped: progress.pendingEventsCapped,
+      managedThroughAt: progress.managedThroughAt?.toISOString() ?? null,
+      latestEventAt: progress.latestEventAt?.toISOString() ?? null,
+      latestReceivedAt: progress.latestReceivedAt?.toISOString() ?? null,
+    };
+    if (
+      (!progress.latestEventAt ||
+        age(input.now, progress.latestEventAt) > input.thresholds.runtimeLagMs) &&
+      !stalePriceSymbols.has(progress.symbol)
+    ) {
+      stalePriceSymbols.add(progress.symbol);
+      conditions.push({
+        fingerprint: `price-source:${progress.symbol}:stale`,
+        domain: "execution",
+        code: "RUNTIME_PRICE_SOURCE_STALE",
+        severity: "warning",
+        title: `Нет свежих сделок ${progress.symbol}`,
+        description: "Источник цены устарел; это не означает наличие необработанных событий.",
+        resourceType: "market-instrument",
+        resourceId: progress.symbol,
+        metadata,
+      });
+    }
+    if (
+      progress.oldestPendingReceivedAt &&
+      age(input.now, progress.oldestPendingReceivedAt) > input.thresholds.runtimeLagMs
+    ) {
+      conditions.push({
+        fingerprint: `position:${progress.positionId}:backlog`,
+        domain: "execution",
+        code: "RUNTIME_POSITION_BACKLOG",
+        severity: "critical",
+        title: `Сопровождение ${progress.symbol} отстаёт`,
+        description: `Позиция имеет ${progress.pendingEventsCapped ? "более " : ""}${progress.pendingEvents} необработанных событий; самые старые получены ${Math.floor(age(input.now, progress.oldestPendingReceivedAt) / 1000)} секунд назад.`,
+        resourceType: "position",
+        resourceId: progress.positionId,
+        metadata,
+      });
+    }
+    if (progress.streamMatches === false) {
+      conditions.push({
+        fingerprint: `position:${progress.positionId}:stream`,
+        domain: "execution",
+        code: "RUNTIME_POSITION_RECOVERY_PENDING",
+        severity: "critical",
+        title: `Восстановление ${progress.symbol} не завершено`,
+        description: "Позиция ещё не обработала смену ценового потока.",
+        resourceType: "position",
+        resourceId: progress.positionId,
+        metadata,
+      });
+    }
+  }
   for (const connection of input.exchangeConnections) {
     if (connection.status === "INVALID") {
       conditions.push({
@@ -341,7 +417,10 @@ export function evaluateHealth(input: HealthMonitorInput) {
       "execution",
       "Исполнение",
       conditions,
-      latest(input.runtimeFailures.map((item) => item.updatedAt)),
+      latest([
+        ...input.runtimeFailures.map((item) => item.updatedAt),
+        ...input.runtimeProgress.map((item) => item.managedThroughAt),
+      ]),
     ),
     domainFromConditions("outbox", "Outbox", conditions, input.oldestPendingOutboxAt),
     driftDomain(drift, input.now),

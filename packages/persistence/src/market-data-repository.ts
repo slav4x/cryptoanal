@@ -46,6 +46,13 @@ export class MarketDataRepository {
     return result.count;
   }
 
+  public listRecoveryCandles(symbol: string, interval: string, start: Date, end: Date) {
+    return this.prisma.marketCandle.findMany({
+      where: { symbol, interval, isClosed: true, openTime: { gte: start, lte: end } },
+      orderBy: { openTime: "asc" },
+    });
+  }
+
   public async saveCandles(candles: MarketCandleInput[]): Promise<number> {
     if (candles.length === 0) return 0;
 

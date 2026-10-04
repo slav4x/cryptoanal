@@ -2231,6 +2231,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           overallStatus: health.overallStatus,
           checkedAt: now.toISOString(),
           watchdogLastSeenAt: signals.watchdogLastSeenAt?.toISOString() ?? null,
+          runtimeProgress: signals.runtimeProgress.map((progress) => ({
+            ...progress,
+            managedThroughAt: progress.managedThroughAt?.toISOString() ?? null,
+            latestEventAt: progress.latestEventAt?.toISOString() ?? null,
+            latestReceivedAt: progress.latestReceivedAt?.toISOString() ?? null,
+            oldestPendingReceivedAt: progress.oldestPendingReceivedAt?.toISOString() ?? null,
+          })),
           domains: health.domains.map((domain) => ({
             ...domain,
             observedAt: domain.observedAt?.toISOString() ?? null,
@@ -3841,6 +3848,7 @@ function createHealthThresholds(config: ServerConfig) {
     queueLagMs: 5 * 60_000,
     outboxLagMs: 5 * 60_000,
     exchangeVerificationOverdueMs: config.EXCHANGE_VERIFICATION_POLL_INTERVAL_MS * 3,
+    runtimeLagMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
   };
 }
 

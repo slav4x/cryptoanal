@@ -79,6 +79,21 @@ export async function assessRuntimeRisk(
   let dailyPnl = Number(today._sum.netPnl ?? 0);
   let exposure = 0;
   let marketReady = true;
+  if (
+    positions.length > 0 &&
+    (await tx.runtimeCursor.findFirst({
+      where: {
+        workspaceId: input.workspaceId,
+        lastFailureCode: "RUNTIME_RECOVERY_REQUIRED",
+        OR: positions.map((position) => ({
+          executionRunId: position.executionRunId,
+          symbol: position.symbol,
+        })),
+      },
+      select: { executionRunId: true },
+    }))
+  )
+    marketReady = false;
   for (const position of positions) {
     const quote = await tx.marketPriceEvent.findFirst({
       where: { symbol: position.symbol },

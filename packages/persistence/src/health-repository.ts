@@ -1,5 +1,5 @@
 import type { CryptoAnalPrismaClient } from "./client";
-import type { Prisma } from "./generated/prisma/client";
+import { Prisma } from "./generated/prisma/client";
 
 type PersistedHealthCondition = {
   fingerprint: string;
@@ -32,6 +32,7 @@ export class HealthRepository {
       riskStops24h,
       exchangeConnections,
       activeDeployments,
+      runtimeProgress,
     ] = await Promise.all([
       this.prisma.workerHeartbeat.findFirst({
         where: { service: "worker" },
@@ -137,6 +138,7 @@ export class HealthRepository {
           },
         },
       }),
+      this.getRuntimeProgress(workspaceId),
     ]);
 
     const validationIds = activeDeployments.flatMap((deployment) => {
@@ -170,6 +172,7 @@ export class HealthRepository {
         consecutiveFailures: failure.consecutiveFailures,
         updatedAt: failure.updatedAt,
       })),
+      runtimeProgress,
       pendingOutbox,
       oldestPendingOutboxAt: oldestPendingOutbox?.availableAt ?? null,
       riskStops24h,
@@ -215,6 +218,53 @@ export class HealthRepository {
       orderBy: [{ status: "asc" }, { lastObservedAt: "desc" }],
       take: 100,
     });
+  }
+
+  public async getRuntimeProgress(workspaceId: string) {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        positionId: string;
+        executionRunId: string;
+        symbol: string;
+        managedThroughAt: Date | null;
+        priceEventId: string | null;
+        latestEventId: string | null;
+        latestEventAt: Date | null;
+        latestReceivedAt: Date | null;
+        oldestPendingReceivedAt: Date | null;
+        streamMatches: boolean | null;
+        pendingEvents: number;
+      }>
+    >(Prisma.sql`
+      SELECT p.id AS "positionId", p."executionRunId", p.symbol, p."managedThroughAt",
+        p."priceEventId"::text, latest.id::text AS "latestEventId",
+        latest."observedAt" AS "latestEventAt", latest."receivedAt" AS "latestReceivedAt",
+        pending."oldestPendingReceivedAt", pending.count::int AS "pendingEvents",
+        p."priceStreamId" = latest."streamId" AS "streamMatches"
+      FROM "Position" p
+      JOIN "ExecutionRun" r ON r.id = p."executionRunId"
+      JOIN "Deployment" d ON d.id = r."deploymentId"
+      LEFT JOIN LATERAL (
+        SELECT id, "observedAt", "receivedAt", "streamId" FROM "MarketPriceEvent"
+        WHERE symbol = p.symbol ORDER BY id DESC LIMIT 1
+      ) latest ON true
+      LEFT JOIN LATERAL (
+        SELECT count(*) AS count, min("receivedAt") AS "oldestPendingReceivedAt" FROM (
+          SELECT "receivedAt" FROM "MarketPriceEvent" WHERE symbol = p.symbol
+            AND id > coalesce(p."priceEventId", 0)
+            AND (p."priceEventId" IS NOT NULL OR "observedAt" >= p."openedAt")
+          ORDER BY id LIMIT 2001
+        ) events
+      ) pending ON true
+      WHERE p."workspaceId" = ${workspaceId} AND p.environment = 'DRY_RUN' AND p.status = 'OPEN'
+        AND r.status = 'RUNNING' AND d.status IN ('RUNNING', 'PAUSED')
+      ORDER BY p."openedAt", p.id
+    `);
+    return rows.map((row) => ({
+      ...row,
+      pendingEvents: Math.min(row.pendingEvents, 2000),
+      pendingEventsCapped: row.pendingEvents > 2000,
+    }));
   }
 
   public async syncIncidents(

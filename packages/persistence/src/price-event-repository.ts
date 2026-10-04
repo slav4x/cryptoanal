@@ -1,3 +1,4 @@
+import { Prisma } from "./generated/prisma/client";
 import type { CryptoAnalPrismaClient } from "./client";
 
 export type PriceEventInput = {
@@ -54,14 +55,25 @@ export class PriceEventRepository {
   }
 
   public async prune(before: Date) {
+    const oldestPending = await this.prisma.runtimeCursor.aggregate({
+      where: { pendingSignal: { not: Prisma.DbNull }, executionRun: { status: "RUNNING" } },
+      _min: { pendingPriceEventId: true },
+    });
     const oldest = await this.prisma.position.aggregate({
       where: { status: "OPEN", environment: "DRY_RUN" },
       _min: { priceEventId: true },
     });
+    const cursors = [oldest._min.priceEventId, oldestPending._min.pendingPriceEventId].filter(
+      (id): id is bigint => id !== null,
+    );
+    const oldestId = cursors.reduce<bigint | null>(
+      (minimum, id) => (minimum === null || id < minimum ? id : minimum),
+      null,
+    );
     return this.prisma.marketPriceEvent.deleteMany({
       where: {
         observedAt: { lt: before },
-        ...(oldest._min.priceEventId === null ? {} : { id: { lt: oldest._min.priceEventId } }),
+        ...(oldestId === null ? {} : { id: { lt: oldestId } }),
       },
     });
   }

@@ -1,3 +1,4 @@
+import { replayPendingEntryEvents } from "./runtime-pending-entry";
 import {
   positionIndicatorCheckpoint,
   replayPositionIndicators,
@@ -1028,62 +1029,104 @@ async function processRealtimeEntry(
 ) {
   const pending = parseRealtimePendingSignal(target.pendingSignal);
   if (!pending || !target.lastEvaluatedAt) return;
-  const quote = getFreshQuote(target.symbol);
-  if (
-    !quote ||
-    quote.receivedAt < pending.availableAt ||
-    quote.observedAt < pending.detectedAt ||
-    quote.observedAt >= pending.expiresAt
-  ) {
-    return;
-  }
-  const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
-  const risk = await runtimeRiskRepository.assess(
-    target.executionRun.deployment.workspaceId,
-    target.executionRun.deployment.exchangeAccountId,
-    target.executionRun.strategyVersion.config,
-  );
-  if (risk.reason) return;
-  const equity = risk.equity;
-  const candidate = openExecutionPositionAtQuote(
-    pending,
-    quote,
-    pending.entryRegime,
-    equity,
-    Math.max(0, equity) / strategyConfig.risk.maxOpenPositions,
-    strategyConfig,
-  );
-  const position = candidate
-    ? limitRuntimePositionRisk(
-        candidate,
-        equity,
-        Math.max(0, risk.maximumExposure - risk.exposure),
-        strategyConfig,
-      )
-    : null;
-  if (!position) return;
-  const result = await runtimeRepository.persistRealtimeEntry({
-    entryPriceEventId: quote.id,
-    signalAvailableAt: pending.availableAt,
+  const progress = {
     workspaceId: target.executionRun.deployment.workspaceId,
-    deploymentId: target.executionRun.deployment.id,
     executionRunId: target.executionRun.id,
-    strategyVersionId: target.executionRun.strategyVersionId,
     symbol: target.symbol,
     expectedCandleAt: target.lastEvaluatedAt,
-    quoteAt: quote.observedAt,
-    quotePrice: String(quote.price),
-    unrealizedPnl: String(executionUnrealizedPnl(position, quote.price)),
-    maxOpenPositions: strategyConfig.risk.maxOpenPositions,
-    entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
-    position: serializePosition(position),
-    factors: realtimeQuoteFactors(quote),
+    expectedPendingPriceEventId: target.pendingPriceEventId,
+  };
+  if (Date.now() >= +pending.expiresAt) {
+    await runtimeRepository.advancePendingEntry({
+      ...progress,
+      throughEventId: target.pendingPriceEventId,
+    });
+    return;
+  }
+  if (!getFreshQuote(target.symbol)) return;
+  const events = await priceEventRepository.after(
+    target.symbol,
+    target.pendingPriceEventId,
+    pending.detectedAt,
+  );
+  const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
+  let entryRisk: Awaited<ReturnType<RuntimeRiskRepository["assess"]>> | null = null;
+  const outcome = await replayPendingEntryEvents({
+    events: events.map((event) => ({ ...event, price: Number(event.price) })),
+    cursor: target.pendingPriceEventId,
+    streamId: streamSession,
+    detectedAt: pending.detectedAt,
+    availableAt: pending.availableAt,
+    expiresAt: pending.expiresAt,
+    maximumQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
+    now: Date.now,
+    tryFill: async (quote) => {
+      const risk = (entryRisk ??= await runtimeRiskRepository.assess(
+        target.executionRun.deployment.workspaceId,
+        target.executionRun.deployment.exchangeAccountId,
+        target.executionRun.strategyVersion.config,
+      ));
+      if (risk.reason) return { status: "rejected", reason: risk.reason };
+      const candidate = openExecutionPositionAtQuote(
+        pending,
+        quote,
+        pending.entryRegime,
+        risk.equity,
+        Math.max(0, risk.equity) / strategyConfig.risk.maxOpenPositions,
+        strategyConfig,
+      );
+      if (!candidate) return { status: "no-touch" };
+      const position = limitRuntimePositionRisk(
+        candidate,
+        risk.equity,
+        Math.max(0, risk.maximumExposure - risk.exposure),
+        strategyConfig,
+      );
+      if (!position) return { status: "rejected", reason: "INVALID_ENTRY_SIZE" };
+      if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession)
+        return { status: "conflict" };
+      const result = await runtimeRepository.persistRealtimeEntry({
+        ...progress,
+        entryPriceEventId: quote.id,
+        signalAvailableAt: pending.availableAt,
+        deploymentId: target.executionRun.deployment.id,
+        strategyVersionId: target.executionRun.strategyVersionId,
+        quoteAt: quote.observedAt,
+        quotePrice: String(quote.price),
+        unrealizedPnl: String(executionUnrealizedPnl(position, quote.price)),
+        maxOpenPositions: strategyConfig.risk.maxOpenPositions,
+        entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
+        position: serializePosition(position),
+        factors: {
+          ...realtimeQuoteFactors(quote),
+          source: "durable-price-events",
+          eventId: String(quote.id),
+        },
+      });
+      if (result.applied) {
+        logger.info(
+          { executionRunId: target.executionRun.id, symbol: target.symbol },
+          "Pending signal filled from durable price event",
+        );
+        return { status: "filled" };
+      }
+      if (
+        result.riskFailure === "STALE_ENTRY_QUOTE" ||
+        result.riskFailure === "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY"
+      )
+        return { status: "no-touch" };
+      if (result.riskFailure || result.capacityReached)
+        return { status: "rejected", reason: result.riskFailure ?? "MAX_OPEN_POSITIONS" };
+      return { status: "conflict" };
+    },
   });
-  if (result.applied) {
-    logger.info(
-      { executionRunId: target.executionRun.id, symbol: target.symbol },
-      "Pending signal filled from realtime quote",
-    );
+  if (outcome.status === "filled" || outcome.status === "conflict") return;
+  if (outcome.throughEventId !== target.pendingPriceEventId || outcome.status !== "pending") {
+    await runtimeRepository.advancePendingEntry({
+      ...progress,
+      throughEventId: outcome.throughEventId,
+      ...(outcome.status === "rejected" ? { rejectionReason: outcome.reason } : {}),
+    });
   }
 }
 
@@ -1530,9 +1573,9 @@ async function processRuntimeTarget(
             );
             if (positionAction.kind === "none") {
               decision = {
-                action: "OPEN",
+                action: "HOLD",
                 reasonCode: "ENTRY_SIGNAL_PENDING",
-                summary: `Зафиксирован ${signal.side} сигнал; ожидается realtime quote`,
+                summary: `Зафиксирован ${signal.side} сигнал; ожидается событие цены`,
                 factors: runtimeFactors(
                   candle,
                   dailyPnl,

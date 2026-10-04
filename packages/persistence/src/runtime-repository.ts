@@ -122,6 +122,7 @@ export type PersistRuntimeQuoteInput = {
 };
 
 export type PersistRealtimeEntryInput = {
+  expectedPendingPriceEventId?: bigint | null;
   signalAvailableAt?: Date;
   entryPriceEventId: bigint;
   workspaceId: string;
@@ -202,7 +203,12 @@ export class RuntimeRepository {
             symbol: input.symbol,
           },
         },
-        select: { lastEvaluatedAt: true, pendingSignal: true, indicatorState: true },
+        select: {
+          lastEvaluatedAt: true,
+          pendingSignal: true,
+          indicatorState: true,
+          pendingPriceEventId: true,
+        },
       }),
       this.prisma.position.findFirst({
         where: {
@@ -531,7 +537,12 @@ export class RuntimeRepository {
               symbol: input.symbol,
             },
           },
-          select: { lastEvaluatedAt: true, pendingSignal: true, indicatorState: true },
+          select: {
+            lastEvaluatedAt: true,
+            pendingSignal: true,
+            indicatorState: true,
+            pendingPriceEventId: true,
+          },
         }),
         transaction.position.findFirst({
           where: {
@@ -556,12 +567,43 @@ export class RuntimeRepository {
         !cursor ||
         !cursor.pendingSignal ||
         cursor.lastEvaluatedAt?.getTime() !== input.expectedCandleAt.getTime() ||
+        (input.expectedPendingPriceEventId !== undefined &&
+          cursor.pendingPriceEventId !== input.expectedPendingPriceEventId) ||
+        (cursor.pendingPriceEventId !== null &&
+          input.entryPriceEventId <= cursor.pendingPriceEventId) ||
         currentPosition ||
         !instrument?.enabled ||
         instrument.status !== "Trading"
       ) {
         return { applied: false, capacityReached: false };
       }
+      const pending = cursor.pendingSignal as Record<string, unknown>;
+      const detectedAt =
+        typeof pending.detectedAt === "string" ? Date.parse(pending.detectedAt) : NaN;
+      const expiresAt = typeof pending.expiresAt === "string" ? Date.parse(pending.expiresAt) : NaN;
+      const availableAt =
+        typeof pending.availableAt === "string" ? Date.parse(pending.availableAt) : NaN;
+      const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
+        where: { id: input.entryPriceEventId },
+      });
+      const now = (
+        await transaction.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`
+      )[0]!.now;
+      if (
+        pending.mode !== "realtime" ||
+        pending.side !== (input.position.side === "BUY" ? "long" : "short") ||
+        ![detectedAt, expiresAt, availableAt].every(Number.isFinite) ||
+        expiresAt <= detectedAt
+      )
+        return { applied: false, capacityReached: false, riskFailure: "INVALID_PENDING_SIGNAL" };
+      if (+now >= expiresAt || +entryEvent.observedAt >= expiresAt)
+        return { applied: false, capacityReached: false, riskFailure: "ENTRY_SIGNAL_EXPIRED" };
+      if (+entryEvent.observedAt < detectedAt || +entryEvent.receivedAt < availableAt)
+        return {
+          applied: false,
+          capacityReached: false,
+          riskFailure: "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY",
+        };
       const riskFailure = await checkRuntimeEntry(transaction, {
         workspaceId: input.workspaceId,
         exchangeAccountId: deployment.exchangeAccountId,
@@ -572,9 +614,7 @@ export class RuntimeRepository {
         position: input.position,
       });
       if (riskFailure) return { applied: false, capacityReached: false, riskFailure };
-      const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
-        where: { id: input.entryPriceEventId },
-      });
+
       const openPositions = await transaction.position.count({
         where: {
           workspaceId: input.workspaceId,
@@ -586,6 +626,11 @@ export class RuntimeRepository {
         return { applied: false, capacityReached: true };
       }
 
+      const fillAt = (
+        await transaction.$queryRaw<Array<{ fillAt: Date }>>`SELECT clock_timestamp() AS "fillAt"`
+      )[0]!.fillAt;
+      if (+fillAt >= expiresAt)
+        return { applied: false, capacityReached: false, riskFailure: "ENTRY_SIGNAL_EXPIRED" };
       const correlationId = `runtime-entry:${input.executionRunId}:${input.symbol}:${input.quoteAt.toISOString()}`;
       const position = await transaction.position.create({
         data: {
@@ -656,9 +701,119 @@ export class RuntimeRepository {
             symbol: input.symbol,
           },
         },
-        data: { pendingSignal: Prisma.DbNull, lastDecisionId: decision.id },
+        data: {
+          pendingSignal: Prisma.DbNull,
+          pendingPriceEventId: entryEvent.id,
+          lastDecisionId: decision.id,
+        },
       });
       return { applied: true, capacityReached: false };
+    });
+  }
+
+  public async advancePendingEntry(input: {
+    workspaceId: string;
+    executionRunId: string;
+    symbol: string;
+    expectedCandleAt: Date;
+    expectedPendingPriceEventId: bigint | null;
+    throughEventId: bigint | null;
+    rejectionReason?: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
+      );
+      const cursor = await tx.runtimeCursor.findUnique({
+        where: {
+          executionRunId_symbol: { executionRunId: input.executionRunId, symbol: input.symbol },
+        },
+        select: {
+          workspaceId: true,
+          pendingSignal: true,
+          lastEvaluatedAt: true,
+          pendingPriceEventId: true,
+          executionRun: {
+            select: {
+              id: true,
+              strategyVersionId: true,
+              status: true,
+              deployment: {
+                select: {
+                  status: true,
+                  environment: true,
+                  exchangeConnection: { select: { status: true, revokedAt: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (
+        !cursor ||
+        cursor.workspaceId !== input.workspaceId ||
+        !cursor.pendingSignal ||
+        +cursor.lastEvaluatedAt! !== +input.expectedCandleAt ||
+        cursor.pendingPriceEventId !== input.expectedPendingPriceEventId
+      )
+        return false;
+      const run = cursor.executionRun,
+        deployment = run.deployment;
+      if (
+        run.status !== "RUNNING" ||
+        deployment.status !== "RUNNING" ||
+        deployment.environment !== "DRY_RUN" ||
+        deployment.exchangeConnection?.status !== "ACTIVE" ||
+        deployment.exchangeConnection.revokedAt !== null
+      )
+        return false;
+      if (
+        input.throughEventId !== null &&
+        (cursor.pendingPriceEventId === null || input.throughEventId > cursor.pendingPriceEventId)
+      ) {
+        const event = await tx.marketPriceEvent.findUnique({ where: { id: input.throughEventId } });
+        if (!event || event.symbol !== input.symbol) return false;
+      } else if (input.throughEventId !== cursor.pendingPriceEventId) return false;
+      const pending = cursor.pendingSignal as Record<string, unknown>;
+      const expiresAt = typeof pending.expiresAt === "string" ? Date.parse(pending.expiresAt) : NaN;
+      const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0]!
+        .now;
+      const reason = !Number.isFinite(expiresAt)
+        ? "INVALID_PENDING_SIGNAL"
+        : +now >= expiresAt
+          ? "ENTRY_SIGNAL_EXPIRED"
+          : input.rejectionReason;
+      let decisionId: string | undefined;
+      if (reason) {
+        const decision = await tx.decision.create({
+          data: {
+            workspaceId: input.workspaceId,
+            executionRunId: run.id,
+            strategyVersionId: run.strategyVersionId,
+            symbol: input.symbol,
+            action: "SKIP",
+            reasonCode: reason,
+            summary: `Отложенный вход отменён: ${reason}`,
+            factors: {
+              source: "durable-price-events",
+              pendingSignal: cursor.pendingSignal as Prisma.InputJsonValue,
+              lastEventId: input.throughEventId === null ? null : String(input.throughEventId),
+            },
+            correlationId: `runtime-pending:${run.id}:${input.symbol}:${input.expectedCandleAt.toISOString()}:terminal`,
+            decidedAt: now,
+          },
+          select: { id: true },
+        });
+        decisionId = decision.id;
+      }
+      await tx.runtimeCursor.update({
+        where: { executionRunId_symbol: { executionRunId: run.id, symbol: input.symbol } },
+        data: {
+          pendingPriceEventId: input.throughEventId,
+          ...(reason ? { pendingSignal: Prisma.DbNull, lastDecisionId: decisionId! } : {}),
+        },
+      });
+      return true;
     });
   }
 
@@ -681,6 +836,7 @@ export class RuntimeRepository {
         symbol: true,
         lastEvaluatedAt: true,
         pendingSignal: true,
+        pendingPriceEventId: true,
         executionRun: {
           select: {
             id: true,
@@ -1008,12 +1164,14 @@ export class RuntimeRepository {
           lastEvaluatedAt: input.candleAt,
           ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
           pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
+          pendingPriceEventId: null,
           lastDecisionId: persistedDecision.id,
         },
         update: {
           lastEvaluatedAt: input.candleAt,
           ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
           pendingSignal: entriesAllowed ? (input.pendingSignal ?? Prisma.DbNull) : Prisma.DbNull,
+          pendingPriceEventId: null,
           lastDecisionId: persistedDecision.id,
           ...(cursor?.lastFailureCode === "RUNTIME_RECOVERY_REQUIRED" &&
           currentPosition &&

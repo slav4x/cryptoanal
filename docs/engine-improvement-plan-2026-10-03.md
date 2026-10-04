@@ -449,9 +449,9 @@ Bybit предыстории через пользовательский validat
 **Код:** `apps/worker/src/worker.ts:883`, `:933`, `:1250`;
 `packages/persistence/src/runtime-repository.ts:450`, `:524`.
 
-- [ ] Дать pending entry собственный event cursor и обрабатывать весь разрешённый
+- [x] Дать pending entry собственный event cursor и обрабатывать весь разрешённый
       диапазон после signal time, включая кратковременные касания limit.
-- [ ] Повторять проверку TTL и жизненного цикла сигнала внутри транзакции;
+- [x] Повторять проверку TTL и жизненного цикла pending сигнала внутри транзакции;
       не ограничиваться проверкой перед ожиданиями/запросами.
 - [ ] Разделить SIGNAL/PENDING/FILLED/EXPIRED/REJECTED, связать их одним signal ID.
       OPEN в Activity не должен означать только ожидание цены.
@@ -459,6 +459,24 @@ Bybit предыстории через пользовательский validat
       недоступное подключение, expiry, отсутствие касания.
 - [ ] Определить TTL рыночного входа и допустимое отклонение от signal price отдельно
       от длительности свечи. Пропущенные при простое сигналы не исполнять задним числом.
+
+**Первый этап E06:** `RuntimeCursor.pendingPriceEventId` и миграция
+`20261004190000_pending_entry_event_cursor`; pending replay до 2000 price events, CAS по
+lastEvaluatedAt/предыдущему event ID, сброс cursor при новой сигнальной свече. Touch/rebound
+обрабатывается по первому допустимому событию. Повторный пакет/restart не создаёт второй
+Position/Order. Pruning учитывает самый ранний cursor активного pending запуска.
+Свежесть и current stream ограничивают входы: старый stream, pre-finality, события до
+сигнала/после expiry, stale/future quotes не исполняются задним числом. После сетевых
+ожиданий worker повторно проверяет stream/journal health; транзакция проверяет сохранённые
+mode/direction/finality, lifecycle и TTL по clock_timestamp после lock и перед созданием позиции.
+Expiry и terminal risk/capacity failure очищают pending с одной SKIP decision и причиной;
+no-touch оставляет ожидание и сохраняет прогресс. ENTRY_SIGNAL_PENDING теперь HOLD,
+OPEN соответствует фактическому исполнению. Полная модель signal ID/status, все причины
+при закрытом подключении/устаревшем источнике и отдельный market TTL/deviation ещё не готовы.
+Проверено 141/141 runtime-тестов без пропусков на отдельной PostgreSQL с 32 миграциями:
+long/short touch/rebound, batch/restart, CAS, один Position/Order, TTL после реальной
+advisory lock задержки, expiry/rejection decision, pause/resume, stored finality/direction
+и retention pending cursor. Typecheck/lint/format/research integrity прошли.
 
 **Приёмка:** быстрый touch/rebound, повторный пакет, restart с pending, истечение TTL
 во время ожидания транзакции и pause/resume дают ровно одно объяснимое состояние.

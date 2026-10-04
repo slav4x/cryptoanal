@@ -994,6 +994,7 @@ model ReviewSessionEntry {
 }
 
 model RuntimeCursor {
+  pendingPriceEventId BigInt?
   workspaceId         String
   executionRunId      String
   symbol              String

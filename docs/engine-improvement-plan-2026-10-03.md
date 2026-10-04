@@ -479,6 +479,18 @@ long/short touch/rebound, batch/restart, CAS, один Position/Order, TTL по�
 advisory lock задержки, expiry/rejection decision, pause/resume, stored finality/direction
 и retention pending cursor. Typecheck/lint/format/research integrity прошли.
 
+**Применение первого этапа E06 — 4 октября 2026, UTC:** backup
+`var/backups/cryptoanal-2026-10-04T14-14-52-727Z.dump` (237 513 545 байт),
+restore-check подтвердил 47 таблиц и 31 прежнюю миграцию. Worker остановлен перед новой
+миграцией; рабочая база содержит 32 миграции. Обновлены API/worker, health API/dashboard
+успешен и public stream подключён. SHA-256 worker/helper совпадает с checkout `08aab3f`.
+На 14:23:58 UTC все 34 deployment остаются RUNNING/DRY_RUN, 29 позиций сопровождаются;
+мгновенный максимальный возраст managedThrough — 2.33 секунды, runtime cursor failures
+отсутствуют. Старый realtime pending без availableAt завершён одной decision
+INVALID_PENDING_SIGNAL, активных pending в этом срезе нет. Новое исполнение по touch/rebound
+после обновления в рабочем окружении пока не наблюдалось; оно проверено отдельными replay
+и DB-тестами, не искусственными рабочими сигналами. Тестовые базы удалены.
+
 **Приёмка:** быстрый touch/rebound, повторный пакет, restart с pending, истечение TTL
 во время ожидания транзакции и pause/resume дают ровно одно объяснимое состояние.
 

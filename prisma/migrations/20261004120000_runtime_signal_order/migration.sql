@@ -1,0 +1,2 @@
+ALTER TABLE "MarketCandle" ADD COLUMN "finalizedAt" TIMESTAMPTZ(3);
+ALTER TABLE "Position" ADD COLUMN "signalCandleAt" TIMESTAMPTZ(3);

@@ -32,6 +32,7 @@ const event = (id: number, price = 100, streamId = "original") => ({
   price,
   streamId,
   observedAt: new Date(+at + id * 1000),
+  receivedAt: new Date(+at + id * 1000),
 });
 
 test("recovery failure retains the known prefix and its protection before the network wait", async () => {

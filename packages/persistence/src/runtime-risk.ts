@@ -174,6 +174,7 @@ export async function checkRuntimeEntry(
     strategyConfig: Prisma.JsonValue;
     policy: RuntimeRiskPolicy;
     eventId: bigint | undefined;
+    signalAvailableAt?: Date;
     position: {
       symbol: string;
       side: "BUY" | "SELL";
@@ -200,6 +201,8 @@ export async function checkRuntimeEntry(
     event.observedAt.getTime() > now + 1000
   )
     return "STALE_ENTRY_QUOTE";
+  if (input.signalAvailableAt && event.receivedAt < input.signalAvailableAt)
+    return "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY";
   const quantity = Number(input.position.quantity),
     entry = Number(input.position.entryPrice);
   const stop = Number(input.position.stopPrice);

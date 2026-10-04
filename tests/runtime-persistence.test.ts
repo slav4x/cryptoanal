@@ -340,6 +340,20 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           isClosed: false,
         };
         await candles.saveCandles([first]);
+        assert.equal(
+          (
+            await prisma.marketCandle.findUniqueOrThrow({
+              where: {
+                symbol_interval_openTime: {
+                  symbol: context.symbol,
+                  interval: "15",
+                  openTime: candleAt,
+                },
+              },
+            })
+          ).finalizedAt,
+          null,
+        );
         const second = { ...first, openTime: quoteAt };
         await candles.saveCandles([{ ...first, close: "101", isClosed: true }, second]);
         await candles.saveCandles([first]);
@@ -349,6 +363,23 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         });
         assert.equal(rows[0]!.close.toNumber(), 101);
         assert.equal(rows[0]!.isClosed, true);
+        assert.ok(rows[0]!.finalizedAt);
+        const finalizedAt = rows[0]!.finalizedAt;
+        await candles.saveCandles([{ ...first, close: "101", isClosed: true }]);
+        assert.equal(
+          +(
+            await prisma.marketCandle.findUniqueOrThrow({
+              where: {
+                symbol_interval_openTime: {
+                  symbol: context.symbol,
+                  interval: "15",
+                  openTime: candleAt,
+                },
+              },
+            })
+          ).finalizedAt!,
+          +finalizedAt!,
+        );
         const recoveryHistory = await candles.listRecoveryCandles(
           context.symbol,
           "15",
@@ -410,6 +441,91 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       assert.equal(cursor.lastFailureCode, null);
       assert.equal(await prisma.trade.count({ where: { executionRunId: context.run.id } }), 1);
     });
+    await t.test("both entry paths reject prices persisted before signal finality", async () => {
+      const context = await setup();
+      const event = await prisma.marketPriceEvent.findUniqueOrThrow({
+        where: { id: context.entry.entryPriceEventId },
+      });
+      const unavailable = new Date(+event.receivedAt + 60000);
+      const blocked = await runtime.persistRealtimeEntry({
+        ...context.entry,
+        signalAvailableAt: unavailable,
+      });
+      assert.equal(blocked.applied, false);
+      assert.equal(blocked.riskFailure, "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY");
+      assert.equal(
+        (
+          await runtime.persistRealtimeEntry({
+            ...context.entry,
+            signalAvailableAt: event.receivedAt,
+          })
+        ).applied,
+        true,
+      );
+      const candle = await setup();
+      await runtime.persistCycle({
+        ...candle.entry,
+        ...decisionEngineFields(candle),
+        signalAvailableAt: unavailable,
+        interval: "15",
+        candleAt: quoteAt,
+        expectedDeploymentStatus: "RUNNING",
+        expectedPositionId: null,
+        expectedPositionVersion: null,
+        pendingSignal: null,
+        decision: { action: "OPEN", reasonCode: "TEST", summary: "Test", factors: {} },
+        positionAction: {
+          kind: "open",
+          position: candle.entry.position,
+          markPrice: "100",
+          unrealizedPnl: "0",
+          immediateSettlement: null,
+        },
+      });
+      assert.equal(await prisma.position.count({ where: { executionRunId: candle.run.id } }), 0);
+      assert.equal(
+        (await prisma.decision.findFirstOrThrow({ where: { executionRunId: candle.run.id } }))
+          .reasonCode,
+        "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY",
+      );
+    });
+    await t.test(
+      "signal close preserves decision time independently of the replayed quote time",
+      async () => {
+        const context = await open();
+        const decidedAt = new Date();
+        assert.equal(
+          (
+            await runtime.persistRealtimeQuote({
+              ...context.quote,
+              decidedAt,
+              signalCandleAt: candleAt,
+              action: {
+                kind: "close",
+                settlement: {
+                  exitPrice: "103",
+                  grossPnl: "3",
+                  netPnl: "2.8782",
+                  fees: "0.1218",
+                  slippage: "0",
+                  exitReason: "signal-exit",
+                  closedAt: context.quote.quoteAt,
+                },
+              },
+            })
+          ).closed,
+          true,
+        );
+        const decision = await prisma.decision.findFirstOrThrow({
+          where: { positionId: context.position.id, action: "CLOSE" },
+        });
+        assert.equal(+decision.decidedAt, +decidedAt);
+        const trade = await prisma.trade.findUniqueOrThrow({
+          where: { positionId: context.position.id },
+        });
+        assert.equal(+trade.closedAt, +context.quote.quoteAt);
+      },
+    );
     await t.test("concurrent entry attempts create one position/order/fill", async () => {
       const context = await setup();
       const results = await Promise.all([
@@ -515,6 +631,89 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(audits.length, 1);
         assert.deepEqual((audits[0]!.metadata as { recovery: unknown }).recovery, evidence);
         assert.equal(await prisma.trade.count({ where: { positionId: context.position.id } }), 0);
+      },
+    );
+    await t.test(
+      "signal progress is atomic with price progress and survives stale writes",
+      async () => {
+        const context = await open();
+        assert.equal(+context.position.signalCandleAt!, +context.entry.expectedCandleAt);
+        const signalCandleAt = new Date(+context.entry.expectedCandleAt + 900000);
+        const update = { ...context.quote, signalCandleAt };
+        assert.equal((await runtime.persistRealtimeQuote(update)).applied, true);
+        assert.equal(
+          (
+            await runtime.persistRealtimeQuote({
+              ...update,
+              signalCandleAt: context.entry.expectedCandleAt,
+            })
+          ).applied,
+          false,
+        );
+        const stored = await prisma.position.findUniqueOrThrow({
+          where: { id: context.position.id },
+        });
+        assert.equal(+stored.signalCandleAt!, +signalCandleAt);
+        assert.equal(stored.priceEventId, update.processedPrice.eventId);
+        const listed = await runtime.listRealtimePositions(context.workspace.id);
+        assert.equal(+listed[0]!.signalCandleAt!, +signalCandleAt);
+      },
+    );
+    await t.test(
+      "signal, risk and manual close races leave one trade and one exit fill",
+      async () => {
+        const context = await open();
+        const settlement = {
+          exitPrice: "103",
+          grossPnl: "3",
+          netPnl: "2.8782",
+          fees: "0.1218",
+          slippage: "0",
+          exitReason: "signal-exit",
+          closedAt: context.quote.quoteAt,
+        };
+        const decidedAt = new Date();
+        const signal = {
+          ...context.quote,
+          decidedAt,
+          signalCandleAt: candleAt,
+          action: { kind: "close" as const, settlement },
+        };
+        const results = await Promise.allSettled([
+          runtime.persistRealtimeQuote(signal),
+          runtime.persistRealtimeQuote({
+            ...signal,
+            action: {
+              kind: "close",
+              settlement: { ...settlement, exitReason: "daily-loss-limit" },
+            },
+          }),
+          runtime.closeManually({
+            workspaceId: context.workspace.id,
+            positionId: context.position.id,
+            executionRunId: context.run.id,
+            actorId: "test",
+            requestId: randomUUID(),
+            idempotencyKey: randomUUID(),
+            reason: "Test close",
+            quoteObservedAt: context.quote.quoteAt,
+            maximumQuoteAgeMs: 60000,
+            settlement: { ...settlement, exitReason: "manual-close" },
+          }),
+        ]);
+        assert.ok(results.some((result) => result.status === "fulfilled"));
+        assert.equal(await prisma.trade.count({ where: { positionId: context.position.id } }), 1);
+        assert.equal(await prisma.order.count({ where: { positionId: context.position.id } }), 2);
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: context.position.id } } }),
+          2,
+        );
+        assert.equal(
+          await prisma.decision.count({
+            where: { positionId: context.position.id, action: "CLOSE" },
+          }),
+          1,
+        );
       },
     );
     await t.test("quote protection is durable; stale updates cannot loosen it", async () => {

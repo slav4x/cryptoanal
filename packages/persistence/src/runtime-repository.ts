@@ -64,6 +64,7 @@ type RuntimePositionAction =
     };
 
 export type PersistRuntimeCycleInput = {
+  signalAvailableAt?: Date;
   workspaceId: string;
   deploymentId: string;
   executionRunId: string;
@@ -91,6 +92,8 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  signalCandleAt?: Date | null;
+  decidedAt?: Date;
   recoveryEvidence?: Prisma.InputJsonValue;
   processedPrice: { eventId: bigint; streamId: string; throughAt: Date };
   workspaceId: string;
@@ -116,6 +119,7 @@ export type PersistRuntimeQuoteInput = {
 };
 
 export type PersistRealtimeEntryInput = {
+  signalAvailableAt?: Date;
   entryPriceEventId: bigint;
   workspaceId: string;
   deploymentId: string;
@@ -240,6 +244,7 @@ export class RuntimeRepository {
           low: true,
           close: true,
           turnover: true,
+          finalizedAt: true,
         },
       }),
       this.prisma.trade.findMany({
@@ -317,6 +322,7 @@ export class RuntimeRepository {
       },
       orderBy: { openedAt: "asc" },
       select: {
+        signalCandleAt: true,
         id: true,
         runtimeVersion: true,
         priceEventId: true,
@@ -423,6 +429,7 @@ export class RuntimeRepository {
             bestPrice: input.action.bestPrice,
             stopPrice: input.action.stopPrice,
             runtimeVersion: { increment: 1 },
+            ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
             trailingPrice: input.action.trailingPrice,
           },
         });
@@ -464,9 +471,14 @@ export class RuntimeRepository {
           factors: input.factors,
           marketSnapshotRef: `market-ticker:${input.symbol}:${input.quoteAt.toISOString()}`,
           correlationId,
-          decidedAt: input.quoteAt,
+          decidedAt: input.decidedAt ?? input.quoteAt,
         },
       });
+      if (input.signalCandleAt !== undefined)
+        await transaction.position.update({
+          where: { id: position.id },
+          data: { signalCandleAt: input.signalCandleAt },
+        });
       await clearRecoveredCursor(transaction, input, true);
       return { applied: true, closed: true };
     });
@@ -540,6 +552,7 @@ export class RuntimeRepository {
         strategyConfig: executionRun.strategyVersion.config,
         policy: this.riskPolicy,
         eventId: input.entryPriceEventId,
+        ...(input.signalAvailableAt ? { signalAvailableAt: input.signalAvailableAt } : {}),
         position: input.position,
       });
       if (riskFailure) return { applied: false, capacityReached: false, riskFailure };
@@ -564,6 +577,7 @@ export class RuntimeRepository {
           priceEventId: entryEvent.id,
           priceStreamId: entryEvent.streamId,
           managedThroughAt: entryEvent.observedAt,
+          signalCandleAt: input.expectedCandleAt,
           executionRunId: input.executionRunId,
           strategyVersionId: input.strategyVersionId,
           symbol: input.symbol,
@@ -792,6 +806,7 @@ export class RuntimeRepository {
           strategyConfig: executionRun.strategyVersion.config,
           policy: this.riskPolicy,
           eventId: input.entryPriceEventId,
+          ...(input.signalAvailableAt ? { signalAvailableAt: input.signalAvailableAt } : {}),
           position: action.position,
         });
         if (riskFailure) {
@@ -830,6 +845,7 @@ export class RuntimeRepository {
             priceEventId: entryEvent.id,
             priceStreamId: entryEvent.streamId,
             managedThroughAt: entryEvent.observedAt,
+            signalCandleAt: input.candleAt,
             side: action.position.side,
             entryRegime: action.position.entryRegime,
             entrySession: action.position.entrySession,

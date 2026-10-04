@@ -63,20 +63,23 @@ export class MarketDataRepository {
       if (!existing?.isClosed || candle.isClosed) unique.set(key, candle);
     }
     return this.prisma.$executeRaw(Prisma.sql`
-      INSERT INTO "MarketCandle" ("symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed")
-      SELECT "symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed"
+      INSERT INTO "MarketCandle" ("symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed", "finalizedAt")
+      SELECT "symbol", "interval", "openTime", "open", "high", "low", "close", "volume", "turnover", "isClosed",
+        CASE WHEN "isClosed" THEN clock_timestamp() ELSE NULL END
       FROM jsonb_to_recordset(${JSON.stringify([...unique.values()])}::jsonb)
       AS candle("symbol" text, "interval" text, "openTime" timestamptz, "open" numeric, "high" numeric,
         "low" numeric, "close" numeric, "volume" numeric, "turnover" numeric, "isClosed" boolean)
       ON CONFLICT ("symbol", "interval", "openTime") DO UPDATE SET
         "open" = EXCLUDED."open", "high" = EXCLUDED."high", "low" = EXCLUDED."low",
         "close" = EXCLUDED."close", "volume" = EXCLUDED."volume", "turnover" = EXCLUDED."turnover",
-        "isClosed" = EXCLUDED."isClosed"
+        "isClosed" = EXCLUDED."isClosed",
+        "finalizedAt" = coalesce("MarketCandle"."finalizedAt", EXCLUDED."finalizedAt")
       WHERE (NOT "MarketCandle"."isClosed" OR EXCLUDED."isClosed")
-        AND ("MarketCandle"."open", "MarketCandle"."high", "MarketCandle"."low", "MarketCandle"."close",
+        AND (("MarketCandle"."finalizedAt" IS NULL AND EXCLUDED."isClosed") OR
+        ("MarketCandle"."open", "MarketCandle"."high", "MarketCandle"."low", "MarketCandle"."close",
           "MarketCandle"."volume", "MarketCandle"."turnover", "MarketCandle"."isClosed")
         IS DISTINCT FROM (EXCLUDED."open", EXCLUDED."high", EXCLUDED."low", EXCLUDED."close",
-          EXCLUDED."volume", EXCLUDED."turnover", EXCLUDED."isClosed")
+          EXCLUDED."volume", EXCLUDED."turnover", EXCLUDED."isClosed"))
     `);
   }
 

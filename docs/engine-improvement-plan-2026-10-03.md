@@ -549,6 +549,19 @@ Typecheck, lint, format и research integrity прошли; контрольны
 PnL 585.34513577 и dataset hash сохранены. Тестовая база удалена.
 Полные причины ожидания/отказа при недоступном источнике или подключении остаются открытыми.
 
+**Применение третьего этапа E06 — 4 октября 2026, UTC:** Docker build API/worker прошёл.
+Backup `var/backups/cryptoanal-2026-10-04T16-54-51-285Z.dump` (242 462 883 байт,
+SHA-256 `b54077c8293664aef6b3af5b6b464949877a4285f8914614917482fedd4d0dd3`)
+успешно восстановлен отдельно: 47 таблиц и 32 миграции. API/worker обновлены из `0ee9322`;
+SHA-256 worker/config/runtime-repository/runtime-entry-policy внутри контейнера совпадает
+с checkout. Фактические параметры worker — ttlMs 60000, maxDeviationBps 50.
+API/dashboard healthy, API подтверждает подключение БД, public stream подключён.
+На 16:59:03 UTC все 34 deployment остаются RUNNING/DRY_RUN, 29 позиций сопровождаются,
+максимальный возраст managedThrough — 6.75 секунды; на предыдущем срезе runtime cursor
+failures отсутствовали. Expiry/deviation decisions после этого запуска ещё не наблюдались:
+сценарии подтверждены тестами, не искусственными сигналами в рабочей базе.
+В логах запуска ошибок не наблюдалось. Проверочный контейнер удалён.
+
 ## E07 · P1 · Объединить риск и торговые сутки в runtime и validation
 
 **Подтверждено:** runtime уменьшает quantity с учётом stop fees/slippage, backtest

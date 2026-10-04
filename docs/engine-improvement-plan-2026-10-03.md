@@ -591,6 +591,20 @@ PnL 585.34513577 и dataset hash сохранены. Тестовая база �
 финализация добавлены отдельным пунктом E06; этот блок их не исправляет.
 Нагрузочная и fault-приёмка общего orchestration остаётся в E01–E03/E15.
 
+**Применение четвёртого этапа E06 — 4 октября 2026, UTC:** backup
+`var/backups/cryptoanal-2026-10-04T17-10-54-947Z.dump` (243 271 137 байт,
+SHA-256 `d639da32621fd9b1f536042d88c3e9681b319017ce6d3ee374a2a6323dd8be78`)
+успешно восстановлен отдельно: 47 таблиц и 32 миграции. API/worker обновлены из `0ac68b2`;
+SHA-256 worker/pending replay/runtime-repository/runtime-entry-wait в контейнере
+совпадает с checkout. API/dashboard healthy, БД доступна, public stream подключён.
+На 17:15:08 UTC сопровождаются 29 открытых позиций, максимальный возраст managedThrough
+— 3.33 секунды, runtime cursor failures отсутствуют. Все 34 deployment RUNNING/DRY_RUN.
+В логах запуска warning/error не обнаружены; после запуска наблюдались 21 NO_SIGNAL
+decision и отсутствие активных pending. Новые waiting decisions в рабочем окружении
+пока не наблюдались; deduplication/gate/expiry проверены отдельными DB-тестами.
+Тестовая база и проверочный контейнер удалены. Замена прежнего pending новой свечой
+и нагрузочная приёмка остаются открытыми.
+
 ## E07 · P1 · Объединить риск и торговые сутки в runtime и validation
 
 **Подтверждено:** runtime уменьшает quantity с учётом stop fees/slippage, backtest

@@ -697,7 +697,7 @@ daily gate candle loop.
 - [x] Явно разделить независимый UTC safety limit и календарь стратегии, если нужны
       оба; применять их ко всем путям входа и показывать причину блокировки.
 - [ ] Проверять лимиты по текущему equity и будущим издержкам после округления quantity.
-- [ ] Учитывать budget нескольких одновременных открытий; недостаточно per-trade risk.
+- [x] Учитывать budget нескольких одновременных открытий в runtime; недостаточно per-trade risk.
 
 **Приёмка:** одинаковые размеры и отказы в runtime/replay/backtest на одинаковом
 состоянии; полночь UTC и Asia/Novosibirsk, overnight loss, rebound после latch,
@@ -786,6 +786,36 @@ managedThrough — 12.05 секунды; прогресс продолжаетс
 не выдержан этим срезом. Это остаётся ограничением E01–E03, не закрывается текущим
 исправлением календарного admission. Ошибок/предупреждений запуска в логах нет.
 Тестовая база и проверочный контейнер удалены.
+
+**Третий этап E07 — 5 октября 2026:** общий чистый `executionStopRisk` используется
+sizing и DB admission, `remainingExecutionStopBudget` рассчитывает свободный budget.
+Persistence импортирует только независимый от инфраструктуры math module application;
+новых npm зависимостей/миграций нет. Резерв каждой открытой позиции —
+`max(0, fullStopLoss − alreadyConsumed)`, где fullStopLoss включает входную комиссию,
+stop slippage и выходную комиссию; alreadyConsumed — отрицательный текущий PnL,
+входная комиссия и текущие оценочные издержки выхода, уже входящие в dailyPnl.
+Будущая прибыль по защитному стопу не финансирует новые риски. Используется ближайший
+stop/trailing (max для long, min для short). Усиление защиты освобождает резерв.
+
+Свободный budget — `max(0, min(UTC dailyLimit + dailyPnl,
+equity − floatingGains) − sum(additionalStopReserve))`.
+У текущего/overnight убытка нет двойного списания, плавающая прибыль не увеличивает
+budget. Worker ограничивает quantity остатком в обоих входах; checkRuntimeEntry
+повторяет расчёт под workspace risk lock. Pending резервируется только после fill.
+При гонке БД отклоняет подготовленный размер кодом `MAX_ACCOUNT_STOP_RISK`, не меняет
+quantity молча. Исчерпание потенциального бюджета запрещает входы без UTC latch
+и force-close: они по-прежнему относятся к фактическому daily loss/kill-switch.
+Невалидная защита/издержки открытой позиции закрывают admission.
+
+Полный `runtime:verify` — 192/192 без пропусков на отдельной PostgreSQL (32 миграции).
+Новые проверки: concurrent pending/candle в обоих порядках оставляет одну позицию;
+резерв с комиссиями точен, нет latch/force-close от потенциального риска;
+trailing освобождает budget, long/short floating loss учитывается один раз,
+плавающий winner не финансирует budget; sizing помещает stop loss в остаток,
+исчерпанный капитал/бюджет блокируют вход. Golden backtest/replay пока не используют
+портфельный резерв: результат не изменён (3 сделки, netPnL 538.87273932).
+Полная parity runtime/validation, qtyStep/округление и дневная модель остаются открытыми.
+Typecheck, lint, format check и research:verify прошли. Тестовая база удалена.
 
 ## E08 · P1 · Исправить временную модель OHLC-исполнения
 

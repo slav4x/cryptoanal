@@ -1,3 +1,7 @@
+import {
+  executionStopRisk,
+  remainingExecutionStopBudget,
+} from "../../application/src/execution-risk";
 import { Prisma } from "./generated/prisma/client";
 import type { CryptoAnalPrismaClient } from "./client";
 
@@ -107,6 +111,9 @@ export async function assessRuntimeRisk(
   let equity = input.policy.initialBalance + Number(realized._sum.netPnl ?? 0);
   let dailyPnl = Number(today._sum.netPnl ?? 0);
   let exposure = 0;
+  let floatingGains = 0;
+  let reservedStopRisk = 0;
+  let stopRiskValid = true;
   let marketReady = true;
   if (
     positions.length > 0 &&
@@ -139,6 +146,31 @@ export async function assessRuntimeRisk(
     const costs = readRiskConfig(position.strategyVersion.config);
     const exitCosts =
       (price * quantity * ((costs?.takerFeeBps ?? 0) + (costs?.slippageBps ?? 0))) / 10_000;
+    const protectiveStop =
+      position.trailingPrice === null
+        ? Number(position.stopPrice)
+        : (position.side === "BUY" ? Math.max : Math.min)(
+            Number(position.stopPrice),
+            Number(position.trailingPrice),
+          );
+    const stopRisk = costs
+      ? executionStopRisk({
+          side: position.side === "BUY" ? "long" : "short",
+          entryPrice: Number(position.entryPrice),
+          stopPrice: protectiveStop,
+          quantity,
+          entryFee: Number(position.entryFee),
+          takerFeeBps: costs.takerFeeBps,
+          slippageBps: costs.slippageBps,
+        })
+      : null;
+    if (stopRisk === null) stopRiskValid = false;
+    else
+      reservedStopRisk += Math.max(
+        0,
+        stopRisk - (Math.max(0, -pnl) + Number(position.entryFee) + exitCosts),
+      );
+    floatingGains += Math.max(0, pnl);
     equity += pnl - Number(position.entryFee) - exitCosts;
     // Unrealized winners cannot finance the daily loss budget of losing positions.
     dailyPnl += Math.min(0, pnl) - Number(position.entryFee) - exitCosts;
@@ -162,6 +194,12 @@ export async function assessRuntimeRisk(
         ),
       )) /
     100;
+  const remainingStopRisk = remainingExecutionStopBudget({
+    dailyLimit,
+    dailyPnl,
+    equityWithoutFloatingGains: equity - floatingGains,
+    reservedStopRisk,
+  });
   const key = { workspaceId: input.workspaceId, exchangeAccountId: input.exchangeAccountId, day };
   if (configured && (equity <= 0 || dailyPnl <= -dailyLimit)) {
     await tx.runtimeRiskDay.upsert({
@@ -180,18 +218,23 @@ export async function assessRuntimeRisk(
       : null;
   const reason =
     forceCloseReason ??
-    (!configured
+    (!configured || !stopRiskValid
       ? "INVALID_RISK_CONFIG"
       : !marketReady
         ? "MARKET_RECOVERY_REQUIRED"
         : strategyDailyPnl <= -strategyLossLimit
           ? "STRATEGY_DAILY_LOSS_LIMIT"
-          : null);
+          : remainingStopRisk <= 0
+            ? "MAX_ACCOUNT_STOP_RISK"
+            : null);
   return {
     reason,
     forceCloseReason,
     equity,
     dailyPnl,
+    dailyLimit,
+    reservedStopRisk,
+    remainingStopRisk,
     strategyDay: {
       timezone,
       day: calendar!.day,
@@ -272,14 +315,19 @@ export async function checkRuntimeEntry(
   if (risk.exposure + quantity * entry + fee > risk.maximumExposure + 1e-8)
     return "MAX_ACCOUNT_EXPOSURE";
   const costs = risk.configured!;
-  const stopFill =
-    stop * (1 + ((input.position.side === "BUY" ? -1 : 1) * costs.slippageBps) / 10_000);
-  const loss =
-    Math.max(0, (entry - stopFill) * (input.position.side === "BUY" ? 1 : -1)) * quantity +
-    fee +
-    (stopFill * quantity * costs.takerFeeBps) / 10_000;
+  const loss = executionStopRisk({
+    side: input.position.side === "BUY" ? "long" : "short",
+    entryPrice: entry,
+    stopPrice: stop,
+    quantity,
+    entryFee: fee,
+    takerFeeBps: costs.takerFeeBps,
+    slippageBps: costs.slippageBps,
+  });
+  if (loss === null) return "INVALID_ENTRY_SIZE";
   if (loss > (Math.max(0, risk.equity) * costs.riskPerTradePercent) / 100 + 1e-8)
     return "MAX_TRADE_RISK";
+  if (loss > risk.remainingStopRisk + 1e-8) return "MAX_ACCOUNT_STOP_RISK";
   return null;
 }
 

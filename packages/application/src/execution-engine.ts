@@ -1,3 +1,5 @@
+import { executionStopRisk } from "./execution-risk";
+
 export type ExecutionCandle = {
   symbol: string;
   openTime: Date;
@@ -714,6 +716,7 @@ export function limitExecutionPositionRisk(
   equity: number,
   maximumNotional: number,
   config: ExecutionStrategyConfig,
+  maximumLoss?: number,
 ): ExecutionPosition | null {
   if (
     ![
@@ -740,21 +743,22 @@ export function limitExecutionPositionRisk(
     config.costs.slippageBps < 0
   )
     return null;
-  const stopFill =
-    position.stopPrice *
-    (position.side === "long"
-      ? 1 - config.costs.slippageBps / 10_000
-      : 1 + config.costs.slippageBps / 10_000);
+  if (maximumLoss !== undefined && (!Number.isFinite(maximumLoss) || maximumLoss <= 0)) return null;
   const feePerUnit = position.entryFee / position.quantity;
-  const unitLoss =
-    Math.max(0, (position.entryPrice - stopFill) * (position.side === "long" ? 1 : -1)) +
-    feePerUnit +
-    (stopFill * config.costs.takerFeeBps) / 10_000;
-  if (stopFill <= 0 || !Number.isFinite(unitLoss) || unitLoss <= 0) return null;
+  const unitLoss = executionStopRisk({
+    side: position.side,
+    entryPrice: position.entryPrice,
+    stopPrice: position.stopPrice,
+    quantity: 1,
+    entryFee: feePerUnit,
+    takerFeeBps: config.costs.takerFeeBps,
+    slippageBps: config.costs.slippageBps,
+  });
+  if (unitLoss === null || unitLoss <= 0) return null;
   const quantity = Math.min(
     position.quantity,
     maximumNotional / (position.entryPrice + feePerUnit),
-    (Math.max(0, equity) * config.risk.riskPerTradePercent) / 100 / unitLoss,
+    Math.min((equity * config.risk.riskPerTradePercent) / 100, maximumLoss ?? Infinity) / unitLoss,
   );
   if (!Number.isFinite(quantity) || quantity <= 0) return null;
   const scale = quantity / position.quantity;

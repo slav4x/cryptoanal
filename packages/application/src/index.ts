@@ -15,3 +15,5 @@ export * from "./decision-engine";
 export * from "./execution-engine";
 export * from "./strategy-lifecycle";
 export * from "./validation-engine";
+
+export * from "./execution-risk";

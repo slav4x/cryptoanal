@@ -880,7 +880,9 @@ export class RuntimeRepository {
             summary:
               reason === "STRATEGY_DAILY_LOSS_LIMIT"
                 ? "Отложенный вход отменён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
-                : `Отложенный вход отменён: ${reason}`,
+                : reason === "MAX_ACCOUNT_STOP_RISK"
+                  ? "Отложенный вход отменён: общий бюджет риска до стопов занят открытыми позициями"
+                  : `Отложенный вход отменён: ${reason}`,
             factors: withRuntimeSignal(
               {
                 source: "durable-price-events",
@@ -1179,7 +1181,9 @@ export class RuntimeRepository {
             summary:
               riskFailure === "STRATEGY_DAILY_LOSS_LIMIT"
                 ? "Вход запрещён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
-                : "Вход запрещён независимым риск-контролем",
+                : riskFailure === "MAX_ACCOUNT_STOP_RISK"
+                  ? "Вход запрещён: недостаточно общего бюджета риска до стопов"
+                  : "Вход запрещён независимым риск-контролем",
             factors: input.decision.factors,
           };
         }

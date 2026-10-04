@@ -1143,6 +1143,7 @@ async function processRealtimeEntry(
         risk.equity,
         Math.max(0, risk.maximumExposure - risk.exposure),
         strategyConfig,
+        risk.remainingStopRisk,
       );
       if (!position) return { status: "rejected", reason: "INVALID_ENTRY_SIZE" };
       if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession) {
@@ -1587,7 +1588,9 @@ async function processRuntimeTarget(
             summary:
               riskAssessment.reason === "STRATEGY_DAILY_LOSS_LIMIT"
                 ? "Торговый сигнал отклонён: достигнут лимит закрытого убытка за сутки в часовом поясе стратегии"
-                : "Торговый сигнал отклонён до исполнения общим risk gate",
+                : riskAssessment.reason === "MAX_ACCOUNT_STOP_RISK"
+                  ? "Торговый сигнал отклонён: общий бюджет риска до стопов занят открытыми позициями"
+                  : "Торговый сигнал отклонён до исполнения общим risk gate",
             factors: runtimeFactors(
               candle,
               dailyPnl,
@@ -1643,6 +1646,7 @@ async function processRuntimeTarget(
                   riskAssessment.equity,
                   Math.max(0, riskAssessment.maximumExposure - riskAssessment.exposure),
                   strategyConfig,
+                  riskAssessment.remainingStopRisk,
                 )
               : null;
           if (opened && positionAction.kind === "none") {

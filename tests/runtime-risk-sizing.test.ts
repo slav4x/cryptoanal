@@ -3,6 +3,8 @@ import { test } from "node:test";
 import fixture from "../research/golden/v1/momentum-reversal.json";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import {
+  executionStopRisk,
+  remainingExecutionStopBudget,
   enrichExecutionCandles,
   limitExecutionPositionRisk,
   openExecutionPosition,
@@ -117,4 +119,60 @@ test("sizing rejects exhausted and invalid capital before either entry path", ()
       null,
     );
   }
+});
+
+test("aggregate stop budget caps sizing before admission, including both fees", () => {
+  for (const side of ["long", "short"] as const) {
+    const original = openExecutionPositionAtQuote(
+      { side, signalPrice: 100 },
+      { symbol: "BTCUSDT", price: 100, observedAt: at },
+      "neutral",
+      10_000,
+      10_000,
+      baseConfig,
+    )!;
+    const limited = limitExecutionPositionRisk(original, 10_000, 10_000, baseConfig, 30)!;
+    assert.ok(limited.quantity < original.quantity);
+    assert.ok(
+      -settleExecutionPosition(limited, limited.stopPrice, at, "stop-loss", baseConfig).netPnl <=
+        30 + 1e-8,
+    );
+    assert.equal(limitExecutionPositionRisk(original, 10_000, 10_000, baseConfig, 0), null);
+    assert.equal(limitExecutionPositionRisk(original, 10_000, 10_000, baseConfig, NaN), null);
+    const loss = executionStopRisk({
+      side,
+      entryPrice: limited.entryPrice,
+      stopPrice: limited.stopPrice,
+      quantity: limited.quantity,
+      entryFee: limited.entryFee,
+      ...baseConfig.costs,
+    });
+    assert.ok(loss !== null && Math.abs(loss - 30) < 1e-8);
+  }
+});
+
+test("remaining stop budget cannot spend exhausted daily allowance or capital", () => {
+  const budget = {
+    dailyLimit: 100,
+    dailyPnl: -30,
+    equityWithoutFloatingGains: 1000,
+    reservedStopRisk: 50,
+  };
+  assert.equal(remainingExecutionStopBudget(budget), 20);
+  assert.equal(remainingExecutionStopBudget({ ...budget, dailyPnl: -100 }), 0);
+  assert.equal(remainingExecutionStopBudget({ ...budget, equityWithoutFloatingGains: 60 }), 10);
+  assert.equal(remainingExecutionStopBudget({ ...budget, equityWithoutFloatingGains: 0 }), 0);
+  assert.equal(remainingExecutionStopBudget({ ...budget, reservedStopRisk: Infinity }), 0);
+  assert.equal(
+    executionStopRisk({
+      side: "long",
+      entryPrice: 100,
+      stopPrice: 98,
+      quantity: 1,
+      entryFee: 0,
+      takerFeeBps: 0,
+      slippageBps: 10000,
+    }),
+    null,
+  );
 });

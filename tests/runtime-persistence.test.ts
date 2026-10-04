@@ -13,7 +13,11 @@ import {
   ValidationRepository,
   ValidationDatasetConflictError,
 } from "../packages/persistence/src/validation-repository";
-import { advanceExecutionIndicators, getTradingDateKey } from "../packages/application/src/index";
+import {
+  advanceExecutionIndicators,
+  getTradingDateKey,
+  executionStopRisk,
+} from "../packages/application/src/index";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { MarketDataRepository } from "../packages/persistence/src/market-data-repository";
 import { AccountSnapshotRepository } from "../packages/persistence/src/account-snapshot-repository";
@@ -2496,6 +2500,172 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           ).forceCloseReason,
           "daily-loss-limit",
         );
+      },
+    );
+    await t.test(
+      "shared stop budget serializes concurrent pending/candle entries without force closing",
+      async () => {
+        for (const reverse of [false, true]) {
+          const first = await setup();
+          const second = await setup({
+            workspace: first.workspace,
+            account: first.deployment.exchangeAccountId,
+          });
+          const config = {
+            ...fixture.config,
+            risk: { ...fixture.config.risk, maxOpenPositions: 10 },
+          };
+          for (const context of [first, second])
+            await prisma.strategyVersion.update({
+              where: { id: context.entry.strategyVersionId },
+              data: { config },
+            });
+          const policy = { ...defaultRuntimeRiskPolicy, maxDailyLossPercent: 0.03 };
+          const limited = new RuntimeRepository(prisma, policy);
+          const cycle = {
+            ...second.entry,
+            ...decisionEngineFields(second),
+            interval: "15",
+            candleAt: new Date(+quoteAt - 900_000),
+            entrySignalPrice: 100,
+            expectedDeploymentStatus: "RUNNING" as const,
+            expectedPositionId: null,
+            expectedPositionVersion: null,
+            pendingSignal: null,
+            decision: { action: "OPEN" as const, reasonCode: "TEST", summary: "Test", factors: {} },
+            positionAction: {
+              kind: "open" as const,
+              position: second.entry.position,
+              markPrice: "100",
+              unrealizedPnl: "0",
+              immediateSettlement: null,
+            },
+          };
+          const calls = reverse
+            ? [() => limited.persistCycle(cycle), () => limited.persistRealtimeEntry(first.entry)]
+            : [() => limited.persistRealtimeEntry(first.entry), () => limited.persistCycle(cycle)];
+          const results = await Promise.all(calls.map((call) => call()));
+          assert.equal(
+            await prisma.position.count({
+              where: { workspaceId: first.workspace.id, status: "OPEN" },
+            }),
+            1,
+          );
+          const rejection = await prisma.decision.findFirst({
+            where: { workspaceId: first.workspace.id, reasonCode: "MAX_ACCOUNT_STOP_RISK" },
+          });
+          assert.ok(
+            rejection ||
+              results.some((r) => "riskFailure" in r && r.riskFailure === "MAX_ACCOUNT_STOP_RISK"),
+            "one concurrent entry must be rejected by the account stop budget",
+          );
+          const guard = new RuntimeRiskRepository(prisma, policy);
+          const risk = await guard.assess(
+            first.workspace.id,
+            first.deployment.exchangeAccountId,
+            config,
+          );
+          const loss = executionStopRisk({
+            side: "long",
+            entryPrice: 100,
+            stopPrice: 98,
+            quantity: 1,
+            entryFee: 0.06,
+            ...fixture.config.costs,
+          })!;
+          assert.equal(risk.forceCloseReason, null);
+          assert.ok(
+            Math.abs(risk.remainingStopRisk - (3 - loss)) < 1e-8,
+            `remaining=${risk.remainingStopRisk}, expected=${3 - loss}`,
+          );
+          assert.equal(
+            await prisma.runtimeRiskDay.count({ where: { workspaceId: first.workspace.id } }),
+            0,
+          );
+          const opened = await prisma.position.findFirstOrThrow({
+            where: { workspaceId: first.workspace.id, status: "OPEN" },
+          });
+          await prisma.position.update({
+            where: { id: opened.id },
+            data: { trailingPrice: "100" },
+          });
+          const protectedRisk = await guard.assess(
+            first.workspace.id,
+            first.deployment.exchangeAccountId,
+            config,
+          );
+          assert.ok(
+            protectedRisk.remainingStopRisk > risk.remainingStopRisk,
+            "tightening protection must release reserved risk",
+          );
+          assert.equal(protectedRisk.forceCloseReason, null);
+        }
+      },
+    );
+    await t.test(
+      "mark losses are consumed once and profitable marks cannot finance the stop budget",
+      async () => {
+        for (const side of ["BUY", "SELL"] as const) {
+          const context = await setup();
+          const config = {
+            ...fixture.config,
+            costs: { makerFeeBps: 0, takerFeeBps: 0, slippageBps: 0 },
+          };
+          await prisma.strategyVersion.update({
+            where: { id: context.entry.strategyVersionId },
+            data: { config },
+          });
+          const policy = { ...defaultRuntimeRiskPolicy, maxDailyLossPercent: 0.03 };
+          const limited = new RuntimeRepository(prisma, policy);
+          const direction = side === "BUY" ? 1 : -1;
+          const input = {
+            ...context.entry,
+            position: {
+              ...context.entry.position,
+              side,
+              entryFee: "0",
+              stopPrice: String(100 - 2 * direction),
+            },
+          };
+          await prisma.runtimeCursor.update({
+            where: {
+              executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+            },
+            data: {
+              pendingSignal: {
+                mode: "realtime",
+                side: side === "BUY" ? "long" : "short",
+                signalPrice: 100,
+                detectedAt: quoteAt.toISOString(),
+                availableAt: quoteAt.toISOString(),
+                expiresAt: new Date(Date.now() + 900000).toISOString(),
+                entryRegime: "neutral",
+              },
+            },
+          });
+          assert.equal((await limited.persistRealtimeEntry(input)).applied, true);
+          const guard = new RuntimeRiskRepository(prisma, policy);
+          for (const move of [-1, 5]) {
+            await prisma.marketPriceEvent.create({
+              data: {
+                eventKey: randomUUID(),
+                symbol: context.symbol,
+                price: String(100 + move * direction),
+                observedAt: quoteAt,
+                streamId: context.deployment.exchangeAccountId,
+              },
+            });
+            const risk = await guard.assess(
+              context.workspace.id,
+              context.deployment.exchangeAccountId,
+              config,
+            );
+            assert.equal(risk.dailyPnl, Math.min(0, move));
+            assert.equal(risk.reservedStopRisk, move < 0 ? 1 : 2);
+            assert.equal(risk.remainingStopRisk, 1);
+            assert.equal(risk.forceCloseReason, null);
+          }
+        }
       },
     );
     await t.test(

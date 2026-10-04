@@ -1027,8 +1027,8 @@ async function enforceRuntimeRisk(workspaceId: string) {
 async function processRealtimeEntry(
   target: Awaited<ReturnType<RuntimeRepository["listRealtimePendingEntries"]>>[number],
 ) {
+  if (!target.lastEvaluatedAt) return;
   const pending = parseRealtimePendingSignal(target.pendingSignal);
-  if (!pending || !target.lastEvaluatedAt) return;
   const progress = {
     workspaceId: target.executionRun.deployment.workspaceId,
     executionRunId: target.executionRun.id,
@@ -1036,6 +1036,22 @@ async function processRealtimeEntry(
     expectedCandleAt: target.lastEvaluatedAt,
     expectedPendingPriceEventId: target.pendingPriceEventId,
   };
+  if (!pending) {
+    const stored = target.pendingSignal;
+    if (
+      stored &&
+      typeof stored === "object" &&
+      !Array.isArray(stored) &&
+      stored.mode === "realtime"
+    ) {
+      await runtimeRepository.advancePendingEntry({
+        ...progress,
+        throughEventId: target.pendingPriceEventId,
+        rejectionReason: "INVALID_PENDING_SIGNAL",
+      });
+    }
+    return;
+  }
   if (Date.now() >= +pending.expiresAt) {
     await runtimeRepository.advancePendingEntry({
       ...progress,

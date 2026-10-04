@@ -1007,6 +1007,23 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           (await runtime.persistRealtimeEntry(context.entry)).riskFailure,
           "INVALID_PENDING_SIGNAL",
         );
+        assert.equal(
+          await runtime.advancePendingEntry({
+            workspaceId: context.workspace.id,
+            executionRunId: context.run.id,
+            symbol: context.symbol,
+            expectedCandleAt: candleAt,
+            expectedPendingPriceEventId: null,
+            throughEventId: null,
+            rejectionReason: "INVALID_PENDING_SIGNAL",
+          }),
+          true,
+        );
+        assert.equal(
+          (await prisma.decision.findFirstOrThrow({ where: { executionRunId: context.run.id } }))
+            .reasonCode,
+          "INVALID_PENDING_SIGNAL",
+        );
         assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
       },
     );

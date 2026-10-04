@@ -470,7 +470,8 @@ Position/Order. Pruning учитывает самый ранний cursor акт
 ожиданий worker повторно проверяет stream/journal health; транзакция проверяет сохранённые
 mode/direction/finality, lifecycle и TTL по clock_timestamp после lock и перед созданием позиции.
 Expiry и terminal risk/capacity failure очищают pending с одной SKIP decision и причиной;
-no-touch оставляет ожидание и сохраняет прогресс. ENTRY_SIGNAL_PENDING теперь HOLD,
+no-touch оставляет ожидание и сохраняет прогресс. Нечитаемый realtime pending отклоняется
+с причиной вместо бесконечного ожидания. ENTRY_SIGNAL_PENDING теперь HOLD,
 OPEN соответствует фактическому исполнению. Полная модель signal ID/status, все причины
 при закрытом подключении/устаревшем источнике и отдельный market TTL/deviation ещё не готовы.
 Проверено 141/141 runtime-тестов без пропусков на отдельной PostgreSQL с 32 миграциями:

@@ -91,6 +91,7 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  recoveryEvidence?: Prisma.InputJsonValue;
   processedPrice: { eventId: bigint; streamId: string; throughAt: Date };
   workspaceId: string;
   deploymentId: string;
@@ -392,6 +393,24 @@ export class RuntimeRepository {
         return { applied: false, closed: false };
       }
 
+      if (input.recoveryEvidence) {
+        await transaction.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorId: "worker",
+            action: "position.recover",
+            resourceType: "position",
+            resourceId: position.id,
+            outcome: "COMPLETED",
+            requestId: `runtime-recovery:${position.id}:${input.processedPrice.eventId}`,
+            metadata: {
+              executionRunId: input.executionRunId,
+              eventId: String(input.processedPrice.eventId),
+              recovery: input.recoveryEvidence,
+            },
+          },
+        });
+      }
       if (input.action.kind === "update") {
         await transaction.position.update({
           where: { id: position.id },

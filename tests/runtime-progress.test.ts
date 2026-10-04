@@ -13,6 +13,7 @@ import {
   type RuntimePriceCheckpoint,
 } from "../apps/worker/src/runtime-price-processor";
 import { RecoveryRequestCache } from "../apps/worker/src/recovery-request-cache";
+import { processRuntimeSymbols } from "../apps/worker/src/runtime-symbol-loop";
 
 const config = strategyConfigSchema.parse(fixture.config);
 const at = new Date("2026-01-01T12:00:00Z");
@@ -43,7 +44,6 @@ test("recovery failure retains the known prefix and its protection before the ne
       through: at,
       streamId: "original",
       events: [event(1, 103), event(2, 103, "new")],
-      maximumGapMs: 10000,
       config: managed,
       checkpoint: async (state) => {
         checkpoints.push(state);
@@ -62,6 +62,78 @@ test("recovery failure retains the known prefix and its protection before the ne
   assert.equal(checkpoints[0]!.streamId, "original");
 });
 
+test("a quiet but continuous stream does not need REST recovery even after a long interval", async () => {
+  const checkpoints: RuntimePriceCheckpoint[] = [];
+  await processRuntimePriceEvents({
+    position: position(),
+    through: at,
+    streamId: "original",
+    events: [event(3600, 97)],
+    config,
+    recover: async () => {
+      throw new Error("REST unavailable");
+    },
+    checkpoint: async (state) => {
+      checkpoints.push(state);
+      return true;
+    },
+  });
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0]!.settlement?.exitReason, "stop-loss");
+  assert.equal(checkpoints[0]!.recovered, false);
+});
+
+test("a confirmed stream change records the recovery interval and reconstruction quality", async () => {
+  const checkpoints: RuntimePriceCheckpoint[] = [];
+  await processRuntimePriceEvents({
+    position: position(),
+    through: at,
+    streamId: "original",
+    events: [event(1, 100, "new")],
+    config,
+    recover: async (position, since, quote) => ({
+      position,
+      settlement: null,
+      evidence: {
+        fromAt: since.toISOString(),
+        toAt: quote.observedAt.toISOString(),
+        source: "minute-ohlc",
+        quality: "bounded-partial-minutes",
+        ambiguity: null,
+      },
+    }),
+    checkpoint: async (state) => {
+      checkpoints.push(state);
+      return true;
+    },
+  });
+  assert.equal(checkpoints[0]!.recovery?.reason, "stream-change");
+  assert.equal(checkpoints[0]!.recovery?.quality, "bounded-partial-minutes");
+  assert.equal(checkpoints[0]!.recovery?.fromAt, at.toISOString());
+});
+
+test("an unconfirmed initial stream still requires recovery before processing a fresh quote", async () => {
+  let calls = 0;
+  await assert.rejects(
+    processRuntimePriceEvents({
+      position: position(),
+      through: at,
+      streamId: null,
+      events: [event(1)],
+      config,
+      recover: async () => {
+        calls += 1;
+        throw new Error("history missing");
+      },
+      checkpoint: async () => {
+        assert.fail("unconfirmed state must not be persisted");
+      },
+    }),
+    /history missing/,
+  );
+  assert.equal(calls, 1);
+});
+
 test("a failed checkpoint stops replay without recovering or closing stale state", async () => {
   let recoveryCalled = false;
   await processRuntimePriceEvents({
@@ -69,7 +141,6 @@ test("a failed checkpoint stops replay without recovering or closing stale state
     through: at,
     streamId: "original",
     events: [event(1), event(2, 100, "new")],
-    maximumGapMs: 10000,
     config,
     checkpoint: async () => false,
     recover: async () => {
@@ -87,7 +158,6 @@ test("stop touch is settled once before a later rebound in the same batch", asyn
     through: at,
     streamId: "original",
     events: [event(1, 97), event(2)],
-    maximumGapMs: 10000,
     config,
     recover: async () => {
       throw new Error("unreachable");
@@ -111,7 +181,6 @@ test("late pre-entry events advance the journal without changing the mark or pro
     streamId: "original",
     markPrice: 102,
     events: [late],
-    maximumGapMs: 10000,
     config,
     recover: async () => {
       throw new Error("unreachable");
@@ -140,6 +209,58 @@ test("a blocked position does not prevent other positions from progressing", asy
   });
   await processing;
   assert.deepEqual(completed, [2, 3, 1]);
+});
+
+test("a state conflict retries a freshly rebuilt symbol cycle without skipping later symbols", async () => {
+  const visits: string[] = [];
+  let currentVersion = 0;
+  const snapshots: number[] = [];
+  const conflict = new Error("CAS conflict");
+  await processRuntimeSymbols(["BTC", "ETH"], {
+    process: async (symbol) => {
+      visits.push(symbol);
+      if (symbol === "BTC") {
+        const expectedVersion = currentVersion;
+        snapshots.push(expectedVersion);
+        if (expectedVersion === 0) {
+          currentVersion += 1;
+          throw conflict;
+        }
+        assert.equal(expectedVersion, 1);
+      }
+    },
+    isConflict: (error) => error === conflict,
+    onConflict: () => {},
+    onFailure: async () => {
+      assert.fail("unexpected non-conflict error");
+    },
+  });
+  assert.deepEqual(snapshots, [0, 1]);
+  assert.deepEqual(visits, ["BTC", "BTC", "ETH"]);
+});
+
+test("persistent conflicts and a symbol failure cannot starve the remaining symbols", async () => {
+  const visits: string[] = [];
+  const conflicts: boolean[] = [];
+  const failures: string[] = [];
+  const conflict = new Error("CAS conflict");
+  await processRuntimeSymbols(["BTC", "ETH", "SOL"], {
+    process: async (symbol) => {
+      visits.push(symbol);
+      if (symbol === "BTC") throw conflict;
+      if (symbol === "ETH") throw new Error("data missing");
+    },
+    isConflict: (error) => error === conflict,
+    onConflict: (_symbol, _attempt, exhausted) => {
+      conflicts.push(exhausted);
+    },
+    onFailure: async (symbol) => {
+      failures.push(symbol);
+    },
+  });
+  assert.deepEqual(visits, ["BTC", "BTC", "BTC", "ETH", "SOL"]);
+  assert.deepEqual(conflicts, [false, false, true]);
+  assert.deepEqual(failures, ["ETH"]);
 });
 
 test("recovery requests share an in-flight result and retry only after backoff", async () => {

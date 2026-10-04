@@ -490,6 +490,33 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       assert.equal(storedDecision.providerId, "cryptoanal-rule-engine");
       assert.ok(storedDecision.contextSnapshotId);
     });
+    await t.test(
+      "successful non-closing recovery keeps evidence atomically and ignores a stale retry",
+      async () => {
+        const context = await open();
+        const evidence = {
+          reason: "stream-change",
+          source: "minute-ohlc",
+          quality: "bounded-partial-minutes",
+          fromAt: context.position.openedAt.toISOString(),
+          toAt: context.quote.quoteAt.toISOString(),
+          ambiguity: null,
+        };
+        const recoveredQuote = { ...context.quote, recoveryEvidence: evidence };
+        assert.equal((await runtime.persistRealtimeQuote(recoveredQuote)).applied, true);
+        assert.equal((await runtime.persistRealtimeQuote(recoveredQuote)).applied, false);
+        const audits = await prisma.auditEvent.findMany({
+          where: {
+            workspaceId: context.workspace.id,
+            resourceId: context.position.id,
+            action: "position.recover",
+          },
+        });
+        assert.equal(audits.length, 1);
+        assert.deepEqual((audits[0]!.metadata as { recovery: unknown }).recovery, evidence);
+        assert.equal(await prisma.trade.count({ where: { positionId: context.position.id } }), 0);
+      },
+    );
     await t.test("quote protection is durable; stale updates cannot loosen it", async () => {
       const context = await open();
       assert.equal((await runtime.persistRealtimeQuote(context.quote)).applied, true);

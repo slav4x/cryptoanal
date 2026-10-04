@@ -70,8 +70,10 @@ import { evaluateRuntimeCandleExit } from "./runtime-position";
 import { OrderedPriceJournal } from "./price-journal";
 import { forEachConcurrent, processRuntimePriceEvents } from "./runtime-price-processor";
 import { RecoveryRequestCache } from "./recovery-request-cache";
+import { processRuntimeSymbols } from "./runtime-symbol-loop";
 import {
   recoverRuntimeGap,
+  runtimeRecoveryMinuteRange,
   limitRuntimePositionRisk,
   RuntimeRecoveryIncompleteError,
 } from "./runtime-recovery";
@@ -722,7 +724,6 @@ async function processRealtimePosition(
     streamId: target.priceStreamId,
     markPrice: Number(target.markPrice ?? target.entryPrice),
     events: events.map((event) => ({ ...event, price: Number(event.price) })),
-    maximumGapMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
     config: strategyConfig,
     recover: async (position, through, quote) => {
       if (+quote.observedAt - +through > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000) {
@@ -734,7 +735,7 @@ async function processRealtimePosition(
         marketStreamAbortController.signal,
         AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
       ]);
-      const minuteStart = new Date(Math.floor(+through / 60_000) * 60_000);
+      const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
       const intervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
       const signalStart = new Date(
         Math.floor(+through / intervalMs) * intervalMs -
@@ -744,7 +745,9 @@ async function processRealtimePosition(
         Math.floor(+quote.observedAt / intervalMs) * intervalMs - intervalMs,
       );
       const [minutes, history] = await Promise.all([
-        loadRecoveryCandles(target.symbol, "1", minuteStart, quote.observedAt, deadline),
+        +quote.observedAt === +through
+          ? Promise.resolve([])
+          : loadRecoveryCandles(target.symbol, "1", minuteRange.start, minuteRange.end, deadline),
         loadRecoveryCandles(
           target.symbol,
           bybitIntervals[strategyConfig.universe.timeframe],
@@ -781,6 +784,7 @@ async function processRealtimePosition(
       markPrice,
       settlement,
       recovered,
+      recovery,
     }) => {
       const result = await runtimeRepository.persistRealtimeQuote({
         workspaceId: target.workspaceId,
@@ -793,10 +797,12 @@ async function processRealtimePosition(
         quotePrice: String(markPrice),
         quoteAt: through,
         processedPrice: { eventId: event.id, streamId, throughAt: through },
+        ...(recovery ? { recoveryEvidence: recovery } : {}),
         factors: {
           source: recovered ? "ohlc-recovery" : "durable-price-events",
           lastEventId: String(event.id),
           recovered,
+          ...(recovery ? { recovery } : {}),
         },
         action: settlement
           ? { kind: "close", settlement: serializeSettlement(settlement) }
@@ -1033,6 +1039,7 @@ async function processRuntimeTarget(
   target: Awaited<ReturnType<RuntimeRepository["listActiveTargets"]>>[number],
 ) {
   if (target.status !== "RUNNING" && target.status !== "PAUSED") return;
+  const expectedDeploymentStatus = target.status;
   const executionRun = target.executionRuns[0];
   if (!executionRun) return;
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
@@ -1043,8 +1050,8 @@ async function processRuntimeTarget(
   );
   const candleLimit = minimumExecutionCandleCount(strategyConfig);
 
-  for (const symbol of [...strategyConfig.universe.symbols].sort()) {
-    try {
+  await processRuntimeSymbols([...strategyConfig.universe.symbols].sort(), {
+    process: async (symbol) => {
       let state = await runtimeRepository.getCycleState({
         workspaceId: target.workspaceId,
         exchangeAccountId: target.exchangeAccountId,
@@ -1055,7 +1062,7 @@ async function processRuntimeTarget(
         candleLimit,
       });
       if (!state.instrument?.enabled || state.instrument.status !== "Trading") {
-        if (target.status === "PAUSED") continue;
+        if (target.status === "PAUSED") return;
         throw new RuntimeWorkerError(
           "RUNTIME_INSTRUMENT_UNAVAILABLE",
           `${symbol} недоступен для новых сигналов: статус ${state.instrument?.status ?? "Unknown"}`,
@@ -1154,8 +1161,7 @@ async function processRuntimeTarget(
           `Для ${symbol} недостаточно завершённых свечей: ${state.candles.length}/${candleLimit}`,
         );
       }
-      if (state.cursor?.lastEvaluatedAt && state.cursor.lastEvaluatedAt >= latest.openTime)
-        continue;
+      if (state.cursor?.lastEvaluatedAt && state.cursor.lastEvaluatedAt >= latest.openTime) return;
 
       const executionCandles = state.candles.map((candle) => ({
         symbol: candle.symbol,
@@ -1217,9 +1223,9 @@ async function processRuntimeTarget(
 
       if (existingPosition && state.position) {
         if (!state.position.managedThroughAt || state.position.managedThroughAt < candleClosedAt)
-          continue;
+          return;
         const freshQuote = getFreshQuote(symbol);
-        if (!freshQuote || state.position.priceStreamId !== freshQuote.streamId) continue;
+        if (!freshQuote || state.position.priceStreamId !== freshQuote.streamId) return;
         const settlement =
           candles
             .filter(
@@ -1318,7 +1324,6 @@ async function processRuntimeTarget(
                 executionQuote: realtimeQuoteFactors(quote!),
               },
             };
-            positionRemainsOpen = true;
           } else {
             pendingSignalAfter = createRealtimePendingSignal(
               signal,
@@ -1444,7 +1449,7 @@ async function processRuntimeTarget(
         symbol,
         interval,
         candleAt: candle.openTime,
-        expectedDeploymentStatus: target.status,
+        expectedDeploymentStatus,
         expectedPositionId: state.position?.id ?? null,
         expectedPositionVersion: state.position?.runtimeVersion ?? null,
         ...(entryPriceEventId === undefined ? {} : { entryPriceEventId }),
@@ -1478,8 +1483,15 @@ async function processRuntimeTarget(
           "Runtime candle processed",
         );
       }
-    } catch (error) {
-      if (error instanceof RuntimeStateConflictError) return;
+    },
+    isConflict: (error) => error instanceof RuntimeStateConflictError,
+    onConflict: (symbol, attempt, exhausted) => {
+      logger.debug(
+        { deploymentId: target.id, executionRunId: executionRun.id, symbol, attempt, exhausted },
+        "Runtime candle state conflict",
+      );
+    },
+    onFailure: async (symbol, error) => {
       const failure = runtimeFailure(error);
       await runtimeRepository.recordFailure({
         workspaceId: target.workspaceId,
@@ -1492,8 +1504,8 @@ async function processRuntimeTarget(
         { err: error, deploymentId: target.id, executionRunId: executionRun.id, symbol },
         "Runtime symbol cycle failed",
       );
-    }
-  }
+    },
+  });
 }
 
 async function processValidationJob(job: ClaimedValidationJob) {

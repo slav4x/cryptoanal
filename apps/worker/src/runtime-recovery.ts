@@ -14,6 +14,21 @@ import {
 
 export class RuntimeRecoveryIncompleteError extends Error {}
 
+export type RuntimeRecoveryEvidence = {
+  fromAt: string;
+  toAt: string;
+  source: "minute-ohlc";
+  quality: "complete-minutes" | "bounded-partial-minutes" | "ambiguous";
+  ambiguity: "partial-protection-touch" | "partial-protection-change" | "intrabar-order" | null;
+};
+
+export function runtimeRecoveryMinuteRange(since: Date, through: Date) {
+  return {
+    start: new Date(Math.floor(+since / 60_000) * 60_000),
+    end: new Date(+through - 1),
+  };
+}
+
 export function recoverRuntimeGap(input: {
   position: ExecutionPosition;
   since: Date;
@@ -22,9 +37,28 @@ export function recoverRuntimeGap(input: {
   signals: EnrichedExecutionCandle[];
   signalIntervalMs: number;
   config: ExecutionStrategyConfig;
-}): { position: ExecutionPosition; settlement: ExecutionSettlement | null } {
-  const from = Math.floor(input.since.getTime() / 60_000) * 60_000;
-  const to = Math.floor(input.quote.observedAt.getTime() / 60_000) * 60_000;
+}): {
+  position: ExecutionPosition;
+  settlement: ExecutionSettlement | null;
+  evidence: RuntimeRecoveryEvidence;
+} {
+  if (+input.quote.observedAt < +input.since)
+    throw new RuntimeRecoveryIncompleteError("Recovery quote precedes the managed interval");
+  const range = runtimeRecoveryMinuteRange(input.since, input.quote.observedAt);
+  const from = +range.start;
+  const to = Math.floor(+range.end / 60_000) * 60_000;
+  const evidence: RuntimeRecoveryEvidence = {
+    fromAt: input.since.toISOString(),
+    toAt: input.quote.observedAt.toISOString(),
+    source: "minute-ohlc",
+    quality:
+      +input.since % 60_000 === 0 && +input.quote.observedAt % 60_000 === 0
+        ? "complete-minutes"
+        : "bounded-partial-minutes",
+    ambiguity: null,
+  };
+  if (+input.quote.observedAt === +input.since)
+    return { position: input.position, settlement: null, evidence };
   const minutes = new Map(input.minutes.map((candle) => [candle.openTime.getTime(), candle]));
   for (let time = from; time <= to; time += 60_000) {
     const candle = minutes.get(time);
@@ -48,6 +82,9 @@ export function recoverRuntimeGap(input: {
     if (exit) {
       return {
         position,
+        evidence: complete
+          ? evidence
+          : { ...evidence, quality: "ambiguous", ambiguity: "partial-protection-touch" },
         settlement: complete
           ? { ...exit, closedAt: new Date(time + 60_000).toISOString() }
           : settleExecutionPosition(
@@ -64,12 +101,11 @@ export function recoverRuntimeGap(input: {
     // Do not adopt protection derived from a time range we cannot reconstruct.
     if (
       !complete &&
-      (updated.bestPrice !== position.bestPrice ||
-        updated.stopPrice !== position.stopPrice ||
-        updated.trailingPrice !== position.trailingPrice)
+      (updated.stopPrice !== position.stopPrice || updated.trailingPrice !== position.trailingPrice)
     ) {
       return {
         position,
+        evidence: { ...evidence, quality: "ambiguous", ambiguity: "partial-protection-change" },
         settlement: settleExecutionPosition(
           position,
           input.quote.price,
@@ -93,6 +129,7 @@ export function recoverRuntimeGap(input: {
     ) {
       return {
         position: updated,
+        evidence: { ...evidence, quality: "ambiguous", ambiguity: "intrabar-order" },
         settlement: settleExecutionPosition(
           updated,
           input.quote.price,
@@ -102,7 +139,9 @@ export function recoverRuntimeGap(input: {
         ),
       };
     }
-    position = updated;
+    // A harmless partial-bar best price is still outside the confirmed interval.
+    // Keep the prior state; only complete minutes may update protection or best price.
+    if (complete) position = updated;
     for (const signal of input.signals) {
       const closedAt = signal.openTime.getTime() + input.signalIntervalMs;
       if (
@@ -117,10 +156,10 @@ export function recoverRuntimeGap(input: {
         input.config,
         new Date(closedAt),
       );
-      if (settlement) return { position, settlement };
+      if (settlement) return { position, settlement, evidence };
     }
   }
-  return { position, settlement: null };
+  return { position, settlement: null, evidence };
 }
 
 function asPriceCandle(candle: ExecutionCandle): EnrichedExecutionCandle {

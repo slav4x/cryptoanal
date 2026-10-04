@@ -817,6 +817,22 @@ trailing освобождает budget, long/short floating loss учитыва�
 Полная parity runtime/validation, qtyStep/округление и дневная модель остаются открытыми.
 Typecheck, lint, format check и research:verify прошли. Тестовая база удалена.
 
+**Применение третьего этапа E07 — 5 октября 2026, Новосибирск:** Docker build
+API/worker прошёл. Backup `var/backups/cryptoanal-2026-10-04T18-20-01-504Z.dump`
+(243 732 279 байт, SHA-256
+`83f14030d1087f0a89744ba627930d51cf252b456bbf12be15739f0a3c28cf08`)
+успешно восстановлен отдельно: 47 таблиц, 32 миграции. API/worker обновлены из `6ee5ad9`;
+SHA-256 runtime-risk и execution-risk в worker совпадают с checkout:
+`d03e8bc921b89799df3ee2de64f89d5b25a968003c1955051ba0b76d49a7fb58`,
+`10d90caebd7a93feaf873989d33ff8a07aa4e8450c92b1b54f7a08d7afb5559a`.
+На 01:24:06 API/dashboard healthy, БД доступна, public stream подключён;
+29 позиций, все 34 deployment RUNNING/DRY_RUN, cursor failures отсутствуют.
+Max managed age 8.208 с, max интервал от managedThrough до latest event 1.099 с;
+это одиночный срез, не p95 приёмка. Ошибок/предупреждений запуска в логах нет.
+Новый отказ по stop budget в рабочей базе не был отдельно воспроизведён:
+конкуренция/отказ/уменьшение quantity доказаны тестами отдельной БД.
+Тестовая база и restore container удалены; существующие позиции не пересайзились.
+
 ## E08 · P1 · Исправить временную модель OHLC-исполнения
 
 **Подтверждено:** limit fill использует low/high всей свечи, затем выход снова

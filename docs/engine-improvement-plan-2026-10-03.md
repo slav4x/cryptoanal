@@ -247,6 +247,21 @@ Signal lag, recovery age, CAS conflicts и p95/сбои ещё не измере
 Полный `runtime:verify` — 188/188 без пропусков, с отдельной PostgreSQL и 32 миграциями.
 Typecheck, lint, format check и research:verify прошли; golden результат прежний.
 
+**Применение метрик E02 — 5 октября 2026, Новосибирск:** API/worker/dashboard
+собраны и обновлены из `663a642`. Backup
+`var/backups/cryptoanal-2026-10-04T18-03-47-165Z.dump` (243 476 997 байт, SHA-256
+`3fd5be9114c149b156a87664ba6f2ee465845ac9141ac7eddebb3c99bc950548`)
+восстановлен отдельно: 47 таблиц, 32 миграции. SHA-256 health-monitor в worker совпадает
+с checkout: `6cd06427d56e3b2e9dbb4e145b4b07f2fb05bb1bb230a075d38b75c3487b2a1d`.
+API/dashboard healthy, БД доступна, stream подключён; предупреждений/ошибок запуска нет.
+На 01:07:35 функции новой версии прочитали рабочую БД: 29 позиций,
+max source age 2.925 с, max processing interval 10.151 с, oldest pending age 0.087 с,
+всего 25 ожидающих событий. Это показывает различие интервала timestamps и реального
+ожидания уже полученного события; нагрузочная p95 не измерена. Все 34 deployment
+RUNNING/DRY_RUN, cursor failures отсутствуют. Dashboard отдаёт обновлённый lazy chunk
+HealthPage с новыми подписями; browser/render проверка не выполнялась.
+Тестовая база и restore container удалены.
+
 ## E03 · P1 · Установить единый порядок сигналов и закрытий
 
 **Подтверждено по коду:** price loop может обработать события после закрытия свечи

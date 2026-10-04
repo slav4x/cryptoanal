@@ -16,6 +16,20 @@ export type RuntimeProgress = {
   pendingEventsCapped: boolean;
 };
 
+export function runtimeProgressMetrics(progress: RuntimeProgress, now: Date) {
+  const elapsed = (end: Date | null, start: Date | null) =>
+    end && start ? Math.max(0, +end - +start) : null;
+  return {
+    sourceAgeMs: elapsed(now, progress.latestEventAt),
+    ingestionLagMs: elapsed(progress.latestReceivedAt, progress.latestEventAt),
+    processingLagMs:
+      progress.latestEventAt && progress.managedThroughAt && progress.pendingEvents === 0
+        ? 0
+        : elapsed(progress.latestEventAt, progress.managedThroughAt),
+    oldestPendingAgeMs: elapsed(now, progress.oldestPendingReceivedAt),
+  };
+}
+
 export type HealthCondition = {
   fingerprint: string;
   domain: string;
@@ -245,6 +259,7 @@ export function evaluateHealth(input: HealthMonitorInput) {
   for (const progress of input.runtimeProgress) {
     const metadata = {
       symbol: progress.symbol,
+      ...runtimeProgressMetrics(progress, input.now),
       pendingEvents: progress.pendingEvents,
       pendingEventsCapped: progress.pendingEventsCapped,
       managedThroughAt: progress.managedThroughAt?.toISOString() ?? null,

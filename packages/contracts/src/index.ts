@@ -1219,6 +1219,10 @@ export const healthDashboardSchema = z.object({
         streamMatches: z.boolean().nullable(),
         pendingEvents: z.number().int().nonnegative(),
         pendingEventsCapped: z.boolean(),
+        sourceAgeMs: z.number().nonnegative().nullable().default(null),
+        ingestionLagMs: z.number().nonnegative().nullable().default(null),
+        processingLagMs: z.number().nonnegative().nullable().default(null),
+        oldestPendingAgeMs: z.number().nonnegative().nullable().default(null),
       }),
     )
     .default([]),

@@ -3,6 +3,7 @@ import {
   buildExperimentRanking,
   buildPerformanceAnalytics,
   evaluateHealth,
+  runtimeProgressMetrics,
   canTransitionStrategyStatus,
   executionEngineVersion,
   evaluateStrategyLifecycle,
@@ -2233,6 +2234,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           watchdogLastSeenAt: signals.watchdogLastSeenAt?.toISOString() ?? null,
           runtimeProgress: signals.runtimeProgress.map((progress) => ({
             ...progress,
+            ...runtimeProgressMetrics(progress, now),
             managedThroughAt: progress.managedThroughAt?.toISOString() ?? null,
             latestEventAt: progress.latestEventAt?.toISOString() ?? null,
             latestReceivedAt: progress.latestReceivedAt?.toISOString() ?? null,

@@ -4,6 +4,7 @@ import fixture from "../research/golden/v1/momentum-reversal.json";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import {
   evaluateHealth,
+  runtimeProgressMetrics,
   openExecutionPositionAtQuote,
   type HealthMonitorInput,
 } from "../packages/application/src/index";
@@ -375,4 +376,69 @@ test("unprocessed stream change is critical even before a backlog timeout", () =
       (condition) => condition.code === "RUNTIME_POSITION_RECOVERY_PENDING",
     ),
   );
+});
+
+test("runtime timing separates quiet source, ingestion and unprocessed journal", () => {
+  const input = healthInput();
+  const progress = input.runtimeProgress[0]!;
+  assert.deepEqual(runtimeProgressMetrics(progress, at), {
+    sourceAgeMs: 0,
+    ingestionLagMs: 0,
+    processingLagMs: 120000,
+    oldestPendingAgeMs: 30000,
+  });
+  progress.latestEventAt = new Date(+at - 60000);
+  progress.latestReceivedAt = new Date(+at - 55000);
+  progress.managedThroughAt = progress.latestEventAt;
+  progress.pendingEvents = 0;
+  progress.oldestPendingReceivedAt = null;
+  assert.deepEqual(runtimeProgressMetrics(progress, at), {
+    sourceAgeMs: 60000,
+    ingestionLagMs: 5000,
+    processingLagMs: 0,
+    oldestPendingAgeMs: null,
+  });
+  assert.ok(
+    !evaluateHealth(input).conditions.some(
+      (condition) => condition.code === "RUNTIME_POSITION_BACKLOG",
+    ),
+  );
+  progress.pendingEvents = 1;
+  progress.oldestPendingReceivedAt = new Date(+at - 15000);
+  progress.managedThroughAt = new Date(+progress.latestEventAt - 10000);
+  const incident = evaluateHealth(input).conditions.find(
+    (condition) => condition.code === "RUNTIME_POSITION_BACKLOG",
+  )!;
+  assert.equal(incident.metadata.sourceAgeMs, 60000);
+  assert.equal(incident.metadata.ingestionLagMs, 5000);
+  assert.equal(incident.metadata.processingLagMs, 10000);
+  assert.equal(incident.metadata.oldestPendingAgeMs, 15000);
+});
+
+test("missing runtime timestamps stay unknown; out-of-order times cannot produce negative delays", () => {
+  const progress = healthInput().runtimeProgress[0]!;
+  progress.latestEventAt = null;
+  progress.latestReceivedAt = null;
+  progress.managedThroughAt = null;
+  progress.oldestPendingReceivedAt = null;
+  assert.deepEqual(runtimeProgressMetrics(progress, at), {
+    sourceAgeMs: null,
+    ingestionLagMs: null,
+    processingLagMs: null,
+    oldestPendingAgeMs: null,
+  });
+  progress.pendingEvents = 0;
+  progress.latestEventAt = at;
+  assert.equal(runtimeProgressMetrics(progress, at).processingLagMs, null);
+  progress.pendingEvents = 2;
+  progress.latestEventAt = new Date(+at + 1000);
+  progress.latestReceivedAt = at;
+  progress.managedThroughAt = new Date(+at + 2000);
+  progress.oldestPendingReceivedAt = new Date(+at + 1000);
+  assert.deepEqual(runtimeProgressMetrics(progress, at), {
+    sourceAgeMs: 0,
+    ingestionLagMs: 0,
+    processingLagMs: 0,
+    oldestPendingAgeMs: 0,
+  });
 });

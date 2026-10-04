@@ -115,7 +115,8 @@ export default function HealthPage() {
         <CardHeader className="border-b">
           <CardTitle>Сопровождение позиций</CardTitle>
           <CardDescription>
-            Свежесть источника и очередь цен, которые ещё не обработаны.
+            Возраст цены, задержка её получения и отставание от уже полученных цен. Тихий рынок не
+            означает задержку обработки.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0 pb-0">
@@ -123,7 +124,7 @@ export default function HealthPage() {
             <p className="px-4 py-8 text-sm text-muted-foreground">Открытых позиций нет.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[600px] text-left text-[13px]">
+              <table className="w-full min-w-[900px] text-left text-[13px]">
                 <thead>
                   <tr className="text-xs text-muted-foreground">
                     <th scope="col" className="px-4 py-3">
@@ -131,6 +132,15 @@ export default function HealthPage() {
                     </th>
                     <th scope="col" className="px-4 py-3">
                       Последняя цена
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Возраст цены
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Получение цены
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Отставание позиции
                     </th>
                     <th scope="col" className="px-4 py-3">
                       В очереди
@@ -153,13 +163,20 @@ export default function HealthPage() {
                           : "Нет данных"}
                       </td>
                       <td className="px-4 py-3 font-mono">
+                        {formatRuntimeDelay(progress.sourceAgeMs)}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {formatRuntimeDelay(progress.ingestionLagMs)}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {formatRuntimeDelay(progress.processingLagMs)}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
                         {progress.pendingEventsCapped ? "> " : ""}
                         {progress.pendingEvents}
                       </td>
                       <td className="px-4 py-3 font-mono">
-                        {progress.oldestPendingReceivedAt
-                          ? `${Math.max(0, Math.floor((Date.parse(data.checkedAt) - Date.parse(progress.oldestPendingReceivedAt)) / 1000))} с`
-                          : "—"}
+                        {formatRuntimeDelay(progress.oldestPendingAgeMs)}
                       </td>
                       <td className="px-4 py-3">
                         {progress.streamMatches === true
@@ -441,3 +458,7 @@ const overallLabels: Record<HealthDashboardDto["overallStatus"], string> = {
   degraded: "Отклонения",
   critical: "Критично",
 };
+
+function formatRuntimeDelay(milliseconds: number | null) {
+  return milliseconds === null ? "—" : `${(milliseconds / 1000).toFixed(1)} с`;
+}

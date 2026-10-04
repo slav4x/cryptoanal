@@ -172,7 +172,7 @@ function asPriceCandle(candle: ExecutionCandle): EnrichedExecutionCandle {
     rsi: null,
     previousRsi: null,
     atrPercent: null,
-    volume24h: 0,
+    volume24h: null,
     breakoutHigh: null,
     breakoutLow: null,
     meanReversionZScore: null,

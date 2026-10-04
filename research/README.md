@@ -26,6 +26,17 @@ versioned fixture с котировками и точным порядком с�
 - `--print` используется только для review рассчитанного результата:
   `pnpm research:verify -- --print`.
 
+## Изменение прогрева — 4 октября 2026
+
+Validation 0.5.0 и candle replay 1.1.0 запрещают входы до полного непрерывного 24h
+объёма. `momentum-reversal.json` (schema v1) использует dataset
+`momentum-reversal-with-continuous-24h-warmup@2`: добавлены 96 плоских 15m свечей
+перед исходными 28. Проверено сохранение исходных трёх сделок, их времён, комиссий
+и PnL 585.34513577. Обновлены hash, engine versions, candleCount (124) и equity samples;
+семантика сделок и параметры стратегии сохранены. Короткий набор без прогрева теперь
+даёт ноль сделок и отдельно проверяется runtime-тестом. Эта проверка не доказывает
+равенство EMA/RSI при разных начальных точках истории.
+
 ## Funding policy
 
 Funding имеет статус `disabled` (`cryptoanal-funding@disabled-v1`). Runtime сохраняет

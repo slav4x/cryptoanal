@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Новые сигналы всех семейств требуют полного непрерывного 24h объёма даже при нулевом
+  пороге; пропуск свечи сбрасывает прогрев, символы изолированы, дубли времени отклоняются.
+
 - Сигнальные выходы открытых позиций перенесены в последовательную обработку price journal:
   разворот перед поздним SL не теряется, одновременное касание защиты имеет приоритет.
 - Оба пути входа отклоняют котировку, полученную до доступности сигнальной истории;
@@ -202,6 +205,9 @@
 - Lease-based periodic Bybit credential verification with retry scheduling and health incidents.
 
 ### Changed
+
+- Версии validation 0.5.0 и candle replay 1.1.0 отражают новое правило прогрева;
+  momentum fixture дополнен 24h историей с сохранением трёх сделок и итогового PnL.
 
 - Docker host ports moved to the configurable high-port defaults `15173` (dashboard),
   `13100` (API) and `15432` (PostgreSQL), while internal service ports remain unchanged.

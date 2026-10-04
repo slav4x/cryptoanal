@@ -4,6 +4,7 @@ import {
   decisionContextSchemaVersion,
   decisionFeatureSetVersion,
   enrichExecutionCandles,
+  executionIndicatorVersion,
   evaluateHealth,
   settleExecutionPosition,
   executionUnrealizedPnl,
@@ -2035,7 +2036,7 @@ function runtimeFactors(
     emaSlow: number | null;
     rsi: number | null;
     atrPercent: number | null;
-    volume24h: number;
+    volume24h: number | null;
     breakoutHigh: number | null;
     breakoutLow: number | null;
     meanReversionZScore: number | null;
@@ -2053,6 +2054,7 @@ function runtimeFactors(
       session: getExecutionTradingSession(candle.openTime),
     },
     indicators: {
+      version: executionIndicatorVersion,
       emaFast: candle.emaFast,
       emaSlow: candle.emaSlow,
       rsi: candle.rsi,

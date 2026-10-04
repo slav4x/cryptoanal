@@ -58,7 +58,7 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
   rsi: number | null;
   previousRsi: number | null;
   atrPercent: number | null;
-  volume24h: number;
+  volume24h: number | null;
   breakoutHigh: number | null;
   breakoutLow: number | null;
   meanReversionZScore: number | null;
@@ -130,6 +130,38 @@ export function enrichExecutionCandles(
   const ordered = [...candles].sort(
     (left, right) => left.openTime.getTime() - right.openTime.getTime(),
   );
+  const bySymbol = new Map<string, ExecutionCandle[]>();
+  for (const candle of ordered) {
+    const history = bySymbol.get(candle.symbol) ?? [];
+    history.push(candle);
+    bySymbol.set(candle.symbol, history);
+  }
+  const result: EnrichedExecutionCandle[] = [];
+  const intervalMs = timeframeMinutes[config.universe.timeframe] * 60_000;
+  for (const history of bySymbol.values()) {
+    let start = 0;
+    for (let index = 1; index <= history.length; index += 1) {
+      if (index < history.length) {
+        const distance =
+          history[index]!.openTime.getTime() - history[index - 1]!.openTime.getTime();
+        if (distance === 0) throw new Error("Duplicate execution candle");
+        if (distance === intervalMs) continue;
+      }
+      for (const candle of enrichContinuousCandles(history.slice(start, index), config)) {
+        result.push(candle);
+      }
+      start = index;
+    }
+  }
+  return result.sort((left, right) => left.openTime.getTime() - right.openTime.getTime());
+}
+
+export const executionIndicatorVersion = "cryptoanal-indicators@1.0.0";
+
+function enrichContinuousCandles(
+  ordered: ExecutionCandle[],
+  config: ExecutionStrategyConfig,
+): EnrichedExecutionCandle[] {
   const closes = ordered.map((candle) => candle.close);
   const fast = emaSeries(closes, config.signal.emaFastPeriod);
   const slow = emaSeries(closes, config.signal.emaSlowPeriod);
@@ -168,7 +200,7 @@ export function enrichExecutionCandles(
       previousRsi: index > 0 ? (rsi[index - 1] ?? null) : null,
       atrPercent:
         atr[index] === null || candle.close === 0 ? null : (atr[index]! / candle.close) * 100,
-      volume24h: rollingVolume,
+      volume24h: index + 1 >= volumeBars ? rollingVolume : null,
       breakoutHigh: breakoutHigh[index] ?? null,
       breakoutLow: breakoutLow[index] ?? null,
       meanReversionZScore: meanReversionZScore[index] ?? null,
@@ -707,7 +739,9 @@ export function getTradingDateKey(date: Date, timezone: string): string {
 
 function canSignal(candle: EnrichedExecutionCandle, config: ExecutionStrategyConfig): boolean {
   if (candle.atrPercent === null) return false;
-  if (candle.volume24h < config.filters.minimumVolume24hUsdt) return false;
+  if (candle.volume24h === null || candle.volume24h < config.filters.minimumVolume24hUsdt) {
+    return false;
+  }
   if (
     candle.atrPercent < config.filters.minimumAtrPercent ||
     candle.atrPercent > config.filters.maximumAtrPercent

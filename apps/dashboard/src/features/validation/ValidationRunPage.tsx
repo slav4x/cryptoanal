@@ -156,7 +156,10 @@ function CompletedRun({
           <CardHeader className="border-b">
             <CardTitle>Капитал и просадка</CardTitle>
             <CardDescription>
-              Daily sampling · {metrics.candleCount.toLocaleString("ru-RU")} свечей
+              Суточные точки · {metrics.candleCount.toLocaleString("ru-RU")} свечей
+              {metrics.evaluation ? " в оценке" : ""}
+              {metrics.evaluation &&
+                ` · ${metrics.evaluation.warmupCandleCount.toLocaleString("ru-RU")} для прогрева и training`}
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-4">

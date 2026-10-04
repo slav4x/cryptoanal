@@ -1727,6 +1727,15 @@ async function processValidationJob(job: ClaimedValidationJob) {
     const result = runValidationEngine({
       config: strategyConfig,
       candles: dataset.candles,
+      evaluationPeriod: {
+        startsAt: new Date(`${executionInput.dataset.startDate}T00:00:00.000Z`),
+        endsAt: new Date(
+          Math.min(
+            +new Date(`${executionInput.dataset.endDate}T23:59:59.999Z`),
+            +dataset.endsAt + timeframeMinutes[strategyConfig.universe.timeframe] * 60_000 - 1,
+          ),
+        ),
+      },
       initialCapital: Number(executionInput.initialCapital),
       kind: executionInput.kind,
       walkForward: executionInput.walkForward,
@@ -1868,6 +1877,9 @@ async function prepareValidationDataset(
   const interval = bybitIntervals[executionInput.dataset.timeframe];
   const intervalMs = timeframeMinutes[executionInput.dataset.timeframe] * 60_000;
   const startTime = new Date(`${executionInput.dataset.startDate}T00:00:00.000Z`);
+  const historyStart = new Date(
+    +startTime - minimumExecutionCandleCount(strategyConfig) * intervalMs,
+  );
   const requestedEnd = new Date(`${executionInput.dataset.endDate}T23:59:59.999Z`);
   const lastCompleteCandleEnd = Math.floor(Date.now() / intervalMs) * intervalMs - 1;
   const endTime = new Date(Math.min(requestedEnd.getTime(), lastCompleteCandleEnd));
@@ -1879,7 +1891,7 @@ async function prepareValidationDataset(
   }
 
   const estimatedCandles =
-    Math.ceil((endTime.getTime() - startTime.getTime()) / intervalMs) * symbols.length;
+    Math.ceil((endTime.getTime() - historyStart.getTime()) / intervalMs) * symbols.length;
   if (estimatedCandles > maximumDatasetCandles) {
     throw new ValidationWorkerError(
       "DATASET_TOO_LARGE",
@@ -1891,7 +1903,12 @@ async function prepareValidationDataset(
   for (const [index, symbol] of symbols.entries()) {
     let marketCandles;
     try {
-      marketCandles = await marketClient.getLinearKlinesRange(symbol, interval, startTime, endTime);
+      marketCandles = await marketClient.getLinearKlinesRange(
+        symbol,
+        interval,
+        historyStart,
+        endTime,
+      );
     } catch (error) {
       throw new ValidationWorkerError(
         "DATASET_FETCH_FAILED",

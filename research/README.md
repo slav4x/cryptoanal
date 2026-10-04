@@ -56,7 +56,7 @@ snapshot из execution context. ID/hash и версия source validation со�
 snapshot плюс последующие свечи даёт одинаковые признаки с непрерывным расчётом всей
 истории; проверены все четыре семейства и JSON restart. Legacy run без snapshot или с уже
 сохранённым legacy checkpoint остаётся явно отделённым и не получает выдуманную историю.
-Walk-forward 0.7.0 один раз считает индикаторы полного dataset и выбирает признаки для
+Walk-forward 0.8.0 один раз считает индикаторы полного dataset и выбирает признаки для
 каждого окна. Контрольный momentum fixture сохранил dataset, решения, сделки и метрики;
 обновлена только версия validation engine. Исторические результаты source validation
 0.2/0.3/0.4 не пересчитываются; новая версия seed не означает нового подтверждения их PnL.
@@ -79,3 +79,9 @@ Validation, Analytics и Experiments возвращают общий provenance-
 
 Для смешанной runtime-выборки engine/config помечаются как `mixed`/`null`; это запрещает
 выдавать агрегат за результат одной неизменяемой конфигурации.
+
+Validation 0.8.0 отделяет прогрев от оценки: контрольный набор сохраняет 124 исходные свечи,
+но metrics.candleCount = 26, warmupCandleCount = 98. Equity samples начинаются после прогрева;
+три сделки, комиссии, net PnL 585.34513577, dataset hash и runtime decisions не изменены.
+Новые UI validation загружают прогрев до выбранной даты и закрепляют его в snapshot.
+Walk-forward считает только полные тестовые окна, без training и неиспользованного остатка.

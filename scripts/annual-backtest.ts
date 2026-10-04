@@ -1,6 +1,10 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
-import { runValidationEngine, validationEngineVersion } from "../packages/application/src/index";
+import {
+  runValidationEngine,
+  validationEngineVersion,
+  minimumExecutionCandleCount,
+} from "../packages/application/src/index";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { BybitPublicMarketClient } from "../packages/exchange-bybit/src/index";
 import { createPrismaClient } from "../packages/persistence/src/index";
@@ -38,6 +42,7 @@ try {
   });
   if (strategies.length === 0) throw new Error("No deployed strategies found");
 
+  const warmupBars = new Map<string, number>();
   const required = new Map<keyof typeof intervalByTimeframe, Set<string>>();
   for (const strategy of strategies) {
     const config = strategyConfigSchema.parse(strategy.activeVersion?.config);
@@ -45,6 +50,10 @@ try {
     if (!(timeframe in intervalByTimeframe)) {
       throw new Error(`${strategy.name}: unsupported timeframe ${timeframe}`);
     }
+    warmupBars.set(
+      timeframe,
+      Math.max(warmupBars.get(timeframe) ?? 0, minimumExecutionCandleCount(config)),
+    );
     const symbols = required.get(timeframe as keyof typeof intervalByTimeframe) ?? new Set();
     for (const symbol of config.universe.symbols) symbols.add(symbol);
     required.set(timeframe as keyof typeof intervalByTimeframe, symbols);
@@ -53,13 +62,16 @@ try {
   const datasets = new Map<string, ValidationCandle[]>();
   const sources = new Map<string, string>();
   for (const [timeframe, symbols] of required) {
+    const historyStart = new Date(
+      +start - warmupBars.get(timeframe)! * minutesByTimeframe[timeframe] * 60_000,
+    );
     if (timeframe === "15m") {
       for (const symbol of [...symbols].sort()) {
         process.stderr.write(`Fetching ${symbol} ${timeframe} year from Bybit...\n`);
         const candles = await marketClient.getLinearKlinesRange(
           symbol,
           intervalByTimeframe[timeframe],
-          start,
+          historyStart,
           new Date(endExclusive.getTime() - 1),
         );
         const normalized = candles.map((candle) => ({
@@ -71,7 +83,7 @@ try {
           close: Number(candle.close),
           turnover: Number(candle.turnover),
         }));
-        assertComplete(symbol, timeframe, normalized);
+        assertComplete(symbol, timeframe, normalized, historyStart);
         datasets.set(`${timeframe}:${symbol}`, normalized);
         sources.set(`${timeframe}:${symbol}`, "bybit-public-linear-klines:fetched");
       }
@@ -83,7 +95,7 @@ try {
         workspaceId,
         timeframe,
         source: "bybit-public-linear-klines",
-        startsAt: { lte: start },
+        startsAt: { lte: historyStart },
         endsAt: { gte: new Date(endExclusive.getTime() - minutesByTimeframe[timeframe] * 60_000) },
       },
       orderBy: { candleCount: "desc" },
@@ -100,7 +112,7 @@ try {
       where: {
         datasetSnapshotId: snapshot.id,
         symbol: { in: [...symbols] },
-        openTime: { gte: start, lt: endExclusive },
+        openTime: { gte: historyStart, lt: endExclusive },
       },
       orderBy: [{ symbol: "asc" }, { openTime: "asc" }],
       select: {
@@ -125,7 +137,7 @@ try {
           close: Number(row.close),
           turnover: Number(row.turnover),
         }));
-      assertComplete(symbol, timeframe, candles);
+      assertComplete(symbol, timeframe, candles, historyStart);
       datasets.set(`${timeframe}:${symbol}`, candles);
       sources.set(`${timeframe}:${symbol}`, `dataset-snapshot:${snapshot.contentHash}`);
     }
@@ -144,6 +156,7 @@ try {
     const result = runValidationEngine({
       config,
       candles,
+      evaluationPeriod: { startsAt: start, endsAt: new Date(+endExclusive - 1) },
       initialCapital,
       kind: "backtest",
       walkForward: null,
@@ -209,14 +222,15 @@ function assertComplete(
   symbol: string,
   timeframe: keyof typeof minutesByTimeframe,
   candles: ValidationCandle[],
+  historyStart: Date,
 ) {
   const stepMs = minutesByTimeframe[timeframe] * 60_000;
-  const expected = (endExclusive.getTime() - start.getTime()) / stepMs;
+  const expected = (endExclusive.getTime() - historyStart.getTime()) / stepMs;
   if (candles.length !== expected) {
     throw new Error(`${symbol} ${timeframe}: expected ${expected} candles, got ${candles.length}`);
   }
   for (const [index, candle] of candles.entries()) {
-    if (candle.openTime.getTime() !== start.getTime() + index * stepMs) {
+    if (candle.openTime.getTime() !== historyStart.getTime() + index * stepMs) {
       throw new Error(`${symbol} ${timeframe}: candle gap at index ${index}`);
     }
   }

@@ -886,6 +886,15 @@ export const validationMetricsSchema = z.object({
   expectancy: z.number(),
   totalFees: z.number().nonnegative(),
   candleCount: z.number().int().nonnegative(),
+  evaluation: z
+    .object({
+      startsAt: z.iso.datetime().nullable(),
+      endsAt: z.iso.datetime().nullable(),
+      datasetCandleCount: z.number().int().nonnegative(),
+      warmupCandleCount: z.number().int().nonnegative(),
+      excludedCandleCount: z.number().int().nonnegative(),
+    })
+    .optional(),
   windows: z.number().int().nonnegative(),
   perSymbol: z.record(
     z.string(),
@@ -904,6 +913,7 @@ export const validationMetricsSchema = z.object({
 });
 
 export const validationMetricsSummarySchema = validationMetricsSchema.pick({
+  evaluation: true,
   trades: true,
   wins: true,
   losses: true,

@@ -1,5 +1,6 @@
 import {
   enrichExecutionCandles,
+  minimumExecutionCandleCount,
   evaluateExecutionExit,
   getExecutionSignal,
   getTradingDateKey,
@@ -15,7 +16,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.7.0";
+export const validationEngineVersion = "cryptoanal-validation@0.8.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -26,6 +27,7 @@ export type ValidationEngineInput = {
   initialCapital: number;
   kind: "backtest" | "walk-forward";
   walkForward: { trainingDays: number; testDays: number } | null;
+  evaluationPeriod?: { startsAt: Date; endsAt: Date };
 };
 
 export type ValidationTrade = {
@@ -53,6 +55,13 @@ export type ValidationMetrics = {
   expectancy: number;
   totalFees: number;
   candleCount: number;
+  evaluation: {
+    startsAt: string | null;
+    endsAt: string | null;
+    datasetCandleCount: number;
+    warmupCandleCount: number;
+    excludedCandleCount: number;
+  };
   windows: number;
   perSymbol: Record<string, { trades: number; netPnl: number }>;
   equitySeries: Array<{ observedAt: string; equity: number }>;
@@ -74,26 +83,106 @@ export function runValidationEngine(input: ValidationEngineInput): ValidationEng
       gateReasons: ["В наборе данных нет свечей"],
     };
   }
+  const bounds = validationEvaluationBounds(input);
   if (input.kind === "walk-forward" && input.walkForward) {
     return runWalkForward(input, input.walkForward);
   }
-  return buildResult(runBacktest(input, null, null), input.initialCapital, input.candles.length, 1);
+  assertEvaluationWarmup(input, bounds.startsAt);
+  const evaluation = describeEvaluation(input, [bounds]);
+  return buildResult(
+    runBacktest(input, bounds.startsAt, bounds.endsAt),
+    input.initialCapital,
+    evaluation,
+    1,
+  );
+}
+
+function validationEvaluationBounds(input: ValidationEngineInput, excludeWarmup = true) {
+  const times = input.candles.map((candle) => +candle.openTime);
+  const intervalMs = timeframeMinutes[input.config.universe.timeframe] * 60_000;
+  const startsAt = input.evaluationPeriod
+    ? +input.evaluationPeriod.startsAt
+    : times.reduce((minimum, time) => Math.min(minimum, time), Infinity) +
+      (excludeWarmup ? minimumExecutionCandleCount(input.config) * intervalMs : 0);
+  const availableEnd =
+    times.reduce((maximum, time) => Math.max(maximum, time), -Infinity) + intervalMs - 1;
+  const endsAt = input.evaluationPeriod
+    ? Math.min(+input.evaluationPeriod.endsAt, availableEnd)
+    : availableEnd;
+  if (
+    !Number.isFinite(startsAt) ||
+    !Number.isFinite(endsAt) ||
+    (input.evaluationPeriod && startsAt > endsAt)
+  )
+    throw new Error("Invalid validation evaluation period");
+  return { startsAt, endsAt };
+}
+
+function assertEvaluationWarmup(input: ValidationEngineInput, startsAt: number) {
+  if (!input.evaluationPeriod) return;
+  const count = minimumExecutionCandleCount(input.config);
+  const intervalMs = timeframeMinutes[input.config.universe.timeframe] * 60_000;
+  for (const symbol of new Set(input.candles.map((candle) => candle.symbol))) {
+    const prefix = new Set(
+      input.candles
+        .filter((candle) => candle.symbol === symbol && +candle.openTime < startsAt)
+        .map((candle) => +candle.openTime),
+    );
+    for (let offset = 1; offset <= count; offset++) {
+      if (!prefix.has(startsAt - offset * intervalMs))
+        throw new Error(`Incomplete evaluation warmup for ${symbol}`);
+    }
+  }
+}
+
+function describeEvaluation(
+  input: ValidationEngineInput,
+  ranges: Array<{ startsAt: number; endsAt: number }>,
+) {
+  const evaluated = input.candles.filter((candle) =>
+    ranges.some((range) => +candle.openTime >= range.startsAt && +candle.openTime <= range.endsAt),
+  );
+  const times = evaluated.map((candle) => +candle.openTime);
+  const startsAt = times.length
+    ? times.reduce((minimum, time) => Math.min(minimum, time), Infinity)
+    : null;
+  const endsAt = times.length
+    ? times.reduce((maximum, time) => Math.max(maximum, time), -Infinity)
+    : null;
+  const warmupCandleCount = ranges.length
+    ? input.candles.filter((candle) => +candle.openTime < ranges[0]!.startsAt).length
+    : 0;
+  return {
+    candleCount: evaluated.length,
+    metadata: {
+      startsAt: startsAt === null ? null : new Date(startsAt).toISOString(),
+      endsAt:
+        endsAt === null
+          ? null
+          : new Date(
+              endsAt + timeframeMinutes[input.config.universe.timeframe] * 60_000,
+            ).toISOString(),
+      datasetCandleCount: input.candles.length,
+      warmupCandleCount,
+      excludedCandleCount: input.candles.length - evaluated.length - warmupCandleCount,
+    },
+  };
 }
 
 function runWalkForward(
   input: ValidationEngineInput,
   windows: { trainingDays: number; testDays: number },
 ): ValidationEngineResult {
-  const { datasetStart, datasetEnd } = input.candles.reduce(
-    (bounds, candle) => {
-      const time = candle.openTime.getTime();
-      return {
-        datasetStart: Math.min(bounds.datasetStart, time),
-        datasetEnd: Math.max(bounds.datasetEnd, time),
-      };
-    },
-    { datasetStart: Number.POSITIVE_INFINITY, datasetEnd: Number.NEGATIVE_INFINITY },
-  );
+  if (
+    !Number.isFinite(windows.trainingDays) ||
+    !Number.isFinite(windows.testDays) ||
+    windows.trainingDays <= 0 ||
+    windows.testDays <= 0
+  )
+    throw new Error("Invalid walk-forward windows");
+  const bounds = validationEvaluationBounds(input, false);
+  const datasetStart = bounds.startsAt;
+  const datasetEnd = bounds.endsAt;
   const indicatorHistory = new Map<string, EnrichedExecutionCandle[]>();
   for (const candle of input.candles) {
     const history = indicatorHistory.get(candle.symbol) ?? [];
@@ -109,10 +198,13 @@ function runWalkForward(
   let windowStart = datasetStart;
   let windowCount = 0;
   let windowCapital = input.initialCapital;
+  const evaluatedRanges: Array<{ startsAt: number; endsAt: number }> = [];
 
-  while (windowStart + (windows.trainingDays + windows.testDays) * dayMs <= datasetEnd + dayMs) {
+  while (windowStart + (windows.trainingDays + windows.testDays) * dayMs <= datasetEnd + 1) {
     const testStart = windowStart + windows.trainingDays * dayMs;
     const testEnd = testStart + windows.testDays * dayMs - 1;
+    if (windowCount === 0) assertEvaluationWarmup(input, testStart);
+    evaluatedRanges.push({ startsAt: testStart, endsAt: testEnd });
     const windowCandles = input.candles.filter(
       (candle) => candle.openTime.getTime() >= windowStart && candle.openTime.getTime() <= testEnd,
     );
@@ -141,7 +233,7 @@ function runWalkForward(
   return buildResult(
     { trades, equitySeries: deduplicateEquity(equitySeries) },
     input.initialCapital,
-    input.candles.length,
+    describeEvaluation(input, evaluatedRanges),
     windowCount,
   );
 }
@@ -167,6 +259,14 @@ function runBacktest(
         ? shared.filter((candle) => times.has(+candle.openTime))
         : enrichExecutionCandles(candles, input.config),
     );
+  }
+
+  if (entryTo !== null) {
+    for (const [symbol, candles] of bySymbol)
+      bySymbol.set(
+        symbol,
+        candles.filter((candle) => +candle.openTime <= entryTo),
+      );
   }
 
   const groups = new Map<number, EnrichedExecutionCandle[]>();
@@ -243,7 +343,7 @@ function runBacktest(
     if (
       (entryFrom === null || time >= entryFrom) &&
       (entryTo === null || time <= entryTo) &&
-      (sampleIndex % equitySampleStep === 0 || sampleIndex === groups.size - 1)
+      sampleIndex % equitySampleStep === 0
     ) {
       const unrealized = candles.reduce((sum, candle) => {
         const position = positions.get(candle.symbol);
@@ -256,7 +356,7 @@ function runBacktest(
         equity: round(equity + unrealized),
       });
     }
-    sampleIndex += 1;
+    if (entryFrom === null || time >= entryFrom) sampleIndex += 1;
   }
 
   for (const [symbol, position] of positions) {
@@ -272,11 +372,8 @@ function runBacktest(
     trades.push(closed);
     equity += closed.netPnl;
   }
-  const lastTime = input.candles.reduce(
-    (latest, candle) => Math.max(latest, candle.openTime.getTime()),
-    Number.NEGATIVE_INFINITY,
-  );
-  if (Number.isFinite(lastTime)) {
+  const lastTime = [...groups.keys()].reduce((maximum, time) => Math.max(maximum, time), -Infinity);
+  if (Number.isFinite(lastTime) && (entryFrom === null || lastTime >= entryFrom)) {
     equitySeries.push({ observedAt: new Date(lastTime).toISOString(), equity: round(equity) });
   }
 
@@ -289,7 +386,7 @@ function buildResult(
     equitySeries: Array<{ observedAt: string; equity: number }>;
   },
   initialCapital: number,
-  candleCount: number,
+  evaluation: ReturnType<typeof describeEvaluation>,
   windows: number,
 ): ValidationEngineResult {
   const wins = simulation.trades.filter((trade) => trade.netPnl > 0);
@@ -320,7 +417,8 @@ function buildResult(
     profitFactor: profitFactor === null ? null : round(profitFactor),
     expectancy: simulation.trades.length ? round(netPnl / simulation.trades.length) : 0,
     totalFees: round(totalFees),
-    candleCount,
+    candleCount: evaluation.candleCount,
+    evaluation: evaluation.metadata,
     windows,
     perSymbol,
     equitySeries: simulation.equitySeries,
@@ -352,7 +450,14 @@ function emptyMetrics(candleCount: number): ValidationMetrics {
     profitFactor: 0,
     expectancy: 0,
     totalFees: 0,
-    candleCount,
+    candleCount: 0,
+    evaluation: {
+      startsAt: null,
+      endsAt: null,
+      datasetCandleCount: candleCount,
+      warmupCandleCount: 0,
+      excludedCandleCount: candleCount,
+    },
     windows: 0,
     perSymbol: {},
     equitySeries: [],

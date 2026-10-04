@@ -58,6 +58,8 @@ const serverConfigSchema = z
     RUNTIME_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
     RUNTIME_QUOTE_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),
     RUNTIME_QUOTE_MAX_AGE_MS: z.coerce.number().int().min(1_000).default(10_000),
+    RUNTIME_MARKET_ENTRY_TTL_MS: z.coerce.number().int().min(1_000).max(300_000).default(60_000),
+    RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS: z.coerce.number().nonnegative().max(10_000).default(50),
     RUNTIME_MARK_PERSIST_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
     RUNTIME_MAX_DAILY_LOSS_PERCENT: z.coerce.number().positive().max(100).default(10),
     RUNTIME_MAX_ACCOUNT_EXPOSURE_PERCENT: z.coerce.number().positive().max(100).default(100),

@@ -140,3 +140,10 @@ export * from "./price-event-repository";
 export * from "./runtime-risk";
 
 export { runtimeSignalId } from "./runtime-signal";
+
+export {
+  defaultRuntimeMarketEntryPolicy,
+  runtimeEntryExpiresAt,
+  runtimeMarketEntryFailure,
+  type RuntimeMarketEntryPolicy,
+} from "./runtime-entry-policy";

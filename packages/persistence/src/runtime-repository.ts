@@ -1,3 +1,9 @@
+import {
+  defaultRuntimeMarketEntryPolicy,
+  runtimeEntryExpiresAt,
+  runtimeMarketEntryFailure,
+  type RuntimeMarketEntryPolicy,
+} from "./runtime-entry-policy";
 import { runtimeSignalState, withRuntimeSignal } from "./runtime-signal";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
@@ -65,6 +71,7 @@ type RuntimePositionAction =
     };
 
 export type PersistRuntimeCycleInput = {
+  entrySignalPrice?: number;
   indicatorState?: Prisma.InputJsonValue;
   expectedLastEvaluatedAt?: Date | null;
   signalAvailableAt?: Date;
@@ -152,6 +159,7 @@ export class RuntimeRepository {
   public constructor(
     private readonly prisma: CryptoAnalPrismaClient,
     private readonly riskPolicy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
+    private readonly marketEntryPolicy: RuntimeMarketEntryPolicy = defaultRuntimeMarketEntryPolicy,
   ) {}
 
   public listActiveTargets(workspaceId: string) {
@@ -579,9 +587,21 @@ export class RuntimeRepository {
         return { applied: false, capacityReached: false };
       }
       const pending = cursor.pendingSignal as Record<string, unknown>;
+      const configuredOrderType = (
+        executionRun.strategyVersion.config as { entry?: { orderType?: string } }
+      ).entry?.orderType;
+      if (input.entryOrderType !== (configuredOrderType === "market" ? "MARKET" : "LIMIT"))
+        return { applied: false, capacityReached: false, riskFailure: "INVALID_ENTRY_ORDER_TYPE" };
       const detectedAt =
         typeof pending.detectedAt === "string" ? Date.parse(pending.detectedAt) : NaN;
-      const expiresAt = typeof pending.expiresAt === "string" ? Date.parse(pending.expiresAt) : NaN;
+      const storedExpiresAt =
+        typeof pending.expiresAt === "string" ? Date.parse(pending.expiresAt) : NaN;
+      const expiresAt = +runtimeEntryExpiresAt(
+        input.entryOrderType,
+        new Date(detectedAt),
+        new Date(storedExpiresAt),
+        this.marketEntryPolicy,
+      );
       const availableAt =
         typeof pending.availableAt === "string" ? Date.parse(pending.availableAt) : NaN;
       const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
@@ -599,6 +619,21 @@ export class RuntimeRepository {
         return { applied: false, capacityReached: false, riskFailure: "INVALID_PENDING_SIGNAL" };
       if (+now >= expiresAt || +entryEvent.observedAt >= expiresAt)
         return { applied: false, capacityReached: false, riskFailure: "ENTRY_SIGNAL_EXPIRED" };
+      if (input.entryOrderType === "MARKET") {
+        const marketFailure = runtimeMarketEntryFailure(
+          {
+            detectedAt: new Date(detectedAt),
+            expiresAt: new Date(expiresAt),
+            signalPrice: typeof pending.signalPrice === "number" ? pending.signalPrice : NaN,
+            quotePrice: Number(entryEvent.price),
+            quoteAt: entryEvent.observedAt,
+            now,
+          },
+          this.marketEntryPolicy,
+        );
+        if (marketFailure)
+          return { applied: false, capacityReached: false, riskFailure: marketFailure };
+      }
       if (+entryEvent.observedAt < detectedAt || +entryEvent.receivedAt < availableAt)
         return {
           applied: false,
@@ -689,7 +724,16 @@ export class RuntimeRepository {
           reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
           summary: `Сигнал исполнен по realtime quote: ${input.position.side === "BUY" ? "long" : "short"}`,
           factors: withRuntimeSignal(
-            input.factors,
+            input.entryOrderType === "MARKET"
+              ? {
+                  ...(input.factors &&
+                  typeof input.factors === "object" &&
+                  !Array.isArray(input.factors)
+                    ? (input.factors as Prisma.InputJsonObject)
+                    : { details: input.factors }),
+                  marketEntryPolicy: this.marketEntryPolicy,
+                }
+              : input.factors,
             runtimeSignalState({
               executionRunId: input.executionRunId,
               symbol: input.symbol,
@@ -749,6 +793,7 @@ export class RuntimeRepository {
             select: {
               id: true,
               strategyVersionId: true,
+              strategyVersion: { select: { config: true } },
               status: true,
               deployment: {
                 select: {
@@ -787,7 +832,14 @@ export class RuntimeRepository {
         if (!event || event.symbol !== input.symbol) return false;
       } else if (input.throughEventId !== cursor.pendingPriceEventId) return false;
       const pending = cursor.pendingSignal as Record<string, unknown>;
-      const expiresAt = typeof pending.expiresAt === "string" ? Date.parse(pending.expiresAt) : NaN;
+      const configuredOrderType = (run.strategyVersion.config as { entry?: { orderType?: string } })
+        .entry?.orderType;
+      const expiresAt = +runtimeEntryExpiresAt(
+        configuredOrderType === "market" ? "MARKET" : "LIMIT",
+        new Date(typeof pending.detectedAt === "string" ? pending.detectedAt : NaN),
+        new Date(typeof pending.expiresAt === "string" ? pending.expiresAt : NaN),
+        this.marketEntryPolicy,
+      );
       const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0]!
         .now;
       const reason = !Number.isFinite(expiresAt)
@@ -810,6 +862,9 @@ export class RuntimeRepository {
               {
                 source: "durable-price-events",
                 pendingSignal: cursor.pendingSignal as Prisma.InputJsonValue,
+                ...(configuredOrderType === "market"
+                  ? { marketEntryPolicy: this.marketEntryPolicy }
+                  : {}),
                 lastEventId: input.throughEventId === null ? null : String(input.throughEventId),
               },
               runtimeSignalState({
@@ -1025,6 +1080,49 @@ export class RuntimeRepository {
           };
         }
       }
+      const configuredEntryOrderType =
+        (executionRun.strategyVersion.config as { entry?: { orderType?: string } }).entry
+          ?.orderType === "market"
+          ? "MARKET"
+          : "LIMIT";
+      if (action.kind === "open" && input.entryOrderType !== configuredEntryOrderType) {
+        action = { kind: "none" };
+        decision = {
+          action: "SKIP",
+          reasonCode: "INVALID_ENTRY_ORDER_TYPE",
+          summary: "Тип входа не соответствует конфигурации стратегии",
+          factors: input.decision.factors,
+        };
+      }
+      if (action.kind === "open" && input.entryOrderType === "MARKET") {
+        const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
+          where: { id: input.entryPriceEventId! },
+        });
+        const now = (
+          await transaction.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`
+        )[0]!.now;
+        const detectedAt = new Date(+input.candleAt + Number(input.interval) * 60_000);
+        const marketFailure = runtimeMarketEntryFailure(
+          {
+            detectedAt,
+            expiresAt: new Date(+detectedAt + Number(input.interval) * 60_000),
+            signalPrice: input.entrySignalPrice ?? NaN,
+            quotePrice: Number(entryEvent.price),
+            quoteAt: entryEvent.observedAt,
+            now,
+          },
+          this.marketEntryPolicy,
+        );
+        if (marketFailure) {
+          action = { kind: "none" };
+          decision = {
+            action: "SKIP",
+            reasonCode: marketFailure,
+            summary: `Рыночный вход отклонён: ${marketFailure}`,
+            factors: input.decision.factors,
+          };
+        }
+      }
       if (action.kind === "update") {
         await transaction.position.update({
           where: { id: action.positionId },
@@ -1144,6 +1242,45 @@ export class RuntimeRepository {
         decisionTradeId = trade.id;
       }
 
+      let effectivePending = input.pendingSignal;
+      const pendingDetails =
+        effectivePending && typeof effectivePending === "object" && !Array.isArray(effectivePending)
+          ? (effectivePending as Prisma.InputJsonObject)
+          : null;
+      if (pendingDetails?.mode === "realtime" && configuredEntryOrderType === "MARKET") {
+        const detectedAt = new Date(
+          typeof pendingDetails.detectedAt === "string" ? pendingDetails.detectedAt : NaN,
+        );
+        const expiresAt = runtimeEntryExpiresAt(
+          "MARKET",
+          detectedAt,
+          new Date(typeof pendingDetails.expiresAt === "string" ? pendingDetails.expiresAt : NaN),
+          this.marketEntryPolicy,
+        );
+        const now = (
+          await transaction.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`
+        )[0]!.now;
+        const failure = runtimeMarketEntryFailure(
+          {
+            detectedAt,
+            expiresAt,
+            signalPrice:
+              typeof pendingDetails.signalPrice === "number" ? pendingDetails.signalPrice : NaN,
+            now,
+          },
+          this.marketEntryPolicy,
+        );
+        if (Number.isFinite(+expiresAt))
+          effectivePending = { ...pendingDetails, expiresAt: expiresAt.toISOString() };
+        if (failure && action.kind === "none" && decision.action !== "SKIP") {
+          decision = {
+            action: "SKIP",
+            reasonCode: failure,
+            summary: `Рыночный сигнал отклонён: ${failure}`,
+            factors: input.decision.factors,
+          };
+        }
+      }
       const contextSnapshot = await ensureDecisionContextSnapshot(
         transaction,
         input.contextSnapshot,
@@ -1153,10 +1290,8 @@ export class RuntimeRepository {
           ? (input.candidate as Prisma.InputJsonObject)
           : null;
       const pending =
-        input.pendingSignal &&
-        typeof input.pendingSignal === "object" &&
-        !Array.isArray(input.pendingSignal)
-          ? (input.pendingSignal as Prisma.InputJsonObject)
+        effectivePending && typeof effectivePending === "object" && !Array.isArray(effectivePending)
+          ? (effectivePending as Prisma.InputJsonObject)
           : null;
       const hasSignal =
         proposed?.side === "long" ||
@@ -1173,10 +1308,12 @@ export class RuntimeRepository {
                 ? "FILLED"
                 : entriesAllowed && pending?.mode === "realtime" && decision.action !== "SKIP"
                   ? "PENDING"
-                  : "REJECTED",
+                  : decision.reasonCode === "ENTRY_SIGNAL_EXPIRED"
+                    ? "EXPIRED"
+                    : "REJECTED",
             observedAt: input.contextSnapshot.availableAt,
             reasonCode: decision.reasonCode,
-            pending: input.pendingSignal,
+            pending: effectivePending,
           })
         : null;
       if (signalState) {
@@ -1216,7 +1353,20 @@ export class RuntimeRepository {
           reasonCode: decision.reasonCode,
           summary: decision.summary,
           factors: signalState
-            ? withRuntimeSignal(decision.factors, signalState)
+            ? withRuntimeSignal(
+                configuredEntryOrderType === "MARKET"
+                  ? {
+                      ...(decision.factors &&
+                      typeof decision.factors === "object" &&
+                      !Array.isArray(decision.factors)
+                        ? (decision.factors as Prisma.InputJsonObject)
+                        : { details: decision.factors }),
+                      marketEntryPolicy: this.marketEntryPolicy,
+                      signalPrice: input.entrySignalPrice ?? pending?.signalPrice ?? null,
+                    }
+                  : decision.factors,
+                signalState,
+              )
             : decision.factors,
           candidate: input.candidate,
           verdictReasonCode: decision.reasonCode,

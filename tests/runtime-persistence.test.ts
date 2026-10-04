@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Prisma } from "../packages/persistence/src/generated/prisma/client";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import fixture from "../research/golden/v1/momentum-reversal.json";
 import { test } from "node:test";
@@ -124,8 +125,8 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       mode: "realtime",
       side: "long",
       signalPrice: 100,
-      detectedAt: "2026-01-01T12:15:00Z",
-      availableAt: "2026-01-01T12:15:00Z",
+      detectedAt: quoteAt.toISOString(),
+      availableAt: quoteAt.toISOString(),
       expiresAt: new Date(Date.now() + 900_000).toISOString(),
       entryRegime: "neutral",
     };
@@ -914,7 +915,8 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           ...context.entry,
           ...decisionEngineFields(context),
           interval: "15",
-          candleAt: quoteAt,
+          candleAt: new Date(+quoteAt - 900_000),
+          entrySignalPrice: 100,
           indicatorState,
           expectedDeploymentStatus: "RUNNING",
           expectedPositionId: null,
@@ -968,6 +970,288 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         const closed = await prisma.position.findUniqueOrThrow({ where: { id: stored.id } });
         assert.deepEqual(closed.indicatorState, nextState);
         assert.equal(+closed.signalCandleAt!, +nextAt);
+      },
+    );
+    await t.test(
+      "market pending TTL cannot be extended by legacy expiry or spoofed order type",
+      async () => {
+        const context = await setup();
+        const where = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+        await prisma.runtimeCursor.update({
+          where,
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as object),
+              detectedAt: new Date(Date.now() - 120_000).toISOString(),
+            },
+          },
+        });
+        assert.equal(
+          (await runtime.persistRealtimeEntry(context.entry)).riskFailure,
+          "ENTRY_SIGNAL_EXPIRED",
+        );
+        assert.equal(
+          (await runtime.persistRealtimeEntry({ ...context.entry, entryOrderType: "LIMIT" }))
+            .riskFailure,
+          "INVALID_ENTRY_ORDER_TYPE",
+        );
+        assert.equal(
+          await runtime.advancePendingEntry({
+            workspaceId: context.workspace.id,
+            executionRunId: context.run.id,
+            symbol: context.symbol,
+            expectedCandleAt: candleAt,
+            expectedPendingPriceEventId: null,
+            throughEventId: null,
+          }),
+          true,
+        );
+        const decision = await prisma.decision.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.equal(decision.reasonCode, "ENTRY_SIGNAL_EXPIRED");
+        assert.equal(
+          (decision.factors as { runtimeSignal: { status: string } }).runtimeSignal.status,
+          "EXPIRED",
+        );
+        assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
+      },
+    );
+    await t.test(
+      "market TTL is rechecked after advisory lock wait with a longer stored expiry",
+      async () => {
+        const context = await setup();
+        const detectedAt = new Date();
+        const where = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+        await prisma.runtimeCursor.update({
+          where,
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as object),
+              detectedAt: detectedAt.toISOString(),
+              availableAt: detectedAt.toISOString(),
+              expiresAt: new Date(+detectedAt + 900_000).toISOString(),
+            },
+          },
+        });
+        await prisma.marketPriceEvent.update({
+          where: { id: context.entry.entryPriceEventId },
+          data: { observedAt: detectedAt, receivedAt: detectedAt },
+        });
+        const limited = new RuntimeRepository(prisma, defaultRuntimeRiskPolicy, {
+          ttlMs: 1000,
+          maxDeviationBps: 50,
+        });
+        let unlock!: () => void;
+        let ready!: () => void;
+        const released = new Promise<void>((resolve) => {
+          unlock = resolve;
+        });
+        const locked = new Promise<void>((resolve) => {
+          ready = resolve;
+        });
+        const blocker = prisma.$transaction(async (tx) => {
+          await tx.$executeRaw(
+            Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${context.run.id}`}))`,
+          );
+          ready();
+          await released;
+        });
+        await locked;
+        const attempt = limited.persistRealtimeEntry({
+          ...context.entry,
+          quoteAt: detectedAt,
+          position: { ...context.entry.position, openedAt: detectedAt },
+        });
+        try {
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.max(0, +detectedAt + 1000 - Date.now()) + 100),
+          );
+        } finally {
+          unlock();
+        }
+        await blocker;
+        assert.equal((await attempt).riskFailure, "ENTRY_SIGNAL_EXPIRED");
+        assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
+      },
+    );
+    await t.test(
+      "limit pending retains its candle deadline when market TTL has passed",
+      async () => {
+        const context = await setup();
+        await prisma.strategyVersion.update({
+          where: { id: context.entry.strategyVersionId },
+          data: {
+            config: { ...fixture.config, entry: { ...fixture.config.entry, orderType: "limit" } },
+          },
+        });
+        const where = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+        await prisma.runtimeCursor.update({
+          where,
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as object),
+              detectedAt: new Date(Date.now() - 120_000).toISOString(),
+            },
+          },
+        });
+        assert.equal(
+          (await runtime.persistRealtimeEntry({ ...context.entry, entryOrderType: "LIMIT" }))
+            .applied,
+          true,
+        );
+      },
+    );
+    await t.test(
+      "market pending deviation uses saved signal and durable event instead of caller quote",
+      async () => {
+        for (const price of ["99", "101"]) {
+          const context = await setup();
+          await prisma.marketPriceEvent.update({
+            where: { id: context.entry.entryPriceEventId },
+            data: { price },
+          });
+          const result = await runtime.persistRealtimeEntry({
+            ...context.entry,
+            quotePrice: "100",
+            factors: { signalPrice: Number(price) },
+          });
+          assert.equal(result.riskFailure, "ENTRY_PRICE_DEVIATION");
+          await runtime.advancePendingEntry({
+            workspaceId: context.workspace.id,
+            executionRunId: context.run.id,
+            symbol: context.symbol,
+            expectedCandleAt: candleAt,
+            expectedPendingPriceEventId: null,
+            throughEventId: context.entry.entryPriceEventId,
+            rejectionReason: result.riskFailure,
+          });
+          const decision = await prisma.decision.findFirstOrThrow({
+            where: { executionRunId: context.run.id },
+          });
+          assert.equal(decision.reasonCode, "ENTRY_PRICE_DEVIATION");
+          assert.equal(
+            (decision.factors as { runtimeSignal: { status: string } }).runtimeSignal.status,
+            "REJECTED",
+          );
+          assert.equal(
+            await prisma.position.count({ where: { executionRunId: context.run.id } }),
+            0,
+          );
+        }
+      },
+    );
+    await t.test(
+      "candle market entry rejects downtime signals and execution price deviation",
+      async () => {
+        for (const reason of ["ENTRY_SIGNAL_EXPIRED", "ENTRY_PRICE_DEVIATION"]) {
+          const context = await setup();
+          if (reason === "ENTRY_PRICE_DEVIATION")
+            await prisma.marketPriceEvent.update({
+              where: { id: context.entry.entryPriceEventId },
+              data: { price: "101" },
+            });
+          const cycle: PersistRuntimeCycleInput = {
+            ...context.entry,
+            ...decisionEngineFields(context),
+            entrySignalPrice: 100,
+            interval: "15",
+            candleAt: new Date(
+              +quoteAt - 900_000 - (reason === "ENTRY_SIGNAL_EXPIRED" ? 120_000 : 0),
+            ),
+            expectedDeploymentStatus: "RUNNING",
+            expectedPositionId: null,
+            expectedPositionVersion: null,
+            pendingSignal: null,
+            decision: {
+              action: "OPEN",
+              reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
+              summary: "Entry",
+              factors: {},
+            },
+            positionAction: {
+              kind: "open",
+              position: context.entry.position,
+              markPrice: "100",
+              unrealizedPnl: "0",
+              immediateSettlement: null,
+            },
+          };
+          assert.equal((await runtime.persistCycle(cycle)).applied, true);
+          const decision = await prisma.decision.findFirstOrThrow({
+            where: { executionRunId: context.run.id },
+          });
+          assert.equal(decision.reasonCode, reason);
+          assert.equal(decision.action, "SKIP");
+          assert.equal(
+            (decision.factors as { runtimeSignal: { status: string } }).runtimeSignal.status,
+            reason === "ENTRY_SIGNAL_EXPIRED" ? "EXPIRED" : "REJECTED",
+          );
+          assert.equal(
+            await prisma.position.count({ where: { executionRunId: context.run.id } }),
+            0,
+          );
+        }
+      },
+    );
+    await t.test(
+      "market pending creation caps expiry and rejects expired signals after context waits",
+      async () => {
+        for (const age of [0, 120_000]) {
+          const context = await setup();
+          const detectedAt = new Date(Date.now() - age);
+          await runtime.persistCycle({
+            ...context.entry,
+            ...decisionEngineFields(context),
+            interval: "15",
+            candleAt: new Date(+detectedAt - 900_000),
+            expectedDeploymentStatus: "RUNNING",
+            expectedPositionId: null,
+            expectedPositionVersion: null,
+            pendingSignal: {
+              mode: "realtime",
+              side: "long",
+              signalPrice: 100,
+              detectedAt: detectedAt.toISOString(),
+              availableAt: detectedAt.toISOString(),
+              expiresAt: new Date(Date.now() + 900_000).toISOString(),
+              entryRegime: "neutral",
+            },
+            decision: {
+              action: "HOLD",
+              reasonCode: "ENTRY_SIGNAL_PENDING",
+              summary: "Pending",
+              factors: {},
+            },
+            positionAction: { kind: "none" },
+          });
+          const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+            where: {
+              executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+            },
+          });
+          if (age === 0)
+            assert.equal(
+              Date.parse((cursor.pendingSignal as { expiresAt: string }).expiresAt),
+              +detectedAt + 60_000,
+            );
+          else {
+            assert.equal(cursor.pendingSignal, null);
+            const decision = await prisma.decision.findFirstOrThrow({
+              where: { executionRunId: context.run.id },
+            });
+            assert.equal(decision.reasonCode, "ENTRY_SIGNAL_EXPIRED");
+          }
+        }
       },
     );
     await t.test(
@@ -1643,8 +1927,8 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
             mode: "realtime",
             side: "short",
             signalPrice: 100,
-            detectedAt: "2026-01-01T12:15:00Z",
-            availableAt: "2026-01-01T12:15:00Z",
+            detectedAt: quoteAt.toISOString(),
+            availableAt: quoteAt.toISOString(),
             expiresAt: new Date(Date.now() + 900_000).toISOString(),
             entryRegime: "neutral",
           },

@@ -64,6 +64,8 @@ import {
   MarketDataRepository,
   MarketUniverseRepository,
   RuntimeRepository,
+  runtimeEntryExpiresAt,
+  runtimeMarketEntryFailure,
   RuntimeRiskRepository,
   PriceEventRepository,
   type PriceEventInput,
@@ -108,7 +110,15 @@ const runtimeRiskPolicy = {
   maxOpenPositions: config.RUNTIME_MAX_OPEN_POSITIONS,
   maxQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
 };
-const runtimeRepository = new RuntimeRepository(prisma, runtimeRiskPolicy);
+const runtimeMarketEntryPolicy = {
+  ttlMs: config.RUNTIME_MARKET_ENTRY_TTL_MS,
+  maxDeviationBps: config.RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS,
+};
+const runtimeRepository = new RuntimeRepository(
+  prisma,
+  runtimeRiskPolicy,
+  runtimeMarketEntryPolicy,
+);
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
 const priceEventRepository = new PriceEventRepository(prisma);
@@ -1052,6 +1062,13 @@ async function processRealtimeEntry(
     }
     return;
   }
+  const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
+  pending.expiresAt = runtimeEntryExpiresAt(
+    strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
+    pending.detectedAt,
+    pending.expiresAt,
+    runtimeMarketEntryPolicy,
+  );
   if (Date.now() >= +pending.expiresAt) {
     await runtimeRepository.advancePendingEntry({
       ...progress,
@@ -1065,7 +1082,6 @@ async function processRealtimeEntry(
     target.pendingPriceEventId,
     pending.detectedAt,
   );
-  const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
   let entryRisk: Awaited<ReturnType<RuntimeRiskRepository["assess"]>> | null = null;
   const outcome = await replayPendingEntryEvents({
     events: events.map((event) => ({ ...event, price: Number(event.price) })),
@@ -1077,6 +1093,20 @@ async function processRealtimeEntry(
     maximumQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
     now: Date.now,
     tryFill: async (quote) => {
+      if (strategyConfig.entry.orderType === "market") {
+        const failure = runtimeMarketEntryFailure(
+          {
+            detectedAt: pending.detectedAt,
+            expiresAt: pending.expiresAt,
+            signalPrice: pending.signalPrice,
+            quotePrice: quote.price,
+            quoteAt: quote.observedAt,
+            now: new Date(),
+          },
+          runtimeMarketEntryPolicy,
+        );
+        if (failure) return { status: "rejected", reason: failure };
+      }
       const risk = (entryRisk ??= await runtimeRiskRepository.assess(
         target.executionRun.deployment.workspaceId,
         target.executionRun.deployment.exchangeAccountId,
@@ -1532,7 +1562,31 @@ async function processRuntimeTarget(
           };
         } else if (signal) {
           const quote = getFreshQuote(symbol);
+          const signalExpiresAt = runtimeEntryExpiresAt(
+            strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
+            candleClosedAt,
+            new Date(+candleClosedAt + intervalMs),
+            runtimeMarketEntryPolicy,
+          );
+          const marketFailure =
+            strategyConfig.entry.orderType === "market"
+              ? runtimeMarketEntryFailure(
+                  {
+                    detectedAt: candleClosedAt,
+                    expiresAt: signalExpiresAt,
+                    signalPrice: signal.signalPrice,
+                    now: new Date(),
+                    ...(quote &&
+                    quote.receivedAt >= signalAvailableAt &&
+                    quote.observedAt >= candleClosedAt
+                      ? { quotePrice: quote.price, quoteAt: quote.observedAt }
+                      : {}),
+                  },
+                  runtimeMarketEntryPolicy,
+                )
+              : null;
           const candidate =
+            !marketFailure &&
             quote &&
             quote.receivedAt >= signalAvailableAt &&
             quote.observedAt >= candleClosedAt &&
@@ -1583,7 +1637,7 @@ async function processRuntimeTarget(
             pendingSignalAfter = createRealtimePendingSignal(
               signal,
               candleClosedAt,
-              new Date(candleClosedAt.getTime() + intervalMs),
+              signalExpiresAt,
               getExecutionMarketRegime(candle),
               signalAvailableAt,
             );
@@ -1601,6 +1655,21 @@ async function processRuntimeTarget(
                 ),
               };
             }
+          }
+          if (marketFailure && positionAction.kind === "none") {
+            pendingSignalAfter = null;
+            decision = {
+              action: "SKIP",
+              reasonCode: marketFailure,
+              summary: `Рыночный сигнал отклонён: ${marketFailure}`,
+              factors: runtimeFactors(
+                candle,
+                dailyPnl,
+                equity,
+                signalAvailableAt,
+                indicators.checkpoint!,
+              ),
+            };
           }
         }
       }
@@ -1705,6 +1774,7 @@ async function processRuntimeTarget(
         expectedPositionVersion: null,
         ...(entryPriceEventId === undefined ? {} : { entryPriceEventId }),
         signalAvailableAt,
+        ...(signalCandidate ? { entrySignalPrice: signalCandidate.signalPrice } : {}),
         pendingSignal: pendingSignalAfter,
         maxOpenPositions: strategyConfig.risk.maxOpenPositions,
         entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",

@@ -427,7 +427,17 @@ OPEN — исполненный вход. Новый сигнал получае
 `Decision.factors.runtimeSignal` с тем же ID и причиной; pending JSON хранит `signalId`.
 Observation и decision записываются одной транзакцией, retry не дублирует SIGNAL.
 Для legacy pending ID выводится при обработке; отсутствующая старая история не создаётся.
-Отдельные TTL/deviation рыночного входа ещё не реализованы. Требуется миграция `20261004190000_pending_entry_event_cursor`.
+Рыночный сигнал действует не более `RUNTIME_MARKET_ENTRY_TTL_MS` от закрытия сигнальной
+свечи (по умолчанию 60 секунд), независимо от timeframe и времени получения данных после
+простоя. Абсолютное отклонение котировки от signal price ограничено
+`RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS` (50 bps = 0.5%) в обе стороны; это отклонение
+исходной котировки до моделируемого slippage. Проверки повторяются под транзакционными
+блокировками по DB clock и durable event. Expiry/deviation сохраняются как
+`ENTRY_SIGNAL_EXPIRED`/`ENTRY_PRICE_DEVIATION` с состоянием EXPIRED/REJECTED и единым ID;
+market entry policy записывается в factors. Более ранний сохранённый expiry не продлевается.
+Лимитные сигналы сохраняют свой свечной TTL и не получают market deviation gate.
+Исторические validation не пересчитываются: свечной backtest не моделирует этот
+контроль задержки/котировки runtime. Требуется миграция `20261004190000_pending_entry_event_cursor`.
 
 Индикаторы используют общий расчёт `cryptoanal-indicators@2.0.0`: EMA инициализируется
 через SMA, RSI — через Wilder. `RuntimeCursor.indicatorState` хранит рекурсивные значения,
@@ -670,6 +680,8 @@ risk/margin model или private exchange adapter.
 
 - `RUNTIME_QUOTE_INTERVAL_MS` — цикл сопровождения и отдельный risk guard, 1000 мс.
 - `RUNTIME_QUOTE_MAX_AGE_MS` — максимальная давность цены для входа и порог backlog incident, 10000 мс.
+- `RUNTIME_MARKET_ENTRY_TTL_MS` — срок рыночного сигнала от закрытия свечи, 60000 мс (1000–300000).
+- `RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS` — абсолютное отклонение котировки от signal price, 50 bps (0–10000).
 - `RUNTIME_MAX_DAILY_LOSS_PERCENT` — серверный потолок дневного убытка, 10% начального капитала.
 - `RUNTIME_MAX_ACCOUNT_EXPOSURE_PERCENT` — лимит новых входов относительно equity аккаунта, 100%.
 - `RUNTIME_MAX_OPEN_POSITIONS` — потолок позиций виртуального аккаунта, 20; стратегия может ограничить сильнее.

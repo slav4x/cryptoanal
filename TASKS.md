@@ -25,6 +25,8 @@
       gap, изоляция символов, версии расчётов и обновлённый контрольный dataset.
 - [x] E05: durable checkpoint EMA/RSI, replay пропущенных свечей, общий расчёт входов и
       сигнальных выходов новых позиций; точное равенство batch/stream/JSON restart.
+- [x] E05: проверить восстановление девяти BTCUSDT/AVAXUSDT cursor после обновления
+      DRY_RUN; снять cycle incidents через успешные циклы, проверить сопровождение позиций.
 - [x] E05: отслеживать уточнения закрытых свечей, пересчитывать checkpoint от pinned
       snapshot без повторного исполнения прошлого; сохранять время доступности исправлений.
 - [x] E05: seed EMA/RSI от immutable validation snapshot, pinned ID/hash и общий seed

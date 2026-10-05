@@ -63,6 +63,7 @@ async function scenario(index = 1799) {
 for (const index of [1799, 1501]) {
   test(`revision at candle ${index} rebuilds the full pinned prefix without moving the decision boundary`, async () => {
     const { history, seed, checkpoint } = await scenario(index);
+    checkpoint.anchor = Object.fromEntries(Object.entries(checkpoint.anchor!).reverse());
     const original = JSON.stringify(checkpoint);
     if (index === 1501)
       assert.doesNotThrow(() =>

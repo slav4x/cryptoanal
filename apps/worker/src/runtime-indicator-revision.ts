@@ -35,7 +35,16 @@ export async function restoreRevisedIndicators(input: {
   if (!checkpoint.anchor)
     throw new Error("Revised indicators require an immutable validation anchor");
   const seed = await input.loadSeed();
-  if (JSON.stringify(seed.anchor) !== JSON.stringify(checkpoint.anchor))
+  const anchorKeys = [
+    "mode",
+    "datasetSnapshotId",
+    "contentHash",
+    "startsAt",
+    "seededThroughAt",
+    "validationRunId",
+    "validationEngineVersion",
+  ] as const;
+  if (!seed.anchor || anchorKeys.some((key) => seed.anchor![key] !== checkpoint.anchor![key]))
     throw new Error("Indicator revision seed does not match the pinned anchor");
   const intervalMs =
     { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 }[config.universe.timeframe] * 60_000;

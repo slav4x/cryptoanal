@@ -623,6 +623,43 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           ).finalizedAt!,
           +finalizedAt!,
         );
+        const key = {
+          symbol_interval_openTime: { symbol: context.symbol, interval: "15", openTime: candleAt },
+        };
+        assert.equal((await prisma.marketCandle.findUniqueOrThrow({ where: key })).revisedAt, null);
+        await candles.saveCandles([{ ...first, close: "101", volume: "2", isClosed: true }]);
+        assert.equal((await prisma.marketCandle.findUniqueOrThrow({ where: key })).revisedAt, null);
+        await candles.saveCandles([{ ...first, close: "100.99", turnover: "101", isClosed: true }]);
+        const revised = await prisma.marketCandle.findUniqueOrThrow({ where: key });
+        assert.ok(revised.revisedAt);
+        assert.equal(+revised.finalizedAt!, +finalizedAt!);
+        assert.equal(
+          +(await candles.indicatorRevisionAt(
+            context.symbol,
+            "15",
+            new Date(+candleAt - 1),
+            quoteAt,
+          ))!,
+          +revised.revisedAt,
+        );
+        assert.equal(
+          await candles.indicatorRevisionAt(context.symbol, "15", candleAt, quoteAt),
+          null,
+        );
+        assert.equal(
+          await candles.indicatorRevisionAt(context.symbol, "1", new Date(+candleAt - 1), quoteAt),
+          null,
+        );
+        assert.equal(
+          await candles.indicatorRevisionAt("OTHERUSDT", "15", new Date(+candleAt - 1), quoteAt),
+          null,
+        );
+        await candles.saveCandles([{ ...first, close: "100.99", turnover: "101", isClosed: true }]);
+        await candles.saveCandles([first]);
+        assert.equal(
+          +(await prisma.marketCandle.findUniqueOrThrow({ where: key })).revisedAt!,
+          +revised.revisedAt,
+        );
         const recoveryHistory = await candles.listRecoveryCandles(
           context.symbol,
           "15",

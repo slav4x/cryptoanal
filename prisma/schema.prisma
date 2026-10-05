@@ -413,6 +413,7 @@ model MarketSnapshot {
 }
 
 model MarketCandle {
+  revisedAt   DateTime?        @db.Timestamptz(3)
   finalizedAt DateTime?        @db.Timestamptz(3)
   isClosed    Boolean          @default(false)
   symbol      String

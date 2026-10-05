@@ -323,3 +323,18 @@ test("mean-reversion exits use the same ordered quote pipeline", async () => {
   });
   assert.equal((settlement as RuntimePriceCheckpoint["settlement"])?.exitReason, "signal-exit");
 });
+
+test("corrected candle becomes available at revision time and delays dependent signals", () => {
+  const intervalMs = 900_000;
+  const at = new Date("2026-01-01T00:00:00Z");
+  const revisedAt = new Date(+at + 3 * intervalMs);
+  const result = signalAvailabilityTimes(
+    [
+      { openTime: at, finalizedAt: new Date(+at + intervalMs), revisedAt },
+      { openTime: new Date(+at + intervalMs), finalizedAt: new Date(+at + 2 * intervalMs) },
+    ],
+    intervalMs,
+    revisedAt,
+  );
+  assert.deepEqual(result.map(Number), [+revisedAt, +revisedAt]);
+});

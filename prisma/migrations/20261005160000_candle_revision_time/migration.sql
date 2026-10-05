@@ -1,0 +1,1 @@
+ALTER TABLE "MarketCandle" ADD COLUMN "revisedAt" TIMESTAMPTZ(3);

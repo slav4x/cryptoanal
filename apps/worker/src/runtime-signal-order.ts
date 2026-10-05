@@ -1,5 +1,5 @@
 export function signalAvailabilityTimes(
-  history: Array<{ openTime: Date; finalizedAt: Date | null }>,
+  history: Array<{ openTime: Date; finalizedAt: Date | null; revisedAt?: Date | null }>,
   intervalMs: number,
   unknownAvailableAt: Date,
 ) {
@@ -9,6 +9,7 @@ export function signalAvailabilityTimes(
     availableAfter = Math.max(
       availableAfter,
       +(candle.finalizedAt ?? unknownAvailableAt),
+      +(candle.revisedAt ?? 0),
       +candle.openTime + intervalMs,
     );
     return new Date(availableAfter);

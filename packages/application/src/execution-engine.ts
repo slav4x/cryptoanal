@@ -140,6 +140,7 @@ export type ExecutionIndicatorAnchor = {
 };
 
 export type ExecutionIndicatorCheckpoint = {
+  sourceRevisionAt?: string | null;
   anchor?: ExecutionIndicatorAnchor;
   version: string;
   configKey: string;
@@ -204,6 +205,11 @@ export function readExecutionIndicatorCheckpoint(
     rsi.loss < 0 ||
     (rsi.count < config.signal.rsiPeriod ? rsi.value !== null : !finite(rsi.value)) ||
     !(state.availableAt === null || time(state.availableAt)) ||
+    !(
+      state.sourceRevisionAt === undefined ||
+      state.sourceRevisionAt === null ||
+      time(state.sourceRevisionAt)
+    ) ||
     !Array.isArray(state.tail) ||
     state.tail.length === 0 ||
     state.tail.length > minimumExecutionCandleCount(config)
@@ -254,6 +260,8 @@ export function readExecutionIndicatorCheckpoint(
   return structuredClone(state);
 }
 
+export class ExecutionIndicatorHistoryRevisedError extends Error {}
+
 export function assertExecutionIndicatorHistory(
   candles: ExecutionCandle[],
   checkpoint: ExecutionIndicatorCheckpoint | null,
@@ -271,7 +279,9 @@ export function assertExecutionIndicatorHistory(
         stored.close !== candle.close ||
         stored.turnover !== candle.turnover)
     ) {
-      throw new Error("Indicator checkpoint history was revised; explicit replay required");
+      throw new ExecutionIndicatorHistoryRevisedError(
+        "Indicator checkpoint history was revised; explicit replay required",
+      );
     }
   }
 }

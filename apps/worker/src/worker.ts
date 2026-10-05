@@ -9,7 +9,6 @@ import {
   decisionContextSchemaVersion,
   decisionFeatureSetVersion,
   advanceExecutionIndicators,
-  assertExecutionIndicatorHistory,
   readExecutionIndicatorCheckpoint,
   executionIndicatorVersion,
   evaluateHealth,
@@ -25,6 +24,7 @@ import {
   openExecutionPositionAtQuote,
   runValidationEngine,
   validationEngineVersion,
+  type ExecutionStrategyConfig,
   type ExecutionIndicatorCheckpoint,
   type EnrichedExecutionCandle,
   type ExecutionMarketRegime,
@@ -84,7 +84,12 @@ import { OrderedPriceJournal } from "./price-journal";
 import { forEachConcurrent, processRuntimePriceEvents } from "./runtime-price-processor";
 import { RecoveryRequestCache } from "./recovery-request-cache";
 import { processRuntimeSymbols } from "./runtime-symbol-loop";
-import { loadValidationIndicatorSeed, validationIndicatorSource } from "./runtime-indicator-seed";
+import {
+  loadValidationIndicatorSeed,
+  validationIndicatorSource,
+  type ValidationIndicatorSource,
+} from "./runtime-indicator-seed";
+import { restoreRevisedIndicators } from "./runtime-indicator-revision";
 import { signalAvailabilityTimes } from "./runtime-signal-order";
 import {
   recoverRuntimeGap,
@@ -734,6 +739,92 @@ async function loadRecoveryCandles(
   });
 }
 
+async function pinnedIndicatorSeed(
+  workspaceId: string,
+  source: ValidationIndicatorSource,
+  configHash: string,
+  strategyConfig: ExecutionStrategyConfig,
+  symbol: string,
+) {
+  const seeds = await indicatorSeedCache.get(
+    `${workspaceId}:${source.datasetSnapshotId}:${source.contentHash}:${source.validationRunId}:${configHash}`,
+    async () => {
+      const snapshot = await validationRepository.getDatasetSnapshot(
+        workspaceId,
+        source.datasetSnapshotId,
+      );
+      if (!snapshot)
+        throw new RuntimeWorkerError(
+          "RUNTIME_INDICATOR_SEED_MISSING",
+          "Validation seed snapshot is missing",
+        );
+      const availableAt = new Date();
+      const dataset = { ...snapshot, candles: snapshot.candles.map(toExecutionCandle) };
+      const result: Record<
+        string,
+        { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }
+      > = {};
+      for (const seedSymbol of [...new Set(dataset.candles.map((candle) => candle.symbol))]) {
+        result[seedSymbol] = await loadValidationIndicatorSeed({
+          source,
+          symbol: seedSymbol,
+          config: strategyConfig,
+          availableAt,
+          loadSnapshot: async () => dataset,
+        });
+      }
+      return result;
+    },
+  );
+  const seed = seeds[symbol];
+  if (!seed)
+    throw new RuntimeWorkerError(
+      "RUNTIME_INDICATOR_SYMBOL_NOT_VALIDATED",
+      `${symbol} is missing from the validation seed`,
+    );
+  return seed;
+}
+
+async function restoreRuntimeIndicators(
+  checkpoint: ExecutionIndicatorCheckpoint,
+  history: ReturnType<typeof toExecutionCandle>[],
+  workspaceId: string,
+  configHash: string,
+  strategyConfig: ExecutionStrategyConfig,
+  symbol: string,
+  interval: string,
+) {
+  const anchor = checkpoint.anchor;
+  const revisionAt = await marketDataRepository.indicatorRevisionAt(
+    symbol,
+    interval,
+    new Date(anchor?.seededThroughAt ?? checkpoint.tail[0]!.openTime),
+    new Date(checkpoint.lastCandleAt),
+  );
+  const result = await restoreRevisedIndicators({
+    checkpoint,
+    history,
+    revisionAt,
+    availableAt: new Date(),
+    config: strategyConfig,
+    loadSeed: async () => {
+      if (!anchor) throw new Error("Revised indicators require a validation anchor");
+      return (await pinnedIndicatorSeed(workspaceId, anchor, configHash, strategyConfig, symbol))
+        .checkpoint;
+    },
+    loadHistory: async (start, end) =>
+      (await marketDataRepository.listRecoveryCandles(symbol, interval, start, end)).map(
+        toExecutionCandle,
+      ),
+  });
+  if (result.restored)
+    logger.info(
+      { symbol, interval, through: checkpoint.lastCandleAt, revisionAt },
+      "Indicator history restored from pinned validation snapshot",
+    );
+  return result.checkpoint;
+}
+
 async function processRealtimePosition(
   target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
 ) {
@@ -746,7 +837,7 @@ async function processRealtimePosition(
   );
   let signalReplay: ReturnType<typeof replayPositionIndicators> | null = null;
   const loadPositionSignals = async (lastOpen: Date, deadline: AbortSignal) => {
-    const checkpoint = positionIndicatorCheckpoint(
+    let checkpoint = positionIndicatorCheckpoint(
       target.indicatorState,
       target.indicatorState == null
         ? await runtimeRepository.getIndicatorState(target.executionRunId, target.symbol)
@@ -798,7 +889,16 @@ async function processRealtimePosition(
         lastOpen,
       );
     }
-    assertExecutionIndicatorHistory(history.map(toExecutionCandle), checkpoint);
+    if (checkpoint)
+      checkpoint = await restoreRuntimeIndicators(
+        checkpoint,
+        history.map(toExecutionCandle),
+        target.workspaceId,
+        target.strategyVersion.configHash,
+        strategyConfig,
+        target.symbol,
+        interval,
+      );
     const newHistory = checkpoint
       ? history.filter((candle) => +candle.openTime > Date.parse(checkpoint.lastCandleAt))
       : history;
@@ -1332,44 +1432,13 @@ async function processRuntimeTarget(
       if (!initialCheckpoint) {
         const source = validationIndicatorSource(executionRun.context);
         if (source) {
-          const seeds = await indicatorSeedCache.get(
-            `${target.workspaceId}:${source.datasetSnapshotId}:${source.contentHash}:${source.validationRunId}:${target.strategyVersion.configHash}`,
-            async () => {
-              const snapshot = await validationRepository.getDatasetSnapshot(
-                target.workspaceId,
-                source.datasetSnapshotId,
-              );
-              if (!snapshot)
-                throw new RuntimeWorkerError(
-                  "RUNTIME_INDICATOR_SEED_MISSING",
-                  "Validation seed snapshot is missing",
-                );
-              const availableAt = new Date();
-              const dataset = { ...snapshot, candles: snapshot.candles.map(toExecutionCandle) };
-              const result: Record<
-                string,
-                { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }
-              > = {};
-              for (const seedSymbol of [
-                ...new Set(dataset.candles.map((candle) => candle.symbol)),
-              ]) {
-                result[seedSymbol] = await loadValidationIndicatorSeed({
-                  source,
-                  symbol: seedSymbol,
-                  config: strategyConfig,
-                  availableAt,
-                  loadSnapshot: async () => dataset,
-                });
-              }
-              return result;
-            },
+          const seed = await pinnedIndicatorSeed(
+            target.workspaceId,
+            source,
+            target.strategyVersion.configHash,
+            strategyConfig,
+            symbol,
           );
-          const seed = seeds[symbol];
-          if (!seed)
-            throw new RuntimeWorkerError(
-              "RUNTIME_INDICATOR_SYMBOL_NOT_VALIDATED",
-              `${symbol} is missing from the validation seed`,
-            );
           initialCheckpoint = seed.checkpoint;
           seedCandle = seed.candle;
           if (Date.parse(initialCheckpoint.lastCandleAt) > +lastCompleteCandleAt)
@@ -1476,7 +1545,7 @@ async function processRuntimeTarget(
         strategyConfig,
         symbol,
       );
-      const checkpoint = persistedCheckpoint ?? initialCheckpoint;
+      let checkpoint = persistedCheckpoint ?? initialCheckpoint;
       if (
         persistedCheckpoint &&
         persistedCheckpoint.lastCandleAt !== state.cursor?.lastEvaluatedAt?.toISOString()
@@ -1486,7 +1555,16 @@ async function processRuntimeTarget(
           "Indicator checkpoint does not match decision cursor",
         );
       }
-      assertExecutionIndicatorHistory(executionCandles, checkpoint);
+      if (checkpoint)
+        checkpoint = await restoreRuntimeIndicators(
+          checkpoint,
+          executionCandles,
+          target.workspaceId,
+          target.strategyVersion.configHash,
+          strategyConfig,
+          symbol,
+          interval,
+        );
       const newCandles = checkpoint
         ? executionCandles.filter(
             (candle) => +candle.openTime > Date.parse(checkpoint.lastCandleAt),

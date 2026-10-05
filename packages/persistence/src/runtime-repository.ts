@@ -272,6 +272,7 @@ export class RuntimeRepository {
           close: true,
           turnover: true,
           finalizedAt: true,
+          revisedAt: true,
         },
       }),
     ]);
@@ -363,7 +364,7 @@ export class RuntimeRepository {
         entrySlippage: true,
         entryRegime: true,
         entrySession: true,
-        strategyVersion: { select: { config: true } },
+        strategyVersion: { select: { config: true, configHash: true } },
         executionRun: {
           select: {
             deployment: { select: { id: true, status: true, exchangeAccountId: true } },

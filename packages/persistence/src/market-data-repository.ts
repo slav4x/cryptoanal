@@ -53,6 +53,14 @@ export class MarketDataRepository {
     });
   }
 
+  public async indicatorRevisionAt(symbol: string, interval: string, after: Date, through: Date) {
+    const row = await this.prisma.marketCandle.aggregate({
+      where: { symbol, interval, isClosed: true, openTime: { gt: after, lte: through } },
+      _max: { revisedAt: true },
+    });
+    return row._max.revisedAt;
+  }
+
   public async saveCandles(candles: MarketCandleInput[]): Promise<number> {
     if (candles.length === 0) return 0;
 
@@ -73,7 +81,11 @@ export class MarketDataRepository {
         "open" = EXCLUDED."open", "high" = EXCLUDED."high", "low" = EXCLUDED."low",
         "close" = EXCLUDED."close", "volume" = EXCLUDED."volume", "turnover" = EXCLUDED."turnover",
         "isClosed" = EXCLUDED."isClosed",
-        "finalizedAt" = coalesce("MarketCandle"."finalizedAt", EXCLUDED."finalizedAt")
+        "finalizedAt" = coalesce("MarketCandle"."finalizedAt", EXCLUDED."finalizedAt"),
+        "revisedAt" = CASE WHEN "MarketCandle"."isClosed" AND EXCLUDED."isClosed" AND
+          ("MarketCandle"."open", "MarketCandle"."high", "MarketCandle"."low", "MarketCandle"."close", "MarketCandle"."turnover")
+          IS DISTINCT FROM (EXCLUDED."open", EXCLUDED."high", EXCLUDED."low", EXCLUDED."close", EXCLUDED."turnover")
+          THEN clock_timestamp() ELSE "MarketCandle"."revisedAt" END
       WHERE (NOT "MarketCandle"."isClosed" OR EXCLUDED."isClosed")
         AND (("MarketCandle"."finalizedAt" IS NULL AND EXCLUDED."isClosed") OR
         ("MarketCandle"."open", "MarketCandle"."high", "MarketCandle"."low", "MarketCandle"."close",

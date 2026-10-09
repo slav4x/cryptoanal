@@ -698,6 +698,12 @@ mainnet-домен при необходимости задаётся через
 Если сеть блокирует TLS к REST-доменам Bybit, `BYBIT_PROXY_URL` направляет только REST
 запросы public/private клиентов через HTTP CONNECT proxy. Для локального Docker и Happ
 используется `http://host.docker.internal:10820`; public WebSocket остаётся прямым.
+`BYBIT_PROXY_URL` нужен только при недоступности прямого REST: если Bybit отвечает из
+worker напрямую, оставьте переменную незаданной. Указанный локальный прокси должен
+быть запущен и доступен именно из Docker; отключённый прокси блокирует REST/backfill
+даже при рабочем WebSocket. После изменения `.env` пересоздайте API и worker:
+`docker compose up -d --no-deps api worker`. При сетевой ошибке статус показывает
+код причины; для недоступного прокси — безопасный адрес без логина и пароля.
 
 После успешной ручной проверки worker перепроверяет connection каждые
 `EXCHANGE_VERIFICATION_INTERVAL_HOURS` часов. Claim защищён lease; временная ошибка

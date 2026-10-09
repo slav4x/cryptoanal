@@ -1,3 +1,4 @@
+import { runtimeErrorMessage } from "./runtime-error";
 import { replayPendingEntryEvents } from "./runtime-pending-entry";
 import {
   positionIndicatorCheckpoint,
@@ -2621,7 +2622,7 @@ function validationFailure(error: unknown): { code: string; message: string } {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Неизвестная ошибка";
+  return runtimeErrorMessage(error, config.BYBIT_PROXY_URL);
 }
 
 function finiteNumber(value: string, field: string, symbol: string): number {

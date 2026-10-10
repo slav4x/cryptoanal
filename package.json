@@ -31,6 +31,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:backup": "node scripts/backup-database.mjs",
+    "db:backup:prune": "node scripts/prune-database-backups.mjs",
+    "db:backup:test": "node --test tests/database-backup-retention.test.mjs",
     "db:restore-check": "node scripts/verify-database-restore.mjs"
   },
   "devDependencies": {

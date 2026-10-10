@@ -1,3 +1,4 @@
+import { pruneDatabaseBackups } from "./prune-database-backups.mjs";
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import console from "node:console";
@@ -90,6 +91,14 @@ try {
   console.log(`Restore check passed for ${manifest.backupId}.`);
   console.log(`Tables: ${actualTables.length}; migrations: ${manifest.schema.migrations.length}.`);
   console.log(`Report: ${reportPath}`);
+  try {
+    const cleanup = await pruneDatabaseBackups(path.dirname(manifestPath));
+    console.log(
+      `Backup retention: kept ${cleanup.kept.length} verified copies; removed ${cleanup.removed.length} old copies.`,
+    );
+  } catch (error) {
+    console.warn(`Restore passed, but backup cleanup failed: ${error.message}`);
+  }
 } finally {
   if (containerCreated) await dockerText(["rm", "-f", containerName]).catch(() => undefined);
   if (volumeCreated) await dockerText(["volume", "rm", volumeName]).catch(() => undefined);

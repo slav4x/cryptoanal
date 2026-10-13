@@ -20,7 +20,7 @@ const market = new BybitPublicMarketClient(
 const prisma = createPrismaClient(process.env.DATABASE_URL!);
 const peak = new Date("2026-10-12T07:22:28.101Z");
 const enabledAt = new Date("2026-10-12T07:00:00Z");
-const through = new Date();
+const through = new Date("2026-10-13T05:52:38.567Z");
 const policy = {
   enabledAt: enabledAt.toISOString(),
   breakEvenActivationR: 0.5,
@@ -75,8 +75,16 @@ try {
           openedAt: p.openedAt,
           entryPrice: Number(p.entryPrice),
           quantity: Number(p.quantity),
-          stopPrice: Number(p.stopPrice),
-          takePrice: Number(p.takePrice),
+          stopPrice:
+            Number(p.entryPrice) *
+            (p.side === "BUY"
+              ? 1 - config.exit.stopLossPercent / 100
+              : 1 + config.exit.stopLossPercent / 100),
+          takePrice:
+            Number(p.entryPrice) *
+            (p.side === "BUY"
+              ? 1 + config.exit.takeProfitPercent / 100
+              : 1 - config.exit.takeProfitPercent / 100),
           trailingPrice: null,
           bestPrice: Number(p.entryPrice),
           entryFee: Number(p.entryFee),
@@ -196,9 +204,11 @@ try {
     }
     for (const p of active) {
       if (!p.lastPrice) throw new Error(`Missing price history for ${symbol}`);
-      const originalNet = p.stored.trade
-        ? Number(p.stored.trade.netPnl)
-        : settleExecutionPosition(p.position, p.lastPrice, through, "end-of-data", p.config).netPnl;
+      const originalNet =
+        p.stored.trade && p.stored.closedAt && p.stored.closedAt <= through
+          ? Number(p.stored.trade.netPnl)
+          : settleExecutionPosition(p.position, p.lastPrice, through, "end-of-data", p.config)
+              .netPnl;
       if (!p.closed)
         p.guardedNet = settleExecutionPosition(
           p.position,

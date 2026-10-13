@@ -1,4 +1,7 @@
 import {
+  applyExecutionProfitProtection,
+  type ExecutionProfitProtectionState,
+  type ExecutionProfitProtectionPolicy,
   evaluateExecutionPriceExit,
   evaluateExecutionSignalExit,
   settleExecutionPosition,
@@ -18,6 +21,7 @@ export type RuntimeSignalEvent = {
   availableAt: Date;
 };
 export type RuntimePriceCheckpoint = {
+  profitProtectionState?: ExecutionProfitProtectionState | null;
   position: ExecutionPosition;
   event: RuntimePriceEvent;
   through: Date;
@@ -52,6 +56,10 @@ export async function forEachConcurrent<T>(
 export async function processRuntimePriceEvents(input: {
   position: ExecutionPosition;
   through: Date;
+  profitProtection?: {
+    policy: ExecutionProfitProtectionPolicy | null;
+    state: ExecutionProfitProtectionState | null;
+  };
   streamId: string | null;
   markPrice?: number;
   events: RuntimePriceEvent[];
@@ -70,6 +78,7 @@ export async function processRuntimePriceEvents(input: {
   }>;
   checkpoint: (state: RuntimePriceCheckpoint) => Promise<boolean>;
 }) {
+  let profitProtectionState = input.profitProtection?.state ?? null;
   let position = input.position;
   let through = input.through;
   let streamId = input.streamId;
@@ -83,6 +92,7 @@ export async function processRuntimePriceEvents(input: {
   for (const event of input.events) {
     if (event.observedAt < position.openedAt) {
       pending = {
+        ...(input.profitProtection ? { profitProtectionState } : {}),
         position,
         event,
         through,
@@ -151,11 +161,23 @@ export async function processRuntimePriceEvents(input: {
         }
       }
     }
-    if (!settlement) position = updateExecutionTrailingAtPrice(position, quote.price, input.config);
+    if (!settlement) {
+      position = updateExecutionTrailingAtPrice(position, quote.price, input.config);
+      const protection = applyExecutionProfitProtection(
+        position,
+        event,
+        input.config,
+        input.profitProtection?.policy ?? null,
+        profitProtectionState,
+      );
+      position = protection.position;
+      profitProtectionState = protection.state;
+    }
     through = quote.observedAt;
     streamId = event.streamId;
     markPrice = quote.price;
     pending = {
+      ...(input.profitProtection ? { profitProtectionState } : {}),
       position,
       event,
       through,

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Optional DRY_RUN profit protection каждой позиции: fee-aware безубыток с 0.5R,
+  trailing с 1R на расстоянии 0.5R. Отдельный durable peak с момента включения,
+  атомарный checkpoint/CAS и audit активации; исторические strategy versions сохранены.
+
 ### Fixed
 
 - После успешного restore-check старые PostgreSQL backups автоматически очищаются:

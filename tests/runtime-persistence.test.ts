@@ -481,6 +481,48 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       },
     );
     await t.test(
+      "profit protection checkpoint is atomic with price progress and stale writers cannot overwrite it",
+      async () => {
+        const context = await open();
+        const profitProtection = {
+          version: 1,
+          policyKey: "policy-v1",
+          activatedAt: quoteAt.toISOString(),
+          bestPrice: 103,
+        };
+        const input = { ...context.quote, profitProtection };
+        assert.equal((await runtime.persistRealtimeQuote(input)).applied, true);
+        assert.equal(
+          (
+            await runtime.persistRealtimeQuote({
+              ...input,
+              profitProtection: { ...profitProtection, bestPrice: 999 },
+            })
+          ).applied,
+          false,
+        );
+        const stored = await prisma.position.findUniqueOrThrow({
+          where: { id: context.position.id },
+        });
+        assert.deepEqual(stored.profitProtection, profitProtection);
+        assert.equal(stored.priceEventId, input.processedPrice.eventId);
+        assert.equal(stored.runtimeVersion, 1);
+        assert.deepEqual(
+          (await runtime.listRealtimePositions(context.workspace.id))[0]!.profitProtection,
+          profitProtection,
+        );
+        assert.equal(
+          await prisma.auditEvent.count({
+            where: {
+              resourceId: context.position.id,
+              action: "position.profit-protection.activate",
+            },
+          }),
+          1,
+        );
+      },
+    );
+    await t.test(
       "recovery remains unresolved after a prefix or candle cycle and clears only at the journal tail",
       async () => {
         const context = await open();

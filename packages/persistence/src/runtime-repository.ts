@@ -103,6 +103,7 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  profitProtection?: Prisma.InputJsonValue;
   indicatorState?: Prisma.InputJsonValue;
   signalCandleAt?: Date | null;
   decidedAt?: Date;
@@ -342,6 +343,7 @@ export class RuntimeRepository {
       select: {
         signalCandleAt: true,
         indicatorState: true,
+        profitProtection: true,
         id: true,
         runtimeVersion: true,
         priceEventId: true,
@@ -393,6 +395,7 @@ export class RuntimeRepository {
         },
         select: {
           id: true,
+          profitProtection: true,
           side: true,
           quantity: true,
           entryPrice: true,
@@ -418,6 +421,25 @@ export class RuntimeRepository {
         return { applied: false, closed: false };
       }
 
+      const protection = input.profitProtection as { policyKey?: string } | undefined;
+      const previousProtection = position.profitProtection as { policyKey?: string } | null;
+      if (protection?.policyKey && protection.policyKey !== previousProtection?.policyKey) {
+        await transaction.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorId: "worker",
+            action: "position.profit-protection.activate",
+            resourceType: "position",
+            resourceId: position.id,
+            outcome: "COMPLETED",
+            requestId: `profit-protection:${position.id}:${input.processedPrice.eventId}`,
+            metadata: {
+              eventId: String(input.processedPrice.eventId),
+              state: input.profitProtection!,
+            },
+          },
+        });
+      }
       if (input.recoveryEvidence) {
         await transaction.auditEvent.create({
           data: {
@@ -450,6 +472,9 @@ export class RuntimeRepository {
             runtimeVersion: { increment: 1 },
             ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
             ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
+            ...(input.profitProtection === undefined
+              ? {}
+              : { profitProtection: input.profitProtection }),
             trailingPrice: input.action.trailingPrice,
           },
         });
@@ -494,12 +519,19 @@ export class RuntimeRepository {
           decidedAt: input.decidedAt ?? input.quoteAt,
         },
       });
-      if (input.signalCandleAt !== undefined || input.indicatorState !== undefined)
+      if (
+        input.signalCandleAt !== undefined ||
+        input.indicatorState !== undefined ||
+        input.profitProtection !== undefined
+      )
         await transaction.position.update({
           where: { id: position.id },
           data: {
             ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
             ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
+            ...(input.profitProtection === undefined
+              ? {}
+              : { profitProtection: input.profitProtection }),
           },
         });
       await clearRecoveredCursor(transaction, input, true);

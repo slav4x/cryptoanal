@@ -56,6 +56,10 @@ const serverConfigSchema = z
     INSTRUMENT_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     ACCOUNT_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     RUNTIME_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
+    RUNTIME_PROFIT_PROTECTION_ENABLED_AT: z.iso.datetime().optional(),
+    RUNTIME_PROFIT_BREAK_EVEN_ACTIVATION_R: z.coerce.number().positive().max(10).default(0.5),
+    RUNTIME_PROFIT_TRAILING_ACTIVATION_R: z.coerce.number().positive().max(10).default(1),
+    RUNTIME_PROFIT_TRAILING_DISTANCE_R: z.coerce.number().positive().max(10).default(0.5),
     RUNTIME_QUOTE_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),
     RUNTIME_QUOTE_MAX_AGE_MS: z.coerce.number().int().min(1_000).default(10_000),
     RUNTIME_MARKET_ENTRY_TTL_MS: z.coerce.number().int().min(1_000).max(300_000).default(60_000),
@@ -73,6 +77,12 @@ const serverConfigSchema = z
     DRY_RUN_INITIAL_BALANCE: z.coerce.number().nonnegative().default(10_000),
   })
   .superRefine((config, context) => {
+    if (config.RUNTIME_PROFIT_TRAILING_DISTANCE_R >= config.RUNTIME_PROFIT_TRAILING_ACTIVATION_R)
+      context.addIssue({
+        code: "custom",
+        path: ["RUNTIME_PROFIT_TRAILING_DISTANCE_R"],
+        message: "Trailing distance must be less than activation",
+      });
     if (config.NODE_ENV === "production" && config.AUTH_SECRET === developmentAuthSecret) {
       context.addIssue({
         code: "custom",

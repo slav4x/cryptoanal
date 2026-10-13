@@ -979,7 +979,7 @@ function updateExecutionProtection(
   return { ...position, bestPrice, stopPrice, trailingPrice };
 }
 
-function executionBreakEvenPrice(
+export function executionBreakEvenPrice(
   position: ExecutionPosition,
   config: ExecutionStrategyConfig,
 ): number {

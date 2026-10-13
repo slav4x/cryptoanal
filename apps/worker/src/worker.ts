@@ -5,6 +5,7 @@ import {
   replayPositionIndicators,
 } from "./runtime-position-indicators";
 import {
+  readExecutionProfitProtectionState,
   buildDecisionMarketFrame,
   createDecisionContextSnapshot,
   decisionContextSchemaVersion,
@@ -117,6 +118,14 @@ const runtimeRiskPolicy = {
   maxOpenPositions: config.RUNTIME_MAX_OPEN_POSITIONS,
   maxQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
 };
+const runtimeProfitProtectionPolicy = config.RUNTIME_PROFIT_PROTECTION_ENABLED_AT
+  ? {
+      enabledAt: config.RUNTIME_PROFIT_PROTECTION_ENABLED_AT,
+      breakEvenActivationR: config.RUNTIME_PROFIT_BREAK_EVEN_ACTIVATION_R,
+      trailingActivationR: config.RUNTIME_PROFIT_TRAILING_ACTIVATION_R,
+      trailingDistanceR: config.RUNTIME_PROFIT_TRAILING_DISTANCE_R,
+    }
+  : null;
 const runtimeMarketEntryPolicy = {
   ttlMs: config.RUNTIME_MARKET_ENTRY_TTL_MS,
   maxDeviationBps: config.RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS,
@@ -916,6 +925,10 @@ async function processRealtimePosition(
   let version = target.runtimeVersion;
   await processRuntimePriceEvents({
     position: deserializeExecutionPosition(target),
+    profitProtection: {
+      policy: runtimeProfitProtectionPolicy,
+      state: readExecutionProfitProtectionState(target.profitProtection),
+    },
     through: target.managedThroughAt ?? target.openedAt,
     streamId: target.priceStreamId,
     markPrice: Number(target.markPrice ?? target.entryPrice),
@@ -984,6 +997,7 @@ async function processRealtimePosition(
       });
     },
     checkpoint: async ({
+      profitProtectionState,
       position,
       event,
       through,
@@ -1005,6 +1019,7 @@ async function processRealtimePosition(
         executionRunId: target.executionRunId,
         strategyVersionId: target.strategyVersionId,
         positionId: target.id,
+        ...(profitProtectionState ? { profitProtection: profitProtectionState } : {}),
         expectedPositionVersion: version,
         symbol: target.symbol,
         quotePrice: String(markPrice),
@@ -1018,6 +1033,14 @@ async function processRealtimePosition(
           source: recovered ? "ohlc-recovery" : "durable-price-events",
           lastEventId: String(event.id),
           recovered,
+          ...(profitProtectionState
+            ? {
+                profitProtection: {
+                  ...profitProtectionState,
+                  policy: runtimeProfitProtectionPolicy,
+                },
+              }
+            : {}),
           ...(signalExit
             ? {
                 signalExit: {

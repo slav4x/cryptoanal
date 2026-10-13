@@ -657,6 +657,7 @@ model ExecutionRun {
 }
 
 model Position {
+  profitProtection Json?
   indicatorState   Json?
   signalCandleAt    DateTime?          @db.Timestamptz(3)
   priceEventId      BigInt?

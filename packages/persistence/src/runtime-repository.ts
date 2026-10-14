@@ -1,4 +1,6 @@
 import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-entry-wait";
+import { instrumentRulesSelect } from "./instrument-rules";
+import type { ExecutionInstrumentRules } from "../../application/src/execution-instrument";
 import {
   defaultRuntimeMarketEntryPolicy,
   runtimeEntryExpiresAt,
@@ -29,6 +31,7 @@ import {
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
 export type RuntimeCyclePosition = {
+  instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
   side: "BUY" | "SELL";
   entryRegime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN";
@@ -244,6 +247,7 @@ export class RuntimeRepository {
         },
         select: {
           id: true,
+          instrumentRules: true,
           runtimeVersion: true,
           priceEventId: true,
           priceStreamId: true,
@@ -267,7 +271,7 @@ export class RuntimeRepository {
       }),
       this.prisma.marketInstrument.findUnique({
         where: { symbol: input.symbol },
-        select: { status: true, enabled: true, metadataSyncedAt: true },
+        select: instrumentRulesSelect,
       }),
       this.prisma.marketCandle.findMany({
         where: {
@@ -358,6 +362,7 @@ export class RuntimeRepository {
         signalCandleAt: true,
         indicatorState: true,
         profitProtection: true,
+        instrumentRules: true,
         id: true,
         runtimeVersion: true,
         priceEventId: true,
@@ -417,6 +422,7 @@ export class RuntimeRepository {
         select: {
           id: true,
           profitProtection: true,
+          instrumentRules: true,
           symbol: true,
           priceEventId: true,
           priceStreamId: true,
@@ -469,6 +475,9 @@ export class RuntimeRepository {
           bestPrice: position.bestPrice.toFixed(),
           entryFee: position.entryFee.toFixed(),
           entrySlippage: position.entrySlippage.toFixed(),
+          ...(position.instrumentRules
+            ? { instrumentRules: position.instrumentRules as unknown as ExecutionInstrumentRules }
+            : {}),
         },
         eventId: position.priceEventId ?? input.processedPrice.eventId,
         streamId: position.priceStreamId,
@@ -856,6 +865,9 @@ export class RuntimeRepository {
           bestPrice: input.position.bestPrice,
           entryFee: input.position.entryFee,
           entrySlippage: input.position.entrySlippage,
+          ...(input.position.instrumentRules
+            ? { instrumentRules: input.position.instrumentRules }
+            : {}),
           markPrice: input.quotePrice,
           unrealizedPnl: input.unrealizedPnl,
           openedAt: input.position.openedAt,
@@ -970,7 +982,7 @@ export class RuntimeRepository {
           lastEvaluatedAt: true,
           pendingPriceEventId: true,
           lastDecisionId: true,
-          instrument: { select: { enabled: true, status: true } },
+          instrument: { select: instrumentRulesSelect },
           executionRun: {
             select: {
               id: true,
@@ -1165,7 +1177,7 @@ export class RuntimeRepository {
         lastEvaluatedAt: true,
         pendingSignal: true,
         pendingPriceEventId: true,
-        instrument: { select: { enabled: true, status: true } },
+        instrument: { select: instrumentRulesSelect },
         executionRun: {
           select: {
             id: true,
@@ -1448,6 +1460,9 @@ export class RuntimeRepository {
             bestPrice: action.position.bestPrice,
             entryFee: action.position.entryFee,
             entrySlippage: action.position.entrySlippage,
+            ...(action.position.instrumentRules
+              ? { instrumentRules: action.position.instrumentRules }
+              : {}),
             markPrice: action.markPrice,
             unrealizedPnl: action.unrealizedPnl,
             openedAt: action.position.openedAt,
@@ -1789,6 +1804,7 @@ export class RuntimeRepository {
     return this.prisma.position.findFirst({
       where: { id: positionId, workspaceId },
       select: {
+        instrumentRules: true,
         id: true,
         symbol: true,
         side: true,

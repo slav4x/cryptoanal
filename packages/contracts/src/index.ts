@@ -917,6 +917,13 @@ export const validationMetricsSchema = z.object({
   equitySeries: z.array(z.object({ observedAt: z.iso.datetime(), equity: z.number() })),
   gateReasons: z.array(z.string()),
   provenance: metricsProvenanceSchema.extend({
+    instrumentRules: z
+      .object({
+        mode: z.literal("fixed-snapshot-scenario"),
+        observedAt: z.iso.datetime(),
+        symbols: z.array(z.string()),
+      })
+      .optional(),
     datasetHash: z.string(),
     symbols: z.array(z.string()),
     timeframe: z.enum(["5m", "15m", "30m", "1h", "4h"]),

@@ -6,6 +6,7 @@ import {
 import type { Prisma } from "./generated/prisma/client";
 import type { RuntimeRiskPolicy } from "./runtime-risk";
 import type { RuntimeMarketEntryPolicy } from "./runtime-entry-policy";
+import { readExecutionInstrumentRules } from "../../application/src/execution-instrument";
 
 export type PositionTraceOptions = {
   retentionDays: number;
@@ -31,6 +32,7 @@ export function hashTracePayload(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 type SnapshotPosition = {
+  instrumentRules?: unknown;
   symbol: string;
   side: "BUY" | "SELL";
   entryRegime: string;
@@ -76,25 +78,41 @@ export async function ensurePositionTrace(
     where: { id: input.strategyVersionId },
     select: { config: true, configHash: true },
   });
+  const persisted = await tx.position.findUniqueOrThrow({
+    where: { id: input.positionId },
+    select: {
+      entryPrice: true,
+      quantity: true,
+      stopPrice: true,
+      takePrice: true,
+      trailingPrice: true,
+      bestPrice: true,
+      entryFee: true,
+      entrySlippage: true,
+    },
+  });
   const snapshot = {
     version: 1,
     executionEngineVersion,
     config: version.config,
     configHash: version.configHash,
     position: {
+      ...(input.position.instrumentRules
+        ? { instrumentRules: readExecutionInstrumentRules(input.position.instrumentRules)! }
+        : {}),
       symbol: input.position.symbol,
       side: input.position.side,
       entryRegime: input.position.entryRegime,
       entrySession: input.position.entrySession,
       openedAt: input.position.openedAt.toISOString(),
-      entryPrice: input.position.entryPrice,
-      quantity: input.position.quantity,
-      stopPrice: input.position.stopPrice,
-      takePrice: input.position.takePrice,
-      trailingPrice: input.position.trailingPrice,
-      bestPrice: input.position.bestPrice,
-      entryFee: input.position.entryFee,
-      entrySlippage: input.position.entrySlippage,
+      entryPrice: persisted.entryPrice.toFixed(),
+      quantity: persisted.quantity.toFixed(),
+      stopPrice: persisted.stopPrice.toFixed(),
+      takePrice: persisted.takePrice.toFixed(),
+      trailingPrice: persisted.trailingPrice?.toFixed() ?? null,
+      bestPrice: persisted.bestPrice.toFixed(),
+      entryFee: persisted.entryFee.toFixed(),
+      entrySlippage: persisted.entrySlippage.toFixed(),
     },
     eventId: String(input.eventId),
     streamId: input.streamId,

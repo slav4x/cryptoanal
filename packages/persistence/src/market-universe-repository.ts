@@ -2,6 +2,10 @@ import type { CryptoAnalPrismaClient } from "./client";
 import type { Prisma } from "./generated/prisma/client";
 
 export type MarketUniverseInstrumentInput = {
+  minPrice?: string;
+  maxPrice?: string;
+  maxOrderQty?: string;
+  maxMarketOrderQty?: string;
   symbol: string;
   baseAsset: string;
   quoteAsset: string;
@@ -102,6 +106,10 @@ export class MarketUniverseRepository {
                   qtyStep: next.qtyStep,
                   minOrderQty: next.minOrderQty,
                   minNotional: next.minNotional,
+                  minPrice: next.minPrice ?? null,
+                  maxPrice: next.maxPrice ?? null,
+                  maxOrderQty: next.maxOrderQty ?? null,
+                  maxMarketOrderQty: next.maxMarketOrderQty ?? null,
                 }
               : {}),
           },
@@ -223,6 +231,10 @@ export class MarketUniverseRepository {
             qtyStep: instrument.qtyStep,
             minOrderQty: instrument.minOrderQty,
             minNotional: instrument.minNotional,
+            minPrice: instrument.minPrice ?? null,
+            maxPrice: instrument.maxPrice ?? null,
+            maxOrderQty: instrument.maxOrderQty ?? null,
+            maxMarketOrderQty: instrument.maxMarketOrderQty ?? null,
             enabled: instrument.status === "Trading",
             metadataSyncedAt: syncedAt,
           },

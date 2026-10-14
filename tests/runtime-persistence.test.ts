@@ -36,6 +36,7 @@ import {
   RuntimeRiskRepository,
   RuntimeRiskControlConflictError,
   defaultRuntimeRiskPolicy,
+  checkRuntimeEntry,
 } from "../packages/persistence/src/runtime-risk";
 import { PriceEventRepository } from "../packages/persistence/src/price-event-repository";
 import { PriceArchiveRepository } from "../packages/persistence/src/price-archive-repository";
@@ -125,6 +126,19 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       },
     });
     const symbol = `TEST${suffix}`;
+    const instrumentRules = {
+      version: 1 as const,
+      symbol,
+      observedAt: quoteAt.toISOString(),
+      tickSize: "0.00000001",
+      qtyStep: "0.00000001",
+      minOrderQty: "0.00000001",
+      minNotional: "0",
+      minPrice: "0.00000001",
+      maxPrice: "100000000",
+      maxOrderQty: "100000000",
+      maxMarketOrderQty: "100000000",
+    };
     await prisma.marketInstrument.create({
       data: {
         symbol,
@@ -133,6 +147,12 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         exchange: "bybit",
         instrumentType: "linear-perpetual",
         status: "Trading",
+        ...Object.fromEntries(
+          Object.entries(instrumentRules).filter(
+            ([key]) => !["version", "symbol", "observedAt"].includes(key),
+          ),
+        ),
+        metadataSyncedAt: quoteAt,
       },
     });
     const pendingSignal = {
@@ -171,6 +191,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       entryOrderType: "MARKET",
       factors: {},
       position: {
+        instrumentRules,
         symbol,
         side: "BUY",
         entryRegime: "NEUTRAL",
@@ -591,6 +612,253 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(trace.eventCount, 2n);
         assert.equal(trace.policyHash, hashTracePayload(null));
         assert.equal(trace.snapshotHash, hashTracePayload(trace.snapshot));
+      },
+    );
+    await t.test(
+      "admitted entry holds instrument metadata stable until transaction completion",
+      async () => {
+        const context = await setup();
+        let ready!: () => void, release!: () => void;
+        const started = new Promise<void>((resolve) => {
+          ready = resolve;
+        });
+        const proceed = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const admission = prisma.$transaction(async (tx) => {
+          assert.equal(
+            await checkRuntimeEntry(tx, {
+              workspaceId: context.workspace.id,
+              exchangeAccountId: context.deployment.exchangeAccountId,
+              strategyConfig: fixture.config,
+              policy: defaultRuntimeRiskPolicy,
+              eventId: context.entry.entryPriceEventId,
+              position: context.entry.position,
+            }),
+            null,
+          );
+          ready();
+          await proceed;
+        });
+        let update: Promise<unknown> | undefined;
+        try {
+          await Promise.race([started, admission]);
+          update = prisma.marketInstrument
+            .update({ where: { symbol: context.symbol }, data: { qtyStep: "0.1" } })
+            .then((value) => value);
+          let blocked = false;
+          const deadline = Date.now() + 2000;
+          while (!blocked && Date.now() < deadline) {
+            const rows = await prisma.$queryRaw<
+              Array<{ blocked: boolean }>
+            >`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND cardinality(pg_blocking_pids(pid))>0 AND query LIKE '%MarketInstrument%') AS blocked`;
+            blocked = rows[0]!.blocked;
+            if (!blocked) await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          assert.equal(blocked, true, "metadata update must wait for the admitted entry");
+        } finally {
+          release();
+          await admission;
+          await update;
+        }
+        assert.equal(
+          (
+            await prisma.marketInstrument.findUniqueOrThrow({ where: { symbol: context.symbol } })
+          ).qtyStep!.toFixed(),
+          "0.1",
+        );
+      },
+    );
+    await t.test(
+      "entry admission rejects missing/stale/changed rules, off-step size and minimum violations",
+      async () => {
+        for (const kind of [
+          "missing",
+          "stale",
+          "changed",
+          "step",
+          "notional",
+          "max",
+          "price",
+        ] as const) {
+          const context = await setup();
+          const input = {
+            ...context.entry,
+            position: {
+              ...context.entry.position,
+              instrumentRules: { ...context.entry.position.instrumentRules! },
+            },
+          };
+          let expected: string;
+          if (kind === "missing") {
+            delete (input.position as typeof context.entry.position).instrumentRules;
+            expected = "INSTRUMENT_RULES_MISSING";
+          } else if (kind === "stale") {
+            await prisma.marketInstrument.update({
+              where: { symbol: context.symbol },
+              data: { metadataSyncedAt: new Date(Date.now() - 3600001) },
+            });
+            expected = "INSTRUMENT_RULES_STALE";
+          } else if (kind === "changed") {
+            await prisma.marketInstrument.update({
+              where: { symbol: context.symbol },
+              data: { qtyStep: "0.1" },
+            });
+            expected = "INSTRUMENT_RULES_CHANGED";
+          } else if (kind === "step") {
+            input.position.quantity = "1.000000001";
+            expected = "INVALID_QUANTITY_STEP";
+          } else if (kind === "notional") {
+            input.position.instrumentRules.minNotional = "200";
+            await prisma.marketInstrument.update({
+              where: { symbol: context.symbol },
+              data: { minNotional: "200" },
+            });
+            expected = "ENTRY_BELOW_MIN_NOTIONAL";
+          } else if (kind === "max") {
+            input.position.instrumentRules.maxMarketOrderQty = "0.5";
+            await prisma.marketInstrument.update({
+              where: { symbol: context.symbol },
+              data: { maxMarketOrderQty: "0.5" },
+            });
+            expected = "ENTRY_ABOVE_MAX_QUANTITY";
+          } else {
+            input.position.entryPrice = "100.000000001";
+            expected = "INVALID_PRICE_STEP_OR_RANGE";
+          }
+          const result = await runtime.persistRealtimeEntry(input);
+          assert.equal("riskFailure" in result && result.riskFailure, expected, kind);
+          assert.equal(
+            await prisma.position.count({ where: { executionRunId: context.run.id } }),
+            0,
+          );
+          assert.equal(
+            await prisma.fill.count({ where: { order: { executionRunId: context.run.id } } }),
+            0,
+          );
+        }
+      },
+    );
+    await t.test(
+      "position and trace pin the same rules; later metadata cannot rewrite them",
+      async () => {
+        const context = await open();
+        const position = await prisma.position.findUniqueOrThrow({
+          where: { id: context.position.id },
+        });
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: context.position.id },
+        });
+        assert.equal(
+          hashTracePayload(position.instrumentRules),
+          hashTracePayload(context.entry.position.instrumentRules),
+        );
+        assert.equal(
+          hashTracePayload(
+            (trace.snapshot as { position: { instrumentRules: unknown } }).position.instrumentRules,
+          ),
+          hashTracePayload(position.instrumentRules),
+        );
+        await prisma.marketInstrument.update({
+          where: { symbol: context.symbol },
+          data: { qtyStep: "1", tickSize: "1" },
+        });
+        assert.equal(
+          (
+            await prisma.positionExecutionTrace.findUniqueOrThrow({
+              where: { positionId: context.position.id },
+            })
+          ).snapshotHash,
+          trace.snapshotHash,
+        );
+      },
+    );
+    await t.test(
+      "entry trace starts from stored decimal precision rather than discarded fee digits",
+      async () => {
+        const context = await setup();
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...context.entry,
+              position: { ...context.entry.position, entryFee: "0.0600000000000000001" },
+            })
+          ).applied,
+          true,
+        );
+        const position = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: position.id },
+        });
+        assert.equal(
+          (trace.snapshot as { position: { entryFee: string } }).position.entryFee,
+          position.entryFee.toFixed(),
+        );
+      },
+    );
+    await t.test(
+      "validation retries reuse the original instrument scenario and reject corrupted snapshots",
+      async () => {
+        const context = await setup();
+        const run = await prisma.validationRun.create({
+          data: {
+            workspaceId: context.workspace.id,
+            strategyId: context.deployment.strategyId,
+            strategyVersionId: context.entry.strategyVersionId,
+            kind: "BACKTEST",
+            status: "RUNNING",
+            datasetId: "rule-snapshot",
+            datasetAsOf: quoteAt,
+            engineVersion: "test",
+            configHash: context.run.configHash,
+            input: {},
+            createdByActorId: "test",
+          },
+        });
+        const job = await prisma.job.create({
+          data: {
+            workspaceId: context.workspace.id,
+            kind: "BACKTEST",
+            status: "RUNNING",
+            lockedBy: "rules-test",
+            lockedAt: quoteAt,
+            input: {},
+            idempotencyKey: randomUUID(),
+            createdByActorId: "test",
+          },
+        });
+        const repository = new ValidationRepository(prisma);
+        const input = {
+          workspaceId: context.workspace.id,
+          runId: run.id,
+          jobId: job.id,
+          workerId: "rules-test",
+          symbols: [context.symbol],
+        };
+        const original = await repository.pinInstrumentRules(input);
+        await prisma.marketInstrument.update({
+          where: { symbol: context.symbol },
+          data: { tickSize: "1", metadataSyncedAt: new Date(0) },
+        });
+        assert.deepEqual(await repository.pinInstrumentRules(input), original);
+        const saved = await prisma.validationRun.findUniqueOrThrow({ where: { id: run.id } });
+        const corrupted = JSON.parse(JSON.stringify(saved.executionRules));
+        corrupted.payload.instruments[context.symbol].tickSize = "1";
+        await prisma.validationRun.update({
+          where: { id: run.id },
+          data: { executionRules: corrupted },
+        });
+        await assert.rejects(repository.pinInstrumentRules(input), /снимок/);
+        await prisma.validationRun.update({
+          where: { id: run.id },
+          data: {
+            status: "COMPLETED",
+            executionRules: saved.executionRules as Prisma.InputJsonValue,
+          },
+        });
+        await prisma.job.update({ where: { id: job.id }, data: { status: "COMPLETED" } });
       },
     );
     await t.test(
@@ -1842,7 +2110,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       async () => {
         for (const age of [0, 120_000]) {
           const context = await setup();
-          const detectedAt = new Date(Date.now() - age);
+          const clock = await prisma.$queryRaw<
+            Array<{ now: Date }>
+          >`SELECT clock_timestamp() AS now`;
+          const detectedAt = new Date(+clock[0]!.now - age);
           await runtime.persistCycle({
             ...context.entry,
             ...decisionEngineFields(context),
@@ -3087,6 +3358,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
               side,
               entryFee: "0",
               stopPrice: String(100 - 2 * direction),
+              takePrice: String(100 + 4 * direction),
             },
           };
           await prisma.runtimeCursor.update({
@@ -3198,7 +3470,14 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         ...second.entry,
         entryPriceEventId: event.id,
         symbol: first.symbol,
-        position: { ...second.entry.position, symbol: first.symbol, side: "SELL" },
+        position: {
+          ...second.entry.position,
+          symbol: first.symbol,
+          side: "SELL",
+          stopPrice: "102",
+          takePrice: "96",
+          instrumentRules: first.entry.position.instrumentRules!,
+        },
       });
       assert.equal("riskFailure" in result && result.riskFailure, "PORTFOLIO_DIRECTION_CONFLICT");
     });

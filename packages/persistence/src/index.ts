@@ -156,3 +156,5 @@ export {
   runtimeEntryQuoteWaitReason,
   type RuntimeEntryWaitReason,
 } from "./runtime-entry-wait";
+export { captureInstrumentRules, instrumentRulesSelect } from "./instrument-rules";
+export { ValidationInstrumentRulesError } from "./validation-repository";

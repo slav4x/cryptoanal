@@ -1,10 +1,18 @@
 import {
   executionBreakEvenPrice,
+  executionInitialRiskDistance,
   updateExecutionTrailingAtPrice,
   type ExecutionPosition,
   type ExecutionQuote,
   type ExecutionStrategyConfig,
 } from "./execution-engine";
+import {
+  executionDecimalProduct,
+  executionDecimalSum,
+  compareExecutionDecimals,
+  normalizeExecutionTrailingPrice,
+  instrumentPriceValid,
+} from "./execution-instrument";
 
 export type ExecutionProfitProtectionPolicy = {
   enabledAt: string;
@@ -80,6 +88,53 @@ export function applyExecutionProfitProtection(
   };
   const direction = position.side === "long" ? 1 : -1;
   const breakEven = executionBreakEvenPrice(position, config);
+  if (position.instrumentRules) {
+    const rules = position.instrumentRules;
+    const risk = executionInitialRiskDistance(position, config);
+    const favorable = executionDecimalProduct(
+      executionDecimalSum(state.bestPrice, executionDecimalProduct(position.entryPrice, -1)),
+      direction,
+    );
+    const reached = (r: number) =>
+      compareExecutionDecimals(favorable, executionDecimalProduct(risk, r)) >= 0;
+    let stopPrice = position.stopPrice,
+      trailingPrice = position.trailingPrice;
+    if (
+      reached(policy.breakEvenActivationR) &&
+      instrumentPriceValid(breakEven, rules) &&
+      compareExecutionDecimals(
+        executionDecimalProduct(
+          executionDecimalSum(state.bestPrice, executionDecimalProduct(breakEven, -1)),
+          direction,
+        ),
+        rules.tickSize,
+      ) >= 0
+    )
+      stopPrice = direction === 1 ? Math.max(stopPrice, breakEven) : Math.min(stopPrice, breakEven);
+    if (reached(policy.trailingActivationR)) {
+      const candidate = normalizeExecutionTrailingPrice(
+        executionDecimalSum(
+          state.bestPrice,
+          executionDecimalProduct(risk, policy.trailingDistanceR, -direction),
+        ),
+        state.bestPrice,
+        position.side,
+        rules,
+      );
+      if (
+        candidate !== null &&
+        (candidate - breakEven) * direction >= 0 &&
+        (state.bestPrice - candidate) * direction > 0
+      )
+        trailingPrice =
+          trailingPrice === null
+            ? candidate
+            : direction === 1
+              ? Math.max(trailingPrice, candidate)
+              : Math.min(trailingPrice, candidate);
+    }
+    return { position: { ...position, stopPrice, trailingPrice }, state };
+  }
   const trailingCandidate =
     state.bestPrice -
     direction *

@@ -38,6 +38,8 @@ import {
   type DecisionCandidate,
   type PendingExecutionSignal,
   type ValidationCandle,
+  readExecutionInstrumentRules,
+  executionLimitPrice,
   validationDatasetSource,
 } from "@cryptoanal/application";
 import { loadServerConfig } from "@cryptoanal/config";
@@ -57,6 +59,8 @@ import {
 } from "@cryptoanal/exchange-bybit";
 import {
   AccountSnapshotRepository,
+  captureInstrumentRules,
+  type RuntimeEntryWaitReason,
   CredentialCipher,
   DecisionRepository,
   ExchangeConnectionRepository,
@@ -78,6 +82,7 @@ import {
   type PriceEventInput,
   RuntimeStateConflictError,
   ValidationDatasetConflictError,
+  ValidationInstrumentRulesError,
   ValidationRepository,
   WorkspaceRepository,
   type ClaimedValidationJob,
@@ -1252,6 +1257,15 @@ async function processRealtimeEntry(
     return;
   }
   const deployment = target.executionRun.deployment;
+  const rules = captureInstrumentRules(target.instrument);
+  if (rules.reason) {
+    await runtimeRepository.advancePendingEntry({
+      ...progress,
+      throughEventId: target.pendingPriceEventId,
+      waitingReason: rules.reason as RuntimeEntryWaitReason,
+    });
+    return;
+  }
   const waitingReason =
     deployment.exchangeConnection?.status !== "ACTIVE" ||
     deployment.exchangeConnection.revokedAt !== null
@@ -1310,8 +1324,15 @@ async function processRealtimeEntry(
         risk.equity,
         Math.max(0, risk.equity) / strategyConfig.risk.maxOpenPositions,
         strategyConfig,
+        rules.rules!,
       );
-      if (!candidate) return { status: "no-touch" };
+      if (!candidate) {
+        const limit = executionLimitPrice(pending, strategyConfig, rules.rules!);
+        return strategyConfig.entry.orderType === "limit" &&
+          (pending.side === "long" ? quote.price > limit : quote.price < limit)
+          ? { status: "no-touch" }
+          : { status: "rejected", reason: "ENTRY_SIZE_BELOW_INSTRUMENT_LIMITS" };
+      }
       const position = limitExecutionPositionRisk(
         candidate,
         risk.equity,
@@ -1753,6 +1774,7 @@ async function processRuntimeTarget(
           };
         } else if (signal) {
           const quote = getFreshQuote(symbol);
+          const entryRules = captureInstrumentRules(state.instrument);
           const signalExpiresAt = runtimeEntryExpiresAt(
             strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
             candleClosedAt,
@@ -1778,6 +1800,7 @@ async function processRuntimeTarget(
               : null;
           const candidate =
             !marketFailure &&
+            !entryRules.reason &&
             quote &&
             quote.receivedAt >= signalAvailableAt &&
             quote.observedAt >= candleClosedAt &&
@@ -1789,6 +1812,7 @@ async function processRuntimeTarget(
                   equity,
                   Math.max(0, equity) / strategyConfig.risk.maxOpenPositions,
                   strategyConfig,
+                  entryRules.rules!,
                 )
               : null;
           const opened =
@@ -1801,6 +1825,20 @@ async function processRuntimeTarget(
                   riskAssessment.remainingStopRisk,
                 )
               : null;
+          const eligibleQuote =
+            quote &&
+            quote.receivedAt >= signalAvailableAt &&
+            quote.observedAt >= candleClosedAt &&
+            +quote.observedAt < +candleClosedAt + intervalMs;
+          const normalizedSizeRejected =
+            !candidate &&
+            !entryRules.reason &&
+            !marketFailure &&
+            eligibleQuote &&
+            (strategyConfig.entry.orderType === "market" ||
+              (signal.side === "long"
+                ? quote.price <= executionLimitPrice(signal, strategyConfig, entryRules.rules!)
+                : quote.price >= executionLimitPrice(signal, strategyConfig, entryRules.rules!)));
           if (opened && positionAction.kind === "none") {
             entryPriceEventId = quote!.id;
             positionAction = {
@@ -1865,6 +1903,37 @@ async function processRuntimeTarget(
               action: "SKIP",
               reasonCode: "INVALID_ENTRY_SIZE",
               summary: "Вход отклонён: размер позиции не укладывается в ограничения риска",
+              factors: runtimeFactors(
+                candle,
+                dailyPnl,
+                equity,
+                signalAvailableAt,
+                indicators.checkpoint!,
+              ),
+            };
+          }
+          if (normalizedSizeRejected && positionAction.kind === "none") {
+            pendingSignalAfter = null;
+            decision = {
+              action: "SKIP",
+              reasonCode: "ENTRY_SIZE_BELOW_INSTRUMENT_LIMITS",
+              summary:
+                "Вход отклонён: после округления размер или защитные уровни не соответствуют ограничениям инструмента",
+              factors: runtimeFactors(
+                candle,
+                dailyPnl,
+                equity,
+                signalAvailableAt,
+                indicators.checkpoint!,
+              ),
+            };
+          }
+          if (entryRules.reason && positionAction.kind === "none") {
+            pendingSignalAfter = null;
+            decision = {
+              action: "SKIP",
+              reasonCode: entryRules.reason,
+              summary: "Вход отклонён: отсутствуют актуальные ограничения инструмента",
               factors: runtimeFactors(
                 candle,
                 dailyPnl,
@@ -2071,7 +2140,15 @@ async function processValidationJob(job: ClaimedValidationJob) {
     }
 
     const dataset = await prepareValidationDataset(job, executionInput, strategyConfig);
+    const instrumentScenario = await validationRepository.pinInstrumentRules({
+      workspaceId: job.workspaceId,
+      runId: job.runId,
+      jobId: job.jobId,
+      workerId,
+      symbols: dataset.symbols,
+    });
     const result = runValidationEngine({
+      instrumentRules: instrumentScenario.instruments,
       config: strategyConfig,
       candles: dataset.candles,
       evaluationPeriod: {
@@ -2105,6 +2182,11 @@ async function processValidationJob(job: ClaimedValidationJob) {
         asOf: dataset.endsAt.toISOString(),
         freshness: "immutable",
         fundingPolicy,
+        instrumentRules: {
+          mode: "fixed-snapshot-scenario",
+          observedAt: instrumentScenario.capturedAt,
+          symbols: dataset.symbols,
+        },
         symbols: dataset.symbols,
         timeframe: executionInput.dataset.timeframe,
         startDate: executionInput.dataset.startDate,
@@ -2412,6 +2494,7 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  instrumentRules?: unknown;
   symbol?: string;
   side: "BUY" | "SELL";
   entryRegime: "BULL" | "BEAR" | "NEUTRAL" | "UNKNOWN";
@@ -2427,6 +2510,9 @@ function deserializeExecutionPosition(position: {
   entrySlippage: { toNumber(): number };
 }): ExecutionPosition {
   return {
+    ...(position.instrumentRules
+      ? { instrumentRules: readExecutionInstrumentRules(position.instrumentRules)! }
+      : {}),
     symbol: position.symbol ?? "",
     side: position.side === "BUY" ? "long" : "short",
     entryRegime: deserializeMarketRegime(position.entryRegime),
@@ -2445,6 +2531,7 @@ function deserializeExecutionPosition(position: {
 
 function serializePosition(position: ExecutionPosition) {
   return {
+    ...(position.instrumentRules ? { instrumentRules: position.instrumentRules } : {}),
     symbol: position.symbol,
     side: position.side === "long" ? ("BUY" as const) : ("SELL" as const),
     entryRegime: serializeMarketRegime(position.entryRegime),
@@ -2685,6 +2772,8 @@ function deserializeTradingSession(session: "ASIA" | "EUROPE" | "US" | "OFF_HOUR
 }
 
 function validationFailure(error: unknown): { code: string; message: string } {
+  if (error instanceof ValidationInstrumentRulesError)
+    return { code: error.code, message: error.message };
   if (error instanceof ValidationDatasetConflictError) {
     return {
       code: "DATASET_SNAPSHOT_CONFLICT",

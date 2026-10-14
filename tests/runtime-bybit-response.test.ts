@@ -43,6 +43,44 @@ test("Bybit invalid envelopes and incomplete successes fail closed", async (t) =
   await assert.rejects(client.getLinearKlines("BTCUSDT"), /invalid success payload/);
 });
 
+test("Bybit instrument metadata preserves price ranges and separate limit/market maximum sizes", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({
+      retCode: 0,
+      retMsg: "OK",
+      result: {
+        category: "linear",
+        nextPageCursor: "",
+        list: [
+          {
+            symbol: "BTCUSDT",
+            contractType: "LinearPerpetual",
+            status: "Trading",
+            baseCoin: "BTC",
+            quoteCoin: "USDT",
+            settleCoin: "USDT",
+            priceFilter: { tickSize: "0.1", minPrice: "0.1", maxPrice: "1999999.8" },
+            lotSizeFilter: {
+              qtyStep: "0.001",
+              minOrderQty: "0.001",
+              minNotionalValue: "5",
+              maxOrderQty: "100",
+              maxMktOrderQty: "20",
+            },
+          },
+        ],
+      },
+    }),
+  );
+  const [instrument] = await new BybitPublicMarketClient(
+    "https://example.invalid",
+  ).getLinearInstruments();
+  assert.equal(instrument?.maxOrderQty, "100");
+  assert.equal(instrument?.maxMarketOrderQty, "20");
+  assert.equal(instrument?.minPrice, "0.1");
+  assert.equal(instrument?.maxPrice, "1999999.8");
+});
+
 test("Bybit cannot feed another symbol or category into requested candle history", async (t) => {
   let result = { ...klineResult, symbol: "ETHUSDT" };
   t.mock.method(globalThis, "fetch", async () =>

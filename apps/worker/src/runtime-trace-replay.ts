@@ -6,6 +6,7 @@ import {
   type EnrichedExecutionCandle,
   type ExecutionCandle,
   type ExecutionSettlement,
+  readExecutionInstrumentRules,
 } from "@cryptoanal/application";
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
@@ -82,7 +83,11 @@ export async function replayRuntimeTrace(input: {
   const snapshot = input.snapshot as Snapshot;
   if (
     snapshot.version !== 1 ||
-    snapshot.executionEngineVersion !== executionEngineVersion ||
+    (snapshot.executionEngineVersion !== executionEngineVersion &&
+      !(
+        snapshot.executionEngineVersion === "cryptoanal-execution@0.4.0" &&
+        !snapshot.position.instrumentRules
+      )) ||
     snapshot.funding?.status !== "disabled"
   )
     throw new Error("Unsupported execution trace version or funding policy");
@@ -102,6 +107,9 @@ export async function replayRuntimeTrace(input: {
     return result;
   };
   let position: ExecutionPosition = {
+    ...(stored.instrumentRules
+      ? { instrumentRules: readExecutionInstrumentRules(stored.instrumentRules)! }
+      : {}),
     symbol: stored.symbol!,
     side: stored.side === "BUY" ? "long" : "short",
     openedAt: date(stored.openedAt!),

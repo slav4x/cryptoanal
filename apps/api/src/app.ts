@@ -11,6 +11,7 @@ import {
   getDeploymentCommands,
   metricProvenanceSchemaVersion,
   settleExecutionPosition,
+  readExecutionInstrumentRules,
   validationDatasetSource,
   validationEngineVersion,
 } from "@cryptoanal/application";
@@ -3579,6 +3580,9 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         const strategyConfig = strategyConfigSchema.parse(position.strategyVersion.config);
         const settlement = settleExecutionPosition(
           {
+            ...(position.instrumentRules
+              ? { instrumentRules: readExecutionInstrumentRules(position.instrumentRules)! }
+              : {}),
             symbol: position.symbol,
             side: position.side === "BUY" ? "long" : "short",
             entryRegime: marketRegime[position.entryRegime],

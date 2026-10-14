@@ -1,4 +1,17 @@
 import { executionStopRisk } from "./execution-risk";
+import {
+  type ExecutionInstrumentRules,
+  roundExecutionStep,
+  executionStepNumber,
+  executionDecimalProduct,
+  executionDecimalSum,
+  floorExecutionRatio,
+  compareExecutionDecimals,
+  executionInstrumentSizeFailure,
+  instrumentPriceValid,
+  normalizeExecutionTrailingPrice,
+  roundExecutionRatio,
+} from "./execution-instrument";
 
 export type ExecutionCandle = {
   symbol: string;
@@ -70,6 +83,7 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 };
 
 export type ExecutionPosition = {
+  instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
   side: "long" | "short";
   entryRegime: ExecutionMarketRegime;
@@ -586,11 +600,11 @@ export function openExecutionPosition(
   equity: number,
   maximumNotional: number,
   config: ExecutionStrategyConfig,
+  instrumentRules?: ExecutionInstrumentRules,
 ): ExecutionPosition | null {
   const side = signal.side;
   const slippageRate = config.costs.slippageBps / 10_000;
-  const limitOffset = config.entry.limitOffsetBps / 10_000;
-  const limitPrice = signal.signalPrice * (side === "long" ? 1 - limitOffset : 1 + limitOffset);
+  const limitPrice = executionLimitPrice(signal, config, instrumentRules);
   if (
     config.entry.orderType === "limit" &&
     ((side === "long" && candle.low > limitPrice) || (side === "short" && candle.high < limitPrice))
@@ -615,7 +629,33 @@ export function openExecutionPosition(
     feeBps:
       config.entry.orderType === "limit" ? config.costs.makerFeeBps : config.costs.takerFeeBps,
     config,
+    ...(instrumentRules ? { instrumentRules } : {}),
   });
+}
+
+export function executionLimitPrice(
+  signal: PendingExecutionSignal,
+  config: ExecutionStrategyConfig,
+  rules?: ExecutionInstrumentRules,
+): number {
+  if (!rules)
+    return (
+      signal.signalPrice *
+      (signal.side === "long"
+        ? 1 - config.entry.limitOffsetBps / 10000
+        : 1 + config.entry.limitOffsetBps / 10000)
+    );
+  const factor = executionDecimalSum(
+    1,
+    executionDecimalProduct(config.entry.limitOffsetBps, signal.side === "long" ? -0.0001 : 0.0001),
+  );
+  return executionStepNumber(
+    roundExecutionStep(
+      executionDecimalProduct(signal.signalPrice, factor),
+      rules.tickSize,
+      signal.side === "long" ? "floor" : "ceil",
+    ),
+  );
 }
 
 export function openExecutionPositionAtQuote(
@@ -625,10 +665,9 @@ export function openExecutionPositionAtQuote(
   equity: number,
   maximumNotional: number,
   config: ExecutionStrategyConfig,
+  instrumentRules?: ExecutionInstrumentRules,
 ): ExecutionPosition | null {
-  const limitOffset = config.entry.limitOffsetBps / 10_000;
-  const limitPrice =
-    signal.signalPrice * (signal.side === "long" ? 1 - limitOffset : 1 + limitOffset);
+  const limitPrice = executionLimitPrice(signal, config, instrumentRules);
   if (
     config.entry.orderType === "limit" &&
     ((signal.side === "long" && quote.price > limitPrice) ||
@@ -655,6 +694,7 @@ export function openExecutionPositionAtQuote(
     feeBps:
       config.entry.orderType === "limit" ? config.costs.makerFeeBps : config.costs.takerFeeBps,
     config,
+    ...(instrumentRules ? { instrumentRules } : {}),
   });
 }
 
@@ -670,6 +710,7 @@ function createExecutionPosition({
   maximumNotional,
   feeBps,
   config,
+  instrumentRules,
 }: {
   signal: PendingExecutionSignal;
   symbol: string;
@@ -682,26 +723,74 @@ function createExecutionPosition({
   maximumNotional: number;
   feeBps: number;
   config: ExecutionStrategyConfig;
+  instrumentRules?: ExecutionInstrumentRules;
 }): ExecutionPosition | null {
   const side = signal.side;
+  if (instrumentRules) {
+    if (instrumentRules.symbol !== symbol) return null;
+    entryPrice =
+      config.entry.orderType === "limit"
+        ? referencePrice
+        : executionStepNumber(
+            roundExecutionStep(
+              executionDecimalProduct(
+                referencePrice,
+                executionDecimalSum(
+                  1,
+                  executionDecimalProduct(
+                    config.costs.slippageBps,
+                    side === "long" ? 0.0001 : -0.0001,
+                  ),
+                ),
+              ),
+              instrumentRules.tickSize,
+              side === "long" ? "ceil" : "floor",
+            ),
+          );
+  }
   const stopDistance = entryPrice * (config.exit.stopLossPercent / 100);
   const riskAmount = Math.max(0, equity) * (config.risk.riskPerTradePercent / 100);
   const riskSizedQuantity = stopDistance > 0 ? riskAmount / stopDistance : 0;
   const quantity = Math.min(riskSizedQuantity, maximumNotional / entryPrice);
   if (!Number.isFinite(quantity) || quantity <= 0) return null;
-  const stopPrice =
+  let stopPrice =
     entryPrice *
     (side === "long"
       ? 1 - config.exit.stopLossPercent / 100
       : 1 + config.exit.stopLossPercent / 100);
-  const takePrice =
+  let takePrice =
     entryPrice *
     (side === "long"
       ? 1 + config.exit.takeProfitPercent / 100
       : 1 - config.exit.takeProfitPercent / 100);
   if (!Number.isFinite(takePrice) || takePrice <= 0) return null;
+  if (instrumentRules) {
+    const normalize = (percent: number, sign: number) =>
+      executionStepNumber(
+        roundExecutionStep(
+          executionDecimalProduct(
+            entryPrice,
+            executionDecimalSum(1, executionDecimalProduct(percent, sign * 0.01)),
+          ),
+          instrumentRules.tickSize,
+          side === "long" ? "ceil" : "floor",
+        ),
+      );
+    stopPrice = normalize(config.exit.stopLossPercent, side === "long" ? -1 : 1);
+    takePrice = normalize(config.exit.takeProfitPercent, side === "long" ? 1 : -1);
+    if (
+      ![entryPrice, stopPrice, takePrice].every((price) =>
+        instrumentPriceValid(price, instrumentRules),
+      ) ||
+      (side === "long"
+        ? stopPrice >= entryPrice || takePrice <= entryPrice
+        : stopPrice <= entryPrice || takePrice >= entryPrice)
+    )
+      return null;
+  }
   return limitExecutionPositionRisk(
     {
+      ...(instrumentRules ? { instrumentRules } : {}),
       symbol,
       side,
       entryRegime,
@@ -764,14 +853,37 @@ export function limitExecutionPositionRisk(
     entryFee: feePerUnit,
     takerFeeBps: config.costs.takerFeeBps,
     slippageBps: config.costs.slippageBps,
+    ...(position.instrumentRules ? { tickSize: position.instrumentRules.tickSize } : {}),
   });
   if (unitLoss === null || unitLoss <= 0) return null;
-  const quantity = Math.min(
+  let quantity = Math.min(
     position.quantity,
     maximumNotional / (position.entryPrice + feePerUnit),
     Math.min((equity * config.risk.riskPerTradePercent) / 100, maximumLoss ?? Infinity) / unitLoss,
   );
   if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  if (position.instrumentRules) {
+    const rules = position.instrumentRules;
+    const bounds = [
+      roundExecutionStep(position.quantity, rules.qtyStep, "floor"),
+      floorExecutionRatio(
+        maximumNotional,
+        executionDecimalSum(position.entryPrice, feePerUnit),
+        rules.qtyStep,
+      ),
+      floorExecutionRatio(
+        Math.min((equity * config.risk.riskPerTradePercent) / 100, maximumLoss ?? Infinity),
+        unitLoss,
+        rules.qtyStep,
+      ),
+      roundExecutionStep(rules.maxOrderQty, rules.qtyStep, "floor"),
+      roundExecutionStep(rules.maxMarketOrderQty, rules.qtyStep, "floor"),
+    ];
+    quantity = executionStepNumber(
+      bounds.reduce((a, b) => (compareExecutionDecimals(a, b) <= 0 ? a : b)),
+    );
+    if (executionInstrumentSizeFailure({ ...position, quantity }, rules)) return null;
+  }
   const scale = quantity / position.quantity;
   return {
     ...position,
@@ -976,15 +1088,43 @@ function updateExecutionProtection(
     position.side === "long"
       ? Math.max(position.bestPrice, observedPrice)
       : Math.min(position.bestPrice, observedPrice);
-  const initialRisk = position.entryPrice * (config.exit.stopLossPercent / 100);
+  const normalizedRisk = position.instrumentRules
+    ? executionInitialRiskDistance(position, config)
+    : null;
+  const initialRisk =
+    normalizedRisk === null
+      ? position.entryPrice * (config.exit.stopLossPercent / 100)
+      : Number(normalizedRisk);
   const favorableMove = (bestPrice - position.entryPrice) * (position.side === "long" ? 1 : -1);
   const reachedR = initialRisk > 0 ? favorableMove / initialRisk : 0;
+  const reached = (activationR: number) =>
+    position.instrumentRules
+      ? compareExecutionDecimals(
+          executionDecimalProduct(
+            executionDecimalSum(bestPrice, executionDecimalProduct(position.entryPrice, -1)),
+            position.side === "long" ? 1 : -1,
+          ),
+          executionDecimalProduct(normalizedRisk ?? initialRisk, activationR),
+        ) >= 0
+      : reachedR >= activationR;
   let stopPrice = position.stopPrice;
   let trailingPrice = position.trailingPrice;
 
-  if (config.exit.breakEvenActivationR > 0 && reachedR >= config.exit.breakEvenActivationR) {
+  if (config.exit.breakEvenActivationR > 0 && reached(config.exit.breakEvenActivationR)) {
     const breakEvenPrice = executionBreakEvenPrice(position, config);
-    if ((bestPrice - breakEvenPrice) * (position.side === "long" ? 1 : -1) >= 0)
+    const canMove = position.instrumentRules
+      ? compareExecutionDecimals(
+          executionDecimalProduct(
+            executionDecimalSum(bestPrice, executionDecimalProduct(breakEvenPrice, -1)),
+            position.side === "long" ? 1 : -1,
+          ),
+          position.instrumentRules.tickSize,
+        ) >= 0
+      : (bestPrice - breakEvenPrice) * (position.side === "long" ? 1 : -1) >= 0;
+    if (
+      canMove &&
+      (!position.instrumentRules || instrumentPriceValid(breakEvenPrice, position.instrumentRules))
+    )
       stopPrice =
         position.side === "long"
           ? Math.max(stopPrice, breakEvenPrice)
@@ -993,28 +1133,101 @@ function updateExecutionProtection(
 
   const trailingActive =
     config.exit.trailingStopPercent > 0 &&
-    (config.exit.trailingActivationR <= 0 || reachedR >= config.exit.trailingActivationR);
+    (config.exit.trailingActivationR <= 0 || reached(config.exit.trailingActivationR));
   if (trailingActive) {
-    const candidate =
+    let candidate: number | null =
       bestPrice *
       (position.side === "long"
         ? 1 - config.exit.trailingStopPercent / 100
         : 1 + config.exit.trailingStopPercent / 100);
-    trailingPrice =
-      trailingPrice === null
-        ? candidate
-        : position.side === "long"
-          ? Math.max(trailingPrice, candidate)
-          : Math.min(trailingPrice, candidate);
+    if (position.instrumentRules)
+      candidate = normalizeExecutionTrailingPrice(
+        executionDecimalProduct(
+          bestPrice,
+          executionDecimalSum(
+            1,
+            executionDecimalProduct(
+              config.exit.trailingStopPercent,
+              position.side === "long" ? -0.01 : 0.01,
+            ),
+          ),
+        ),
+        bestPrice,
+        position.side,
+        position.instrumentRules,
+      );
+    if (candidate !== null)
+      trailingPrice =
+        trailingPrice === null
+          ? candidate
+          : position.side === "long"
+            ? Math.max(trailingPrice, candidate)
+            : Math.min(trailingPrice, candidate);
   }
 
   return { ...position, bestPrice, stopPrice, trailingPrice };
+}
+
+export function executionInitialRiskDistance(
+  position: ExecutionPosition,
+  config: ExecutionStrategyConfig,
+): string {
+  if (!position.instrumentRules)
+    return String(position.entryPrice * (config.exit.stopLossPercent / 100));
+  const direction = position.side === "long" ? 1 : -1;
+  const stop = roundExecutionStep(
+    executionDecimalProduct(
+      position.entryPrice,
+      executionDecimalSum(
+        1,
+        executionDecimalProduct(config.exit.stopLossPercent, -direction * 0.01),
+      ),
+    ),
+    position.instrumentRules.tickSize,
+    direction === 1 ? "ceil" : "floor",
+  );
+  return executionDecimalProduct(
+    executionDecimalSum(position.entryPrice, executionDecimalProduct(stop, -1)),
+    direction,
+  );
 }
 
 export function executionBreakEvenPrice(
   position: ExecutionPosition,
   config: ExecutionStrategyConfig,
 ): number {
+  if (position.instrumentRules) {
+    const tick = position.instrumentRules.tickSize,
+      direction = position.side === "long" ? 1 : -1;
+    const mode = direction === 1 ? "ceil" : "floor";
+    const notionalWithFees = executionDecimalSum(
+      executionDecimalProduct(position.entryPrice, position.quantity),
+      executionDecimalProduct(position.entryFee, direction),
+    );
+    const settled = roundExecutionRatio(
+      notionalWithFees,
+      executionDecimalProduct(
+        position.quantity,
+        executionDecimalSum(
+          1,
+          executionDecimalProduct(config.costs.takerFeeBps, -direction * 0.0001),
+        ),
+      ),
+      tick,
+      mode,
+    );
+    return executionStepNumber(
+      roundExecutionRatio(
+        settled,
+        executionDecimalSum(
+          1,
+          executionDecimalProduct(config.costs.slippageBps, -direction * 0.0001),
+        ),
+        tick,
+        mode,
+      ),
+    );
+  }
   const entryCostsPerUnit = position.entryFee / position.quantity;
   const takerRate = config.costs.takerFeeBps / 10_000;
   const slippageRate = config.costs.slippageBps / 10_000;
@@ -1034,7 +1247,24 @@ export function settleExecutionPosition<Reason extends ExecutionExitReason>(
   config: ExecutionStrategyConfig,
 ): ExecutionSettlement<Reason> {
   const slippageRate = config.costs.slippageBps / 10_000;
-  const exitPrice = rawExitPrice * (position.side === "long" ? 1 - slippageRate : 1 + slippageRate);
+  const exitPrice = position.instrumentRules
+    ? executionStepNumber(
+        roundExecutionStep(
+          executionDecimalProduct(
+            rawExitPrice,
+            executionDecimalSum(
+              1,
+              executionDecimalProduct(
+                config.costs.slippageBps,
+                position.side === "long" ? -0.0001 : 0.0001,
+              ),
+            ),
+          ),
+          position.instrumentRules.tickSize,
+          position.side === "long" ? "floor" : "ceil",
+        ),
+      )
+    : rawExitPrice * (position.side === "long" ? 1 - slippageRate : 1 + slippageRate);
   const direction = position.side === "long" ? 1 : -1;
   const grossPnl = (exitPrice - position.entryPrice) * position.quantity * direction;
   const exitFee = exitPrice * position.quantity * (config.costs.takerFeeBps / 10_000);

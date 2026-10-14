@@ -190,6 +190,13 @@ function CompletedRun({
               </ul>
             )}
             <div className="mt-4 space-y-2 border-t border-row-border pt-4 text-xs">
+              {metrics.provenance.instrumentRules ? (
+                <p className="rounded-[10px] border border-warning/20 bg-warning/5 px-3 py-2.5 leading-5 text-warning">
+                  Ограничения цен и размеров заявок зафиксированы{" "}
+                  {formatDateTime(metrics.provenance.instrumentRules.observedAt)}. Для прошлого
+                  периода это сценарное допущение: история изменений правил биржи не подтверждена.
+                </p>
+              ) : null}
               <DetailRow label="Окон" value={String(metrics.windows)} />
               <DetailRow label="Доходность" value={formatSignedPercent(metrics.returnPercent)} />
               <DetailRow label="Verdict" value={verdictLabels[run.verdict]} />

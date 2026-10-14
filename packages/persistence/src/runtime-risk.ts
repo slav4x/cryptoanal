@@ -4,6 +4,18 @@ import {
 } from "../../application/src/execution-risk";
 import { Prisma } from "./generated/prisma/client";
 import type { CryptoAnalPrismaClient } from "./client";
+import {
+  captureInstrumentRules,
+  instrumentRulesSelect,
+  defaultInstrumentMaximumAgeMs,
+} from "./instrument-rules";
+import {
+  readExecutionInstrumentRules,
+  instrumentRuleFields,
+  instrumentRulesFreshness,
+  executionInstrumentSizeFailure,
+  compareExecutionDecimals,
+} from "../../application/src/execution-instrument";
 
 export type RuntimeRiskPolicy = {
   initialBalance: number;
@@ -162,6 +174,9 @@ export async function assessRuntimeRisk(
           entryFee: Number(position.entryFee),
           takerFeeBps: costs.takerFeeBps,
           slippageBps: costs.slippageBps,
+          ...(position.instrumentRules
+            ? { tickSize: readExecutionInstrumentRules(position.instrumentRules)!.tickSize }
+            : {}),
         })
       : null;
     if (stopRisk === null) stopRiskValid = false;
@@ -260,11 +275,14 @@ export async function checkRuntimeEntry(
     eventId: bigint | undefined;
     signalAvailableAt?: Date;
     position: {
+      instrumentRules?: unknown;
       symbol: string;
       side: "BUY" | "SELL";
       quantity: string;
       entryPrice: string;
       stopPrice: string;
+      takePrice: string;
+      trailingPrice: string | null;
       entryFee: string;
       openedAt: Date;
     };
@@ -287,6 +305,40 @@ export async function checkRuntimeEntry(
     return "STALE_ENTRY_QUOTE";
   if (input.signalAvailableAt && event.receivedAt < input.signalAvailableAt)
     return "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY";
+  await tx.$executeRaw`SELECT symbol FROM "MarketInstrument" WHERE symbol=${input.position.symbol} FOR SHARE`;
+  const currentInstrument = await tx.marketInstrument.findUnique({
+    where: { symbol: input.position.symbol },
+    select: instrumentRulesSelect,
+  });
+  if (!currentInstrument?.enabled || currentInstrument.status !== "Trading")
+    return "INSTRUMENT_UNAVAILABLE";
+  const current = captureInstrumentRules(currentInstrument);
+  if (current.reason) return current.reason;
+  let rules;
+  try {
+    rules = readExecutionInstrumentRules(input.position.instrumentRules);
+  } catch {
+    return "INSTRUMENT_RULES_INVALID";
+  }
+  if (!rules || rules.symbol !== input.position.symbol) return "INSTRUMENT_RULES_MISSING";
+  const freshness = instrumentRulesFreshness(rules, new Date(now), defaultInstrumentMaximumAgeMs);
+  if (freshness) return freshness;
+  if (
+    instrumentRuleFields.some(
+      (key) => compareExecutionDecimals(rules[key], current.rules![key]) !== 0,
+    )
+  )
+    return "INSTRUMENT_RULES_CHANGED";
+  const instrumentFailure = executionInstrumentSizeFailure(input.position, rules);
+  if (instrumentFailure) return instrumentFailure;
+  if (
+    input.position.side === "BUY"
+      ? Number(input.position.stopPrice) >= Number(input.position.entryPrice) ||
+        Number(input.position.takePrice) <= Number(input.position.entryPrice)
+      : Number(input.position.stopPrice) <= Number(input.position.entryPrice) ||
+        Number(input.position.takePrice) >= Number(input.position.entryPrice)
+  )
+    return "INVALID_PROTECTION_LEVELS";
   const quantity = Number(input.position.quantity),
     entry = Number(input.position.entryPrice);
   const stop = Number(input.position.stopPrice);
@@ -323,6 +375,7 @@ export async function checkRuntimeEntry(
     entryFee: fee,
     takerFeeBps: costs.takerFeeBps,
     slippageBps: costs.slippageBps,
+    tickSize: rules.tickSize,
   });
   if (loss === null) return "INVALID_ENTRY_SIZE";
   if (loss > (Math.max(0, risk.equity) * costs.riskPerTradePercent) / 100 + 1e-8)

@@ -6,6 +6,7 @@ import {
   executionEngineVersion,
   type ExecutionPosition,
   type ExecutionProfitProtectionPolicy,
+  type ExecutionInstrumentRules,
 } from "../packages/application/src/index";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
 import { replayRuntimeTrace } from "../apps/worker/src/runtime-trace-replay";
@@ -44,8 +45,10 @@ async function trace(
   configured = config,
   protection: ExecutionProfitProtectionPolicy | null = policy,
   signals: RuntimeSignalEvent[] = [],
+  instrumentRules?: ExecutionInstrumentRules,
 ) {
   const position: ExecutionPosition = {
+    ...(instrumentRules ? { instrumentRules } : {}),
     symbol: "BTCUSDT",
     side,
     entryRegime: "neutral",
@@ -276,6 +279,38 @@ test("loss of a complete middle archive chunk is detected even when the exit sti
   assert.equal(result.settlement?.exitReason, "trailing-stop");
   assert.equal(result.status, "incomplete");
   assert.match(result.gaps.join(" "), /Event coverage mismatch/);
+});
+
+test("normalized traces replay their pinned rules; legacy version remains reproducible without new rules", async () => {
+  const instrumentRules: ExecutionInstrumentRules = {
+    version: 1,
+    symbol: "BTCUSDT",
+    observedAt: at.toISOString(),
+    tickSize: "0.1",
+    qtyStep: "0.001",
+    minOrderQty: "0.001",
+    minNotional: "5",
+    minPrice: "0.1",
+    maxPrice: "1000000",
+    maxOrderQty: "1000",
+    maxMarketOrderQty: "1000",
+  };
+  const normalized = await trace(
+    "long",
+    [event(2, 104), event(3, 102)],
+    config,
+    policy,
+    [],
+    instrumentRules,
+  );
+  assert.equal((await replayRuntimeTrace(normalized)).status, "matched");
+  const legacy = await trace("long", [event(2, 104), event(3, 102)]);
+  legacy.snapshot.executionEngineVersion = "cryptoanal-execution@0.4.0";
+  legacy.snapshotHash = hashTracePayload(legacy.snapshot);
+  assert.equal((await replayRuntimeTrace(legacy)).status, "matched");
+  normalized.snapshot.executionEngineVersion = "cryptoanal-execution@0.4.0";
+  normalized.snapshotHash = hashTracePayload(normalized.snapshot);
+  await assert.rejects(replayRuntimeTrace(normalized), /Unsupported/);
 });
 
 test("replay compares original settlement and profit-protection state without a trade row", async () => {

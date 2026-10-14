@@ -1,4 +1,11 @@
+import {
+  executionDecimalProduct,
+  executionDecimalSum,
+  roundExecutionStep,
+} from "./execution-instrument";
+
 export function executionStopRisk(input: {
+  tickSize?: string;
   side: "long" | "short";
   entryPrice: number;
   stopPrice: number;
@@ -19,7 +26,18 @@ export function executionStopRisk(input: {
   )
     return null;
   const direction = side === "long" ? 1 : -1;
-  const stopFill = stopPrice * (1 - (direction * slippageBps) / 10_000);
+  const stopFill = input.tickSize
+    ? Number(
+        roundExecutionStep(
+          executionDecimalProduct(
+            stopPrice,
+            executionDecimalSum(1, executionDecimalProduct(slippageBps, -direction * 0.0001)),
+          ),
+          input.tickSize,
+          side === "long" ? "floor" : "ceil",
+        ),
+      )
+    : stopPrice * (1 - (direction * slippageBps) / 10_000);
   if (!Number.isFinite(stopFill) || stopFill <= 0) return null;
   const loss =
     Math.max(0, (entryPrice - stopFill) * direction) * quantity +

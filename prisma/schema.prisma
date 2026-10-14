@@ -362,6 +362,10 @@ model MarketInstrument {
   qtyStep          Decimal?                  @db.Decimal(38, 18)
   minOrderQty      Decimal?                  @db.Decimal(38, 18)
   minNotional      Decimal?                  @db.Decimal(38, 18)
+  maxOrderQty      Decimal?                  @db.Decimal(38, 18)
+  maxMarketOrderQty Decimal?                 @db.Decimal(38, 18)
+  minPrice         Decimal?                  @db.Decimal(38, 18)
+  maxPrice         Decimal?                  @db.Decimal(38, 18)
   enabled          Boolean                   @default(true)
   metadataSyncedAt DateTime?                 @db.Timestamptz(3)
   createdAt        DateTime                  @default(now()) @db.Timestamptz(3)
@@ -509,6 +513,7 @@ model StrategyVersion {
 }
 
 model ValidationRun {
+  executionRules    Json?
   id                String            @id @default(uuid())
   workspaceId       String
   strategyId        String
@@ -657,6 +662,7 @@ model ExecutionRun {
 }
 
 model Position {
+  instrumentRules  Json?
   profitProtection Json?
   indicatorState   Json?
   signalCandleAt    DateTime?          @db.Timestamptz(3)

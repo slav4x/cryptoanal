@@ -19,3 +19,4 @@ export * from "./validation-engine";
 export * from "./execution-risk";
 
 export * from "./execution-profit-protection";
+export * from "./execution-instrument";

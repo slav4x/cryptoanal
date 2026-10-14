@@ -10,6 +10,10 @@ import {
   applyExecutionProfitProtection,
   readExecutionProfitProtectionState,
 } from "../packages/application/src/execution-profit-protection";
+import {
+  readExecutionInstrumentRules,
+  executionInstrumentSizeFailure,
+} from "../packages/application/src/execution-instrument";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -21,12 +25,20 @@ try {
   const one = async (sql: string) => (await client.query(sql)).rows[0];
   const rows = async (sql: string) => (await client.query(sql)).rows;
   const openProtection = { checked: 0, invalidOpenProtection: 0, protectionMismatch: 0 };
+  const instrumentCompliance = {
+    checked: 0,
+    legacyOpenPositions: 0,
+    invalidInstrumentPositions: 0,
+  };
   for (const stored of await rows(`SELECT p.*,v.config FROM "Position" p
     JOIN "StrategyVersion" v ON v.id=p."strategyVersionId" WHERE p.status='OPEN' AND p.environment='DRY_RUN'`)) {
     openProtection.checked++;
     try {
       const config = strategyConfigSchema.parse(stored.config);
       const position: ExecutionPosition = {
+        ...(stored.instrumentRules
+          ? { instrumentRules: readExecutionInstrumentRules(stored.instrumentRules)! }
+          : {}),
         symbol: stored.symbol,
         side: stored.side === "BUY" ? "long" : "short",
         openedAt: stored.openedAt,
@@ -41,6 +53,11 @@ try {
         entryRegime: "unknown",
         entrySession: "unknown",
       };
+      if (position.instrumentRules) {
+        instrumentCompliance.checked++;
+        if (executionInstrumentSizeFailure(position, position.instrumentRules))
+          instrumentCompliance.invalidInstrumentPositions++;
+      } else instrumentCompliance.legacyOpenPositions++;
       const quote = {
         symbol: position.symbol,
         price: Number(stored.markPrice ?? stored.entryPrice),
@@ -78,6 +95,7 @@ try {
     }
   }
   const summary = {
+    instrumentCompliance,
     openProtection,
     snapshot: await one('SELECT now() AS "observedAt", current_database() AS database'),
     deployments: await rows(
@@ -171,7 +189,13 @@ try {
     ),
   };
   await client.query("COMMIT");
-  const checks = [summary.ledger, summary.fills, summary.decisions, summary.openProtection];
+  const checks = [
+    summary.ledger,
+    summary.fills,
+    summary.decisions,
+    summary.openProtection,
+    summary.instrumentCompliance,
+  ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)
       .filter(([key, value]) => /Mismatch|invalid|BeyondLegacy/.test(key) && Number(value) !== 0)

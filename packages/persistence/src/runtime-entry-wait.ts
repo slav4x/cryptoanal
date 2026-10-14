@@ -1,4 +1,7 @@
 export type RuntimeEntryWaitReason =
+  | "INSTRUMENT_RULES_MISSING"
+  | "INSTRUMENT_RULES_STALE"
+  | "INSTRUMENT_RULES_INVALID"
   | "ENTRY_CONNECTION_UNAVAILABLE"
   | "INSTRUMENT_UNAVAILABLE"
   | "ENTRY_STREAM_UNAVAILABLE"
@@ -30,6 +33,9 @@ export function runtimeEntryQuoteWaitReason(input: {
 
 export function runtimeEntryWaitSummary(reason: RuntimeEntryWaitReason): string {
   const messages: Record<RuntimeEntryWaitReason, string> = {
+    INSTRUMENT_RULES_MISSING: "Вход ожидает загрузки ограничений инструмента",
+    INSTRUMENT_RULES_STALE: "Вход ожидает обновления ограничений инструмента",
+    INSTRUMENT_RULES_INVALID: "Вход ожидает корректных ограничений инструмента",
     ENTRY_CONNECTION_UNAVAILABLE: "Вход ожидает восстановления биржевого подключения",
     INSTRUMENT_UNAVAILABLE: "Вход ожидает доступности инструмента для торговли",
     ENTRY_STREAM_UNAVAILABLE: "Вход ожидает подключения потока цен",

@@ -13,15 +13,20 @@ import {
   type ExecutionStrategyConfig,
   type PendingExecutionSignal,
 } from "./execution-engine";
+import {
+  readExecutionInstrumentRules,
+  type ExecutionInstrumentRules,
+} from "./execution-instrument";
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.12.0";
+export const validationEngineVersion = "cryptoanal-validation@0.13.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
 
 export type ValidationEngineInput = {
+  instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ValidationStrategyConfig;
   candles: ValidationCandle[];
   initialCapital: number;
@@ -75,6 +80,12 @@ export type ValidationEngineResult = {
 };
 
 export function runValidationEngine(input: ValidationEngineInput): ValidationEngineResult {
+  if (input.instrumentRules)
+    for (const symbol of new Set(input.candles.map((candle) => candle.symbol))) {
+      const rules = readExecutionInstrumentRules(input.instrumentRules[symbol]);
+      if (!rules || rules.symbol !== symbol)
+        throw new Error(`Missing pinned instrument rules: ${symbol}`);
+    }
   if (input.candles.length === 0) {
     return {
       verdict: "failed",
@@ -322,6 +333,7 @@ function runBacktest(
         equity,
         Math.max(0, equity) / input.config.risk.maxOpenPositions,
         input.config,
+        input.instrumentRules?.[candle.symbol],
       );
       if (!position) continue;
       const entryRange = executionEntryCandleRange(position, candle, input.config);

@@ -77,11 +77,15 @@ const instrumentInfoResponseSchema = z.object({
           settleCoin: z.string(),
           priceFilter: z.object({
             tickSize: z.string(),
+            minPrice: z.string(),
+            maxPrice: z.string(),
           }),
           lotSizeFilter: z.object({
             minOrderQty: z.string(),
             qtyStep: z.string(),
             minNotionalValue: z.string(),
+            maxOrderQty: z.string(),
+            maxMktOrderQty: z.string(),
           }),
         })
         .passthrough(),
@@ -165,6 +169,10 @@ export type BybitMarketTicker = {
 };
 
 export type BybitLinearInstrument = {
+  minPrice: string;
+  maxPrice: string;
+  maxOrderQty: string;
+  maxMarketOrderQty: string;
   symbol: string;
   contractType: string;
   status: string;
@@ -483,6 +491,10 @@ export class BybitPublicMarketClient {
           qtyStep: instrument.lotSizeFilter.qtyStep,
           minOrderQty: instrument.lotSizeFilter.minOrderQty,
           minNotional: instrument.lotSizeFilter.minNotionalValue,
+          minPrice: instrument.priceFilter.minPrice,
+          maxPrice: instrument.priceFilter.maxPrice,
+          maxOrderQty: instrument.lotSizeFilter.maxOrderQty,
+          maxMarketOrderQty: instrument.lotSizeFilter.maxMktOrderQty,
         });
       }
 

@@ -12,9 +12,13 @@ import {
   type ExecutionStrategyConfig,
   type PendingExecutionSignal,
 } from "./execution-engine";
+import {
+  readExecutionInstrumentRules,
+  type ExecutionInstrumentRules,
+} from "./execution-instrument";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.6.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.7.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -44,10 +48,17 @@ export type RuntimeReplayTrade = {
 };
 
 export function runRuntimeReplay(input: {
+  instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ExecutionStrategyConfig;
   candles: ExecutionCandle[];
   initialCapital: number;
 }) {
+  if (input.instrumentRules)
+    for (const symbol of new Set(input.candles.map((candle) => candle.symbol))) {
+      const rules = readExecutionInstrumentRules(input.instrumentRules[symbol]);
+      if (!rules || rules.symbol !== symbol)
+        throw new Error(`Missing pinned instrument rules: ${symbol}`);
+    }
   const bySymbol = new Map<string, EnrichedExecutionCandle[]>();
   for (const candle of input.candles) {
     const candles = bySymbol.get(candle.symbol) ?? [];
@@ -118,6 +129,7 @@ export function runRuntimeReplay(input: {
         equity,
         Math.max(0, equity) / input.config.risk.maxOpenPositions,
         input.config,
+        input.instrumentRules?.[candle.symbol],
       );
       if (!position) continue;
       const entryRange = executionEntryCandleRange(position, candle, input.config);

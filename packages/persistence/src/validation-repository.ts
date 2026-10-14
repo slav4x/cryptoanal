@@ -1,6 +1,27 @@
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 import { createHash } from "node:crypto";
+import { captureInstrumentRules, instrumentRulesSelect } from "./instrument-rules";
+import { hashTracePayload } from "./position-trace";
+import {
+  readExecutionInstrumentRules,
+  type ExecutionInstrumentRules,
+} from "../../application/src/execution-instrument";
+
+export class ValidationInstrumentRulesError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+type ExecutionInstrumentScenario = {
+  version: 1;
+  mode: "fixed-snapshot-scenario";
+  capturedAt: string;
+  instruments: Record<string, ExecutionInstrumentRules>;
+};
 
 type ValidationJobKind = "BACKTEST" | "WALK_FORWARD";
 
@@ -96,6 +117,81 @@ export class ValidationDatasetConflictError extends Error {}
 
 export class ValidationRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
+
+  public async pinInstrumentRules(input: {
+    workspaceId: string;
+    runId: string;
+    jobId: string;
+    workerId: string;
+    symbols: string[];
+  }): Promise<ExecutionInstrumentScenario> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "ValidationRun" WHERE id=${input.runId} AND "workspaceId"=${input.workspaceId} FOR UPDATE`;
+      const run = await tx.validationRun.findFirstOrThrow({
+        where: { id: input.runId, workspaceId: input.workspaceId, status: "RUNNING" },
+        select: { executionRules: true },
+      });
+      const symbols = [...new Set(input.symbols)].sort();
+      if (run.executionRules) {
+        const stored = run.executionRules as unknown as {
+          payload: ExecutionInstrumentScenario;
+          hash: string;
+        };
+        if (
+          hashTracePayload(stored.payload) !== stored.hash ||
+          stored.payload.version !== 1 ||
+          stored.payload.mode !== "fixed-snapshot-scenario" ||
+          !Number.isFinite(Date.parse(stored.payload.capturedAt)) ||
+          JSON.stringify(Object.keys(stored.payload.instruments).sort()) !== JSON.stringify(symbols)
+        )
+          throw new ValidationInstrumentRulesError(
+            "INSTRUMENT_SNAPSHOT_INVALID",
+            "Повреждён снимок ограничений validation",
+          );
+        for (const rules of Object.values(stored.payload.instruments))
+          readExecutionInstrumentRules(rules);
+        return stored.payload;
+      }
+      const lease = await tx.job.updateMany({
+        where: {
+          id: input.jobId,
+          workspaceId: input.workspaceId,
+          status: "RUNNING",
+          lockedBy: input.workerId,
+        },
+        data: { lockedAt: new Date() },
+      });
+      if (lease.count !== 1)
+        throw new Error("Validation job lease was lost before pinning instrument rules");
+      const instruments = await tx.marketInstrument.findMany({
+        where: { symbol: { in: symbols } },
+        select: instrumentRulesSelect,
+      });
+      const rules: Record<string, ExecutionInstrumentRules> = {};
+      for (const symbol of symbols) {
+        const captured = captureInstrumentRules(
+          instruments.find((item) => item.symbol === symbol) ?? null,
+        );
+        if (captured.reason)
+          throw new ValidationInstrumentRulesError(
+            captured.reason,
+            `${symbol}: отсутствуют актуальные ограничения инструмента (${captured.reason})`,
+          );
+        rules[symbol] = captured.rules!;
+      }
+      const payload: ExecutionInstrumentScenario = {
+        version: 1,
+        mode: "fixed-snapshot-scenario",
+        capturedAt: new Date().toISOString(),
+        instruments: rules,
+      };
+      await tx.validationRun.update({
+        where: { id: input.runId },
+        data: { executionRules: { payload, hash: hashTracePayload(payload) } },
+      });
+      return payload;
+    });
+  }
 
   public list(workspaceId: string) {
     return this.prisma.validationRun.findMany({

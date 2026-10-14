@@ -942,6 +942,14 @@ Validation повышена до 0.10.0, candle replay до 1.4.0; golden datase
 три сделки и netPnL 538.87273932 сохранены. Typecheck, lint и format check прошли.
 Не изменены пороги per-position profit protection и конфигурации стратегий.
 
+Рабочая проверка первого этапа: backup `cryptoanal-2026-10-14T09-59-11-542Z`
+успешно восстановлен отдельно (47 таблиц, 34 миграции), retention сохранила три копии.
+API/worker обновлены из `d6e76e0`, engine SHA-256 внутри worker совпадает с checkout.
+На 10:04:01 UTC 34 deployment RUNNING/DRY_RUN, все 42 позиции сохраняют profitProtection,
+cursor failures — 0, max managed age 1.96 с, API health успешен. В запуске было одно
+предупреждение неполной загрузки свечей; сопровождение по журналу продолжилось.
+Тестовая БД удалена. Это разовый срез, не p95 или нагрузочная приёмка.
+
 Остальная временная модель E08 остаётся открытой: limit intrabar ambiguity,
 финансирование входа результатом будущего выхода, timestamp и метрики доли
 неоднозначных fills требуют отдельных изменений. Входные фильтры и predictive

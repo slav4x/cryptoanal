@@ -6,6 +6,7 @@ import {
   replayPositionIndicators,
 } from "./runtime-position-indicators";
 import {
+  storeExecutionMarketData,
   readExecutionProfitProtectionState,
   buildDecisionMarketFrame,
   createDecisionContextSnapshot,
@@ -327,13 +328,21 @@ async function marketStreamLoop() {
           getSubscriptions: async () => {
             const symbols = await marketDataRepository.listEnabledSymbols();
             const series = await listRequiredMarketSeries();
+            const tradeSymbols = [...new Set([...symbols, ...series.map(({ symbol }) => symbol)])];
             return {
               tickerSymbols: [],
-              tradeSymbols: [...new Set([...symbols, ...series.map(({ symbol }) => symbol)])],
+              tradeSymbols,
+              orderbookSymbols: tradeSymbols,
               klines: series.map(({ symbol, interval }) => ({ symbol, interval })),
             };
           },
           onQuote: () => {},
+          onOrderbookUnavailable: ({ symbol, error }) => {
+            logger.warn(
+              { symbol, err: error },
+              "Orderbook unavailable; public trade stream continues",
+            );
+          },
           onTrade: (quote) => {
             if (stopping) return;
             const price = Number(quote.price);
@@ -350,6 +359,27 @@ async function marketStreamLoop() {
                 symbol: quote.symbol,
                 price: quote.price,
                 observedAt: quote.observedAt,
+                receivedAt: quote.receivedAt,
+                executionData: storeExecutionMarketData({
+                  source: "bybit-public",
+                  depth: 1,
+                  trade: {
+                    quantity: quote.quantity,
+                    takerSide: quote.takerSide,
+                    blockTrade: quote.blockTrade,
+                    rpiTrade: quote.rpiTrade,
+                  },
+                  book: quote.book
+                    ? {
+                        bid: quote.book.bid,
+                        ask: quote.book.ask,
+                        observedAt: +quote.book.observedAt,
+                        receivedAt: +quote.book.receivedAt,
+                        updateId: quote.book.updateId,
+                        sequence: quote.book.sequence,
+                      }
+                    : null,
+                }),
                 streamId: streamSession,
               })
             ) {

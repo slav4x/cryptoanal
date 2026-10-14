@@ -20,3 +20,4 @@ export * from "./execution-risk";
 
 export * from "./execution-profit-protection";
 export * from "./execution-instrument";
+export * from "./execution-market-data";

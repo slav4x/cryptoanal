@@ -3,6 +3,8 @@ import { createHmac, randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
+import { BybitOrderBookCache, type BybitTopOfBook } from "./orderbook";
+export { BybitOrderBookCache, type BybitTopOfBook } from "./orderbook";
 
 type BybitFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -113,6 +115,13 @@ const streamTradeSchema = z.object({
       s: z.string(),
       p: z.string().refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
       i: z.string().min(1),
+      S: z.enum(["Buy", "Sell"]),
+      v: z
+        .string()
+        .regex(/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/)
+        .refine((value) => new Decimal(value).gt(0) && new Decimal(value).lt("1e20")),
+      BT: z.boolean().optional(),
+      RPI: z.boolean().optional(),
     }),
   ),
 });
@@ -209,17 +218,33 @@ export type BybitRealtimeQuote = {
 export type BybitPublicStreamSubscriptions = {
   tickerSymbols: string[];
   tradeSymbols?: string[];
+  orderbookSymbols?: string[];
   klines: Array<{ symbol: string; interval: string }>;
 };
 
 export type BybitPublicStreamHandlers = {
   getSubscriptions: () => Promise<BybitPublicStreamSubscriptions>;
   onQuote: (quote: BybitRealtimeQuote) => void | Promise<void>;
-  onTrade?: (quote: BybitRealtimeQuote & { tradeId: string }) => void | Promise<void>;
+  onTrade?: (quote: BybitPublicTrade) => void | Promise<void>;
+  onOrderbookUnavailable?: (event: {
+    symbol: string;
+    receivedAt: Date;
+    error: Error;
+  }) => void | Promise<void>;
   onClosedCandle: (candle: BybitMarketCandle) => void | Promise<void>;
   onConnected?: (() => void) | undefined;
   onDisconnected?: ((code: number, reason: string) => void) | undefined;
   onError?: ((error: Error) => void) | undefined;
+};
+
+export type BybitPublicTrade = BybitRealtimeQuote & {
+  tradeId: string;
+  quantity: string;
+  takerSide: "Buy" | "Sell";
+  blockTrade: boolean | null;
+  rpiTrade: boolean | null;
+  receivedAt: Date;
+  book: BybitTopOfBook | null;
 };
 
 export type BybitApiKeyInformation = {
@@ -647,6 +672,7 @@ export class BybitPublicStreamClient {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(this.url, { handshakeTimeout: 15_000 });
       const activeTopics = new Set<string>();
+      const books = new BybitOrderBookCache();
       let lastMessageAt = Date.now();
       let opened = false;
       let settled = false;
@@ -674,6 +700,7 @@ export class BybitPublicStreamClient {
           const subscriptions = await handlers.getSubscriptions();
           const desiredTopics = new Set([
             ...(subscriptions.tradeSymbols ?? []).map((symbol) => `publicTrade.${symbol}`),
+            ...(subscriptions.orderbookSymbols ?? []).map((symbol) => `orderbook.1.${symbol}`),
             ...subscriptions.tickerSymbols.map((symbol) => `tickers.${symbol}`),
             ...subscriptions.klines.map(({ symbol, interval }) => `kline.${interval}.${symbol}`),
           ]);
@@ -681,8 +708,14 @@ export class BybitPublicStreamClient {
           const removals = [...activeTopics].filter((topic) => !desiredTopics.has(topic));
           sendTopics("subscribe", additions);
           sendTopics("unsubscribe", removals);
-          for (const topic of additions) activeTopics.add(topic);
-          for (const topic of removals) activeTopics.delete(topic);
+          for (const topic of additions) {
+            activeTopics.add(topic);
+            if (topic.startsWith("orderbook.1.")) books.remove(topic.slice("orderbook.1.".length));
+          }
+          for (const topic of removals) {
+            activeTopics.delete(topic);
+            if (topic.startsWith("orderbook.1.")) books.remove(topic.slice("orderbook.1.".length));
+          }
         } catch (error) {
           handlers.onError?.(asError(error));
         } finally {
@@ -715,6 +748,7 @@ export class BybitPublicStreamClient {
         );
       });
       socket.on("message", (raw) => {
+        if (socket.readyState !== WebSocket.OPEN) return;
         lastMessageAt = Date.now();
         try {
           const acknowledgement = JSON.parse(raw.toString()) as { op?: string; success?: boolean };
@@ -726,13 +760,20 @@ export class BybitPublicStreamClient {
         } catch {
           /* The message parser reports malformed JSON. */
         }
-        this.handleMessage(raw, {
-          ...handlers,
-          onError: (error) => {
-            handlers.onError?.(error);
-            socket.terminate();
+        this.handleMessage(
+          raw,
+          {
+            ...handlers,
+            onError: (error) => {
+              books.clear();
+              handlers.onError?.(error);
+              socket.terminate();
+            },
           },
-        });
+          books,
+          new Date(lastMessageAt),
+          activeTopics,
+        );
       });
       socket.on("error", (error) => {
         if (!opened) settle(asError(error));
@@ -747,7 +788,13 @@ export class BybitPublicStreamClient {
     });
   }
 
-  private handleMessage(raw: RawData, handlers: BybitPublicStreamHandlers) {
+  private handleMessage(
+    raw: RawData,
+    handlers: BybitPublicStreamHandlers,
+    books: BybitOrderBookCache,
+    receivedAt: Date,
+    activeTopics: Set<string>,
+  ) {
     let payload: unknown;
     try {
       payload = JSON.parse(raw.toString());
@@ -756,6 +803,31 @@ export class BybitPublicStreamClient {
       return;
     }
 
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "topic" in payload &&
+      String(payload.topic).startsWith("orderbook.")
+    ) {
+      if (!activeTopics.has(String(payload.topic))) return;
+      try {
+        books.apply(payload, receivedAt);
+      } catch (error) {
+        const symbol = String(payload.topic).slice("orderbook.1.".length);
+        books.remove(symbol);
+        const failure = new Error("Bybit stream returned invalid orderbook data", {
+          cause: asError(error),
+        });
+        if (handlers.onOrderbookUnavailable)
+          invokeHandler(
+            handlers.onOrderbookUnavailable,
+            { symbol, receivedAt, error: failure },
+            handlers.onError,
+          );
+        else handlers.onError?.(failure);
+      }
+      return;
+    }
     const trades = streamTradeSchema.safeParse(payload);
     if (
       !trades.success &&
@@ -769,9 +841,24 @@ export class BybitPublicStreamClient {
     }
     if (trades.success && handlers.onTrade) {
       for (const trade of trades.data.data) {
+        if (trades.data.topic !== `publicTrade.${trade.s}`) {
+          handlers.onError?.(new Error("Bybit trade symbol does not match topic"));
+          return;
+        }
         invokeHandler(
           handlers.onTrade,
-          { symbol: trade.s, price: trade.p, observedAt: new Date(trade.T), tradeId: trade.i },
+          {
+            symbol: trade.s,
+            price: trade.p,
+            observedAt: new Date(trade.T),
+            tradeId: trade.i,
+            quantity: trade.v,
+            takerSide: trade.S,
+            blockTrade: trade.BT ?? null,
+            rpiTrade: trade.RPI ?? null,
+            receivedAt,
+            book: books.atTrade(trade.s, new Date(trade.T), receivedAt),
+          },
           handlers.onError,
         );
       }

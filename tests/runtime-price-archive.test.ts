@@ -8,6 +8,10 @@ import {
   type ArchivedPriceEvent,
 } from "../packages/persistence/src/price-archive-codec";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
+import {
+  readExecutionMarketData,
+  type StoredExecutionMarketData,
+} from "../packages/application/src/execution-market-data";
 
 const at = new Date("2026-10-14T00:00:00Z");
 function event(id: bigint): ArchivedPriceEvent {
@@ -71,4 +75,69 @@ test("trace hashes survive JSONB key ordering and detect changes in nested polic
     hashTracePayload({ a: null, b: [1, { c: 3, d: 2 }] }),
   );
   assert.notEqual(hashTracePayload({ policy: { r: 0.5 } }), hashTracePayload({ policy: { r: 1 } }));
+});
+
+test("archive v2 preserves book provenance and liquidity; v1 remains readable without inventing data", async () => {
+  const executionData: StoredExecutionMarketData = [
+    1,
+    "0.123456789012345678",
+    "Sell",
+    false,
+    null,
+    [
+      "100.000000000000000001",
+      "2.123456789012345678",
+      "100.000000000000000002",
+      "3",
+      +at - 1,
+      +at,
+      "9007199254740993",
+      "9007199254740994",
+    ],
+  ];
+  const events = [
+    { ...event(1n), executionData },
+    { ...event(2n), executionData: [1, "1", "Buy", null, true, null] as StoredExecutionMarketData },
+    event(3n),
+  ];
+  const chunk = await encodePriceArchive(events);
+  assert.deepEqual(decodePriceArchive(chunk), events);
+  assert.equal(
+    readExecutionMarketData(decodePriceArchive(chunk)[0]!.executionData).book!.bid[1],
+    "2.123456789012345678",
+  );
+  const old = event(4n);
+  const payload = gzipSync(
+    JSON.stringify({
+      version: 1,
+      symbol: old.symbol,
+      events: [
+        [
+          String(old.id),
+          old.eventKey,
+          old.price,
+          old.observedAt.toISOString(),
+          old.receivedAt.toISOString(),
+          old.streamId,
+        ],
+      ],
+    }),
+  );
+  assert.deepEqual(
+    decodePriceArchive({
+      ...chunk,
+      payload,
+      firstEventId: 4n,
+      lastEventId: 4n,
+      eventCount: 1,
+      sha256: createHash("sha256").update(payload).digest("hex"),
+    }),
+    [old],
+  );
+  const noncausal = structuredClone(executionData);
+  noncausal[5]![4] = +at + 1;
+  await assert.rejects(
+    encodePriceArchive([{ ...event(1n), executionData: noncausal }]),
+    /Non-causal/,
+  );
 });

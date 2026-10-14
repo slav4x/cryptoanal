@@ -1,5 +1,9 @@
 import { PriceArchiveRepository } from "./price-archive-repository";
 import type { CryptoAnalPrismaClient } from "./client";
+import {
+  readExecutionMarketData,
+  type StoredExecutionMarketData,
+} from "../../application/src/execution-market-data";
 
 export type PriceEventInput = {
   eventKey: string;
@@ -7,6 +11,8 @@ export type PriceEventInput = {
   price: string;
   observedAt: Date;
   streamId: string;
+  receivedAt?: Date;
+  executionData?: StoredExecutionMarketData;
 };
 
 export class PriceEventRepository {
@@ -24,6 +30,17 @@ export class PriceEventRepository {
 
   public async append(events: PriceEventInput[], owner: string) {
     if (events.length === 0) return [];
+    for (const event of events) {
+      if (!event.executionData) continue;
+      const data = readExecutionMarketData(event.executionData);
+      if (
+        !event.receivedAt ||
+        !Number.isFinite(+event.receivedAt) ||
+        (data.book &&
+          (data.book.observedAt > +event.observedAt || data.book.receivedAt > +event.receivedAt))
+      )
+        throw new Error("Execution market data requires causal receive times");
+    }
     // The transaction-level lock keeps ids in commit order across workers.
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('market-price-events'))`;
@@ -32,10 +49,25 @@ export class PriceEventRepository {
       if (lease?.owner !== owner || lease.expiresAt.getTime() <= Date.now())
         throw new Error("Market writer lease lost");
       await tx.marketPriceEvent.createMany({ data: events, skipDuplicates: true });
-      return tx.marketPriceEvent.findMany({
+      const saved = await tx.marketPriceEvent.findMany({
         where: { eventKey: { in: events.map((event) => event.eventKey) } },
         orderBy: { id: "asc" },
       });
+      const byKey = new Map(saved.map((event) => [event.eventKey, event]));
+      for (const event of events) {
+        const stored = byKey.get(event.eventKey)!;
+        if (
+          stored.symbol !== event.symbol ||
+          !stored.price.eq(event.price) ||
+          +stored.observedAt !== +event.observedAt ||
+          (stored.executionData &&
+            event.executionData &&
+            JSON.stringify(readExecutionMarketData(stored.executionData).trade) !==
+              JSON.stringify(readExecutionMarketData(event.executionData).trade))
+        )
+          throw new Error("Conflicting duplicate public trade");
+      }
+      return saved;
     });
   }
 

@@ -1131,13 +1131,14 @@ model WatchdogIncident {
 }
 
 model MarketPriceEvent {
-  id         BigInt   @id @default(autoincrement())
-  eventKey   String   @unique
-  symbol     String
-  price      Decimal  @db.Decimal(38, 18)
-  observedAt DateTime @db.Timestamptz(3)
-  receivedAt DateTime @default(now()) @db.Timestamptz(3)
-  streamId   String
+  id            BigInt   @id @default(autoincrement())
+  eventKey      String   @unique
+  symbol        String
+  price         Decimal  @db.Decimal(38, 18)
+  observedAt    DateTime @db.Timestamptz(3)
+  receivedAt    DateTime @default(now()) @db.Timestamptz(3)
+  streamId      String
+  executionData Json?
 
   @@index([symbol, id])
   @@index([observedAt])

@@ -41,6 +41,7 @@ import {
 import { PriceEventRepository } from "../packages/persistence/src/price-event-repository";
 import { PriceArchiveRepository } from "../packages/persistence/src/price-archive-repository";
 import { encodePriceArchive } from "../packages/persistence/src/price-archive-codec";
+import { type StoredExecutionMarketData } from "../packages/application/src/execution-market-data";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
 import { processRuntimePriceEvents } from "../apps/worker/src/runtime-price-processor";
 import { runtimeTraceInputs } from "../apps/worker/src/runtime-trace";
@@ -331,6 +332,15 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
             price: "97",
             observedAt: new Date(+context.quote.quoteAt + 1),
             streamId: context.quote.processedPrice.streamId,
+            receivedAt: new Date(+context.quote.quoteAt + 100),
+            executionData: [
+              1,
+              "0.123456789012345678",
+              "Sell",
+              false,
+              null,
+              ["96", "1", "98", "2", +context.quote.quoteAt, +context.quote.quoteAt, "1", "2"],
+            ],
           },
         });
         const first = await prisma.marketPriceEvent.findUniqueOrThrow({
@@ -413,6 +423,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(await prisma.marketPriceEvent.count({ where: { symbol: context.symbol } }), 0);
         const restarted = new PriceArchiveRepository(prisma),
           trade = trace.position.trade!;
+        assert.deepEqual(
+          (await restarted.after(context.symbol, first.id, extra.id))[0]!.executionData,
+          extra.executionData,
+        );
         const replay = await replayRuntimeTrace({
           snapshot: trace.snapshot,
           snapshotHash: trace.snapshotHash,
@@ -2913,12 +2927,57 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           price: String(price),
           observedAt: quoteAt,
           streamId: owner,
+          receivedAt: new Date(+quoteAt + 100),
+          executionData: [
+            1,
+            "0.123456789012345678",
+            "Buy",
+            false,
+            null,
+            ["96", "1", "101", "2", +quoteAt, +quoteAt, "1", "2"],
+          ] as StoredExecutionMarketData,
         }));
         const first = await journal.append(events, owner);
         const restarted = new PriceEventRepository(prisma);
         assert.deepEqual(
           (await restarted.append(events, owner)).map((row) => row.id),
           first.map((row) => row.id),
+        );
+        const original = first[0]!;
+        const repeated = await restarted.append(
+          [
+            {
+              ...events[0]!,
+              streamId: "reconnected",
+              receivedAt: new Date(+quoteAt + 500),
+              executionData: [1, "0.123456789012345678", "Buy", false, null, null],
+            },
+          ],
+          owner,
+        );
+        assert.deepEqual(repeated[0]!.executionData, original.executionData);
+        assert.equal(+repeated[0]!.receivedAt, +original.receivedAt);
+        const unique = { ...events[1]!, eventKey: randomUUID() };
+        await assert.rejects(
+          restarted.append([unique, { ...events[0]!, price: "98" }], owner),
+          /Conflicting duplicate/,
+        );
+        assert.equal(
+          await prisma.marketPriceEvent.count({ where: { eventKey: unique.eventKey } }),
+          0,
+        );
+        await assert.rejects(
+          restarted.append(
+            [{ ...events[0]!, executionData: [1, "1", "Buy", false, null, null] }],
+            owner,
+          ),
+          /Conflicting duplicate/,
+        );
+        const noncausal = structuredClone(events[0]!.executionData);
+        noncausal[5]![4] = +quoteAt + 1;
+        await assert.rejects(
+          restarted.append([{ ...unique, executionData: noncausal }], owner),
+          /causal/,
         );
         assert.deepEqual(
           (await restarted.after(owner, first[0]!.id, quoteAt)).map((row) => Number(row.price)),

@@ -4,6 +4,7 @@ import {
   encodePriceArchive,
   decodePriceArchive,
   type ArchivedPriceEvent,
+  archivePriceEvent,
 } from "./price-archive-codec";
 
 export class PriceArchiveRepository {
@@ -63,7 +64,7 @@ export class PriceArchiveRepository {
           )
             continue;
           const group = groups.get(event.symbol) ?? [];
-          group.push({ ...event, price: event.price.toFixed() });
+          group.push(archivePriceEvent(event));
           groups.set(event.symbol, group);
         }
         let archived = 0,
@@ -114,11 +115,14 @@ export class PriceArchiveRepository {
       }
     for (const event of hot) {
       if (event.id > upper) continue;
-      const normalized = { ...event, price: event.price.toFixed() };
+      const normalized = archivePriceEvent(event);
       const previous = events.get(event.id);
       if (
         previous &&
         (previous.price !== normalized.price ||
+          previous.eventKey !== normalized.eventKey ||
+          JSON.stringify(previous.executionData ?? null) !==
+            JSON.stringify(normalized.executionData ?? null) ||
           previous.streamId !== normalized.streamId ||
           +previous.observedAt !== +normalized.observedAt ||
           +previous.receivedAt !== +normalized.receivedAt)

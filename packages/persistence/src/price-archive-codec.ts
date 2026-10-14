@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { gzip, gunzipSync } from "node:zlib";
 import { promisify } from "node:util";
+import {
+  readExecutionMarketData,
+  storeExecutionMarketData,
+  type StoredExecutionMarketData,
+} from "../../application/src/execution-market-data";
 
 export type ArchivedPriceEvent = {
   id: bigint;
@@ -10,9 +15,32 @@ export type ArchivedPriceEvent = {
   observedAt: Date;
   receivedAt: Date;
   streamId: string;
+  executionData?: StoredExecutionMarketData;
 };
 const compress = promisify(gzip);
 const maximumChunkEvents = 10_000;
+
+export function archivePriceEvent(
+  event: Omit<ArchivedPriceEvent, "price" | "executionData"> & {
+    price: string | { toFixed(): string };
+    executionData?: unknown;
+  },
+): ArchivedPriceEvent {
+  const { executionData, price, ...base } = event;
+  if (executionData === null || executionData === undefined)
+    return { ...base, price: typeof price === "string" ? price : price.toFixed() };
+  const market = readExecutionMarketData(executionData);
+  if (
+    market.book &&
+    (market.book.observedAt > +event.observedAt || market.book.receivedAt > +event.receivedAt)
+  )
+    throw new Error("Non-causal archived orderbook");
+  return {
+    ...base,
+    price: typeof price === "string" ? price : price.toFixed(),
+    executionData: storeExecutionMarketData(market),
+  };
+}
 
 export async function encodePriceArchive(events: ArchivedPriceEvent[]) {
   if (!events.length || events.length > maximumChunkEvents) throw new Error("Invalid archive size");
@@ -28,7 +56,7 @@ export async function encodePriceArchive(events: ArchivedPriceEvent[]) {
   }
   const raw = Buffer.from(
     JSON.stringify({
-      version: 1,
+      version: 2,
       symbol,
       events: events.map((event) => [
         String(event.id),
@@ -37,6 +65,7 @@ export async function encodePriceArchive(events: ArchivedPriceEvent[]) {
         event.observedAt.toISOString(),
         event.receivedAt.toISOString(),
         event.streamId,
+        archivePriceEvent(event).executionData ?? null,
       ]),
     }),
   );
@@ -72,7 +101,7 @@ export function decodePriceArchive(chunk: {
     events?: unknown;
   };
   if (
-    data.version !== 1 ||
+    (data.version !== 1 && data.version !== 2) ||
     data.symbol !== chunk.symbol ||
     !Array.isArray(data.events) ||
     data.events.length !== chunk.eventCount ||
@@ -84,8 +113,8 @@ export function decodePriceArchive(chunk: {
   for (const row of data.events) {
     if (
       !Array.isArray(row) ||
-      row.length !== 6 ||
-      row.some((value) => typeof value !== "string") ||
+      row.length !== (data.version === 1 ? 6 : 7) ||
+      row.slice(0, 6).some((value) => typeof value !== "string") ||
       !/^[1-9][0-9]*$/.test(row[0]) ||
       !Number.isFinite(Number(row[2])) ||
       Number(row[2]) <= 0 ||
@@ -95,7 +124,7 @@ export function decodePriceArchive(chunk: {
       !row[5]
     )
       throw new Error("Invalid archived price event");
-    const event = {
+    const event = archivePriceEvent({
       id: BigInt(row[0]),
       symbol: chunk.symbol,
       eventKey: row[1],
@@ -103,7 +132,8 @@ export function decodePriceArchive(chunk: {
       observedAt: new Date(row[3]),
       receivedAt: new Date(row[4]),
       streamId: row[5],
-    };
+      executionData: data.version === 1 ? null : row[6],
+    });
     if (events.length && event.id <= events.at(-1)!.id)
       throw new Error("Archive event order is invalid");
     events.push(event);

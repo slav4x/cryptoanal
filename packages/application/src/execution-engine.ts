@@ -699,6 +699,7 @@ function createExecutionPosition({
     (side === "long"
       ? 1 + config.exit.takeProfitPercent / 100
       : 1 - config.exit.takeProfitPercent / 100);
+  if (!Number.isFinite(takePrice) || takePrice <= 0) return null;
   return limitExecutionPositionRisk(
     {
       symbol,
@@ -885,6 +886,31 @@ export function evaluateExecutionPriceExit(
   return null;
 }
 
+export function advanceExecutionCandlePosition(
+  position: ExecutionPosition,
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+) {
+  const initialExit = evaluateExecutionExit(position, candle, config);
+  if (initialExit && initialExit.exitReason !== "signal-exit")
+    return { position, settlement: initialExit };
+  const updated = updateExecutionTrailing(position, candle, config);
+  const closedAt = new Date(
+    +candle.openTime + timeframeMinutes[config.universe.timeframe] * 60_000,
+  );
+  // The close follows the favorable extreme, unlike the unknown intrabar adverse touch.
+  const closeExit = evaluateExecutionPriceExit(
+    updated,
+    { symbol: candle.symbol, price: candle.close, observedAt: closedAt },
+    config,
+  );
+  return {
+    position: updated,
+    settlement:
+      closeExit ?? (initialExit ? { ...initialExit, closedAt: closedAt.toISOString() } : null),
+  };
+}
+
 export function evaluateExecutionSignalExit(
   position: ExecutionPosition,
   candle: EnrichedExecutionCandle,
@@ -958,10 +984,11 @@ function updateExecutionProtection(
 
   if (config.exit.breakEvenActivationR > 0 && reachedR >= config.exit.breakEvenActivationR) {
     const breakEvenPrice = executionBreakEvenPrice(position, config);
-    stopPrice =
-      position.side === "long"
-        ? Math.max(stopPrice, breakEvenPrice)
-        : Math.min(stopPrice, breakEvenPrice);
+    if ((bestPrice - breakEvenPrice) * (position.side === "long" ? 1 : -1) >= 0)
+      stopPrice =
+        position.side === "long"
+          ? Math.max(stopPrice, breakEvenPrice)
+          : Math.min(stopPrice, breakEvenPrice);
   }
 
   const trailingActive =
@@ -1020,9 +1047,9 @@ export function settleExecutionPosition<Reason extends ExecutionExitReason>(
     entrySession: position.entrySession,
     openedAt: position.openedAt.toISOString(),
     closedAt: closedAt.toISOString(),
-    entryPrice: roundExecutionValue(position.entryPrice),
-    exitPrice: roundExecutionValue(exitPrice),
-    quantity: roundExecutionValue(position.quantity),
+    entryPrice: position.entryPrice,
+    exitPrice,
+    quantity: position.quantity,
     grossPnl: roundExecutionValue(grossPnl),
     netPnl: roundExecutionValue(grossPnl - fees),
     fees: roundExecutionValue(fees),

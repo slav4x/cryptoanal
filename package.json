@@ -20,6 +20,7 @@
     "strategies:launch-shared": "tsx scripts/launch-shared-strategies.ts",
     "validations:queue-annual": "tsx scripts/queue-annual-validations.ts",
     "runtime:verify": "tsc --project tests/tsconfig.json && tsx --test tests/runtime*.test.ts",
+    "runtime:ledger": "tsx scripts/verify-execution-ledger.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

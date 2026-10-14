@@ -46,8 +46,6 @@ function recovery(minutes = [minute(0), minute(1), minute(2)]) {
     since: at,
     quote: { symbol: "BTCUSDT", price: 100, observedAt: new Date(at.getTime() + 120_000) },
     minutes,
-    signals: [],
-    signalIntervalMs: 900_000,
     config,
   };
 }

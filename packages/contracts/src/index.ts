@@ -709,6 +709,20 @@ export const strategyConfigSchema = z
     }),
   })
   .superRefine((config, context) => {
+    if (config.signal.direction !== "short" && config.exit.stopLossPercent >= 100) {
+      context.addIssue({
+        code: "custom",
+        message: "Стоп long позиции должен быть выше нуля: расстояние менее 100%",
+        path: ["exit", "stopLossPercent"],
+      });
+    }
+    if (config.signal.direction !== "long" && config.exit.takeProfitPercent >= 100) {
+      context.addIssue({
+        code: "custom",
+        message: "Цель short позиции должна быть выше нуля: расстояние менее 100%",
+        path: ["exit", "takeProfitPercent"],
+      });
+    }
     if (
       config.signal.family === "ema-crossover" &&
       config.signal.emaFastPeriod >= config.signal.emaSlowPeriod

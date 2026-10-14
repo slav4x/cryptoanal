@@ -2,12 +2,11 @@ import {
   executionEntryCandleRange,
   enrichExecutionCandles,
   minimumExecutionCandleCount,
-  evaluateExecutionExit,
+  advanceExecutionCandlePosition,
   getExecutionSignal,
   getTradingDateKey,
   openExecutionPosition,
   settleExecutionPosition,
-  updateExecutionTrailing,
   type EnrichedExecutionCandle,
   type ExecutionCandle,
   type ExecutionPosition,
@@ -17,7 +16,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.11.0";
+export const validationEngineVersion = "cryptoanal-validation@0.12.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -294,7 +293,8 @@ function runBacktest(
     for (const candle of candles) {
       const position = positions.get(candle.symbol);
       if (!position) continue;
-      const closed = evaluateExecutionExit(position, candle, input.config);
+      const step = advanceExecutionCandlePosition(position, candle, input.config);
+      const closed = step.settlement;
       if (closed) {
         positions.delete(candle.symbol);
         trades.push(closed);
@@ -302,7 +302,7 @@ function runBacktest(
         const day = getTradingDateKey(new Date(closed.closedAt), input.config.schedule.timezone);
         dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + closed.netPnl);
       } else {
-        positions.set(candle.symbol, updateExecutionTrailing(position, candle, input.config));
+        positions.set(candle.symbol, step.position);
       }
     }
 
@@ -325,16 +325,18 @@ function runBacktest(
       );
       if (!position) continue;
       const entryRange = executionEntryCandleRange(position, candle, input.config);
-      const closed = evaluateExecutionExit(position, entryRange.candle, input.config);
+      const step = advanceExecutionCandlePosition(position, entryRange.candle, input.config);
+      const closed = step.settlement;
       if (closed) {
         trades.push(closed);
         equity += closed.netPnl;
-        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + closed.netPnl);
-      } else {
-        positions.set(
-          candle.symbol,
-          updateExecutionTrailing(position, entryRange.candle, input.config),
+        const closeDay = getTradingDateKey(
+          new Date(closed.closedAt),
+          input.config.schedule.timezone,
         );
+        dailyPnl.set(closeDay, (dailyPnl.get(closeDay) ?? 0) + closed.netPnl);
+      } else {
+        positions.set(candle.symbol, step.position);
       }
     }
 

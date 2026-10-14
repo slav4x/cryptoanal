@@ -1,7 +1,6 @@
 import {
   evaluateExecutionExit,
   evaluateExecutionPriceExit,
-  evaluateExecutionSignalExit,
   settleExecutionPosition,
   updateExecutionTrailing,
   type ExecutionPosition,
@@ -34,8 +33,6 @@ export function recoverRuntimeGap(input: {
   since: Date;
   quote: ExecutionQuote;
   minutes: ExecutionCandle[];
-  signals: EnrichedExecutionCandle[];
-  signalIntervalMs: number;
   config: ExecutionStrategyConfig;
 }): {
   position: ExecutionPosition;
@@ -142,22 +139,6 @@ export function recoverRuntimeGap(input: {
     // A harmless partial-bar best price is still outside the confirmed interval.
     // Keep the prior state; only complete minutes may update protection or best price.
     if (complete) position = updated;
-    for (const signal of input.signals) {
-      const closedAt = signal.openTime.getTime() + input.signalIntervalMs;
-      if (
-        closedAt <= input.since.getTime() ||
-        closedAt > input.quote.observedAt.getTime() ||
-        closedAt !== time + 60_000
-      )
-        continue;
-      const settlement = evaluateExecutionSignalExit(
-        position,
-        signal,
-        input.config,
-        new Date(closedAt),
-      );
-      if (settlement) return { position, settlement, evidence };
-    }
   }
   return { position, settlement: null, evidence };
 }

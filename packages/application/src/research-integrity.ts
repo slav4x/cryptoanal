@@ -1,12 +1,11 @@
 import {
   executionEntryCandleRange,
   enrichExecutionCandles,
-  evaluateExecutionExit,
+  advanceExecutionCandlePosition,
   getExecutionSignal,
   getTradingDateKey,
   openExecutionPosition,
   settleExecutionPosition,
-  updateExecutionTrailing,
   type EnrichedExecutionCandle,
   type ExecutionCandle,
   type ExecutionPosition,
@@ -15,7 +14,7 @@ import {
 } from "./execution-engine";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.5.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.6.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -79,7 +78,8 @@ export function runRuntimeReplay(input: {
     for (const candle of candles) {
       const position = positions.get(candle.symbol);
       if (!position) continue;
-      const settlement = evaluateExecutionExit(position, candle, input.config);
+      const step = advanceExecutionCandlePosition(position, candle, input.config);
+      const settlement = step.settlement;
       if (settlement) {
         positions.delete(candle.symbol);
         trades.push(settlement);
@@ -98,7 +98,7 @@ export function runRuntimeReplay(input: {
           price: settlement.exitPrice,
         });
       } else {
-        positions.set(candle.symbol, updateExecutionTrailing(position, candle, input.config));
+        positions.set(candle.symbol, step.position);
       }
     }
 
@@ -132,11 +132,16 @@ export function runRuntimeReplay(input: {
             : "pending-signal-filled",
         price: position.entryPrice,
       });
-      const settlement = evaluateExecutionExit(position, entryRange.candle, input.config);
+      const step = advanceExecutionCandlePosition(position, entryRange.candle, input.config);
+      const settlement = step.settlement;
       if (settlement) {
         trades.push(settlement);
         equity += settlement.netPnl;
-        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + settlement.netPnl);
+        const closeDay = getTradingDateKey(
+          new Date(settlement.closedAt),
+          input.config.schedule.timezone,
+        );
+        dailyPnl.set(closeDay, (dailyPnl.get(closeDay) ?? 0) + settlement.netPnl);
         decisions.push({
           sequence: sequence++,
           symbol: candle.symbol,
@@ -146,10 +151,7 @@ export function runRuntimeReplay(input: {
           price: settlement.exitPrice,
         });
       } else {
-        positions.set(
-          candle.symbol,
-          updateExecutionTrailing(position, entryRange.candle, input.config),
-        );
+        positions.set(candle.symbol, step.position);
       }
     }
 

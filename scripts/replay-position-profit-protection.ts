@@ -166,11 +166,6 @@ try {
                 close: Number(c.close),
                 turnover: Number(c.turnover),
               })),
-              signals: [],
-              signalIntervalMs:
-                { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 }[
-                  p.config.universe.timeframe
-                ] * 60000,
               config: p.config,
             });
             recoveredGaps++;

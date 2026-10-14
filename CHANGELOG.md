@@ -4,11 +4,23 @@
 
 ### Added
 
+- Read-only `runtime:ledger` сверяет полный журнал сделок, fills, решений и задержки;
+  worker heartbeat и новые входы сохраняют версии движка и происхождение котировки.
+
 - Optional DRY_RUN profit protection каждой позиции: fee-aware безубыток с 0.5R,
   trailing с 1R на расстоянии 0.5R. Отдельный durable peak с момента включения,
   атомарный checkpoint/CAS и audit активации; исторические strategy versions сохранены.
 
 ### Fixed
+
+- Candle validation/replay исполняют новый trailing/безубыток, пересечённый ценой close,
+  в той же свече и до сигнального выхода. Неизвестный порядок экстремумов не создаёт fill.
+- Recovery передаёт сигнальные выходы journal processor с проверкой finality и фактической
+  quote price; общий безубыток не переносится за ещё не достигнутую стоимость выхода.
+- Закрытие journal batch атомарно сохраняет последние защитные уровни и progress.
+  Settlement сохраняет точность цен/количества, версии execution/validation/replay обновлены.
+- Конфигурация отклоняет нулевой SL long и нулевой/отрицательный TP short;
+  общий конструктор позиции дополнительно блокирует неположительную цель.
 
 - Validation 0.11.0 / replay 1.5.0 не используют favorable extreme до неизвестного
   intrabar limit fill для TP/BE/trailing. Close и adverse crossing остаются доступны;

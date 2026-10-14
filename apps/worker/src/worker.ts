@@ -13,6 +13,7 @@ import {
   advanceExecutionIndicators,
   readExecutionIndicatorCheckpoint,
   executionIndicatorVersion,
+  executionEngineVersion,
   evaluateHealth,
   settleExecutionPosition,
   limitExecutionPositionRisk,
@@ -181,18 +182,19 @@ let stopping = false;
 
 async function writeHeartbeat() {
   const workspaceIds = await workspaceRepository.listOperationalIds();
+  const metadata = { workspaceIds, executionEngineVersion, validationEngineVersion };
   await prisma.workerHeartbeat.upsert({
     where: { workerId },
     update: {
       lastSeenAt: new Date(),
-      metadata: { workspaceIds },
+      metadata,
     },
     create: {
       workerId,
       service: "worker",
       version: "0.1.0",
       lastSeenAt: new Date(),
-      metadata: { workspaceIds },
+      metadata,
     },
   });
 }
@@ -976,23 +978,21 @@ async function processRealtimePosition(
         AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
       ]);
       const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
-      const intervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
-      const lastSignal = new Date(
-        Math.floor(+quote.observedAt / intervalMs) * intervalMs - intervalMs,
-      );
-      const [minutes, signals] = await Promise.all([
+      const minutes =
         +quote.observedAt === +through
-          ? Promise.resolve([])
-          : loadRecoveryCandles(target.symbol, "1", minuteRange.start, minuteRange.end, deadline),
-        loadPositionSignals(lastSignal, deadline),
-      ]);
+          ? []
+          : await loadRecoveryCandles(
+              target.symbol,
+              "1",
+              minuteRange.start,
+              minuteRange.end,
+              deadline,
+            );
       return recoverRuntimeGap({
         position,
         since: through,
         quote,
         minutes: minutes.map(toExecutionCandle),
-        signals: signals.map((signal) => signal.candle),
-        signalIntervalMs: intervalMs,
         config: strategyConfig,
       });
     },
@@ -1057,7 +1057,16 @@ async function processRealtimePosition(
           ...(recovery ? { recovery } : {}),
         },
         action: settlement
-          ? { kind: "close", settlement: serializeSettlement(settlement) }
+          ? {
+              kind: "close",
+              settlement: serializeSettlement(settlement),
+              protection: {
+                bestPrice: String(position.bestPrice),
+                stopPrice: String(position.stopPrice),
+                trailingPrice:
+                  position.trailingPrice === null ? null : String(position.trailingPrice),
+              },
+            }
           : {
               kind: "update",
               markPrice: String(markPrice),
@@ -2499,9 +2508,12 @@ function parseRealtimePendingSignal(value: unknown):
   return { ...signal, detectedAt, availableAt, expiresAt, entryRegime: value.entryRegime };
 }
 
-function realtimeQuoteFactors(quote: ExecutionQuote) {
+function realtimeQuoteFactors(quote: JournalQuote) {
   return {
     source: "bybit-public-websocket",
+    eventId: String(quote.id),
+    streamId: quote.streamId,
+    receivedAt: quote.receivedAt.toISOString(),
     quote: { price: quote.price, observedAt: quote.observedAt.toISOString() },
   };
 }

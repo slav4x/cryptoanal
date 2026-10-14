@@ -128,7 +128,11 @@ export type PersistRuntimeQuoteInput = {
         stopPrice: string;
         trailingPrice: string | null;
       }
-    | { kind: "close"; settlement: RuntimeCycleSettlement };
+    | {
+        kind: "close";
+        settlement: RuntimeCycleSettlement;
+        protection?: Pick<RuntimeCyclePosition, "bestPrice" | "stopPrice" | "trailingPrice">;
+      };
 };
 
 export type PersistRealtimeEntryInput = {
@@ -519,21 +523,21 @@ export class RuntimeRepository {
           decidedAt: input.decidedAt ?? input.quoteAt,
         },
       });
-      if (
-        input.signalCandleAt !== undefined ||
-        input.indicatorState !== undefined ||
-        input.profitProtection !== undefined
-      )
-        await transaction.position.update({
-          where: { id: position.id },
-          data: {
-            ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
-            ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
-            ...(input.profitProtection === undefined
-              ? {}
-              : { profitProtection: input.profitProtection }),
-          },
-        });
+      await transaction.position.update({
+        where: { id: position.id },
+        data: {
+          priceEventId: input.processedPrice.eventId,
+          priceStreamId: input.processedPrice.streamId,
+          managedThroughAt: input.processedPrice.throughAt,
+          runtimeVersion: { increment: 1 },
+          ...input.action.protection,
+          ...(input.signalCandleAt === undefined ? {} : { signalCandleAt: input.signalCandleAt }),
+          ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
+          ...(input.profitProtection === undefined
+            ? {}
+            : { profitProtection: input.profitProtection }),
+        },
+      });
       await clearRecoveredCursor(transaction, input, true);
       return { applied: true, closed: true };
     });

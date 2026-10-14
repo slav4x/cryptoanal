@@ -107,8 +107,6 @@ for (const side of ["long", "short"] as const) {
       since: at,
       quote: { symbol: c.symbol, price: c.close, observedAt: new Date(+at + 60000) },
       minutes: [c],
-      signals: [],
-      signalIntervalMs: 900000,
       config,
     });
     assert.equal(result.settlement!.exitReason, "trailing-stop");

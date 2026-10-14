@@ -2142,6 +2142,51 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         );
       },
     );
+    await t.test(
+      "closing a journal batch persists its final protection and progress atomically",
+      async () => {
+        const context = await open();
+        const input: PersistRuntimeQuoteInput = {
+          ...context.quote,
+          action: {
+            kind: "close",
+            protection: { bestPrice: "104", stopPrice: "100.12", trailingPrice: "102.5" },
+            settlement: {
+              exitPrice: "102",
+              grossPnl: "2",
+              netPnl: "1.8788",
+              fees: "0.1212",
+              slippage: "0",
+              exitReason: "trailing-stop",
+              closedAt: context.quote.quoteAt,
+            },
+          },
+        };
+        assert.deepEqual(await runtime.persistRealtimeQuote(input), {
+          applied: true,
+          closed: true,
+        });
+        const stored = await prisma.position.findUniqueOrThrow({
+          where: { id: context.position.id },
+          include: { trade: true },
+        });
+        assert.equal(stored.status, "CLOSED");
+        assert.equal(stored.stopPrice.toFixed(), "100.12");
+        assert.equal(stored.trailingPrice!.toFixed(), "102.5");
+        assert.equal(stored.bestPrice.toFixed(), "104");
+        assert.equal(stored.priceEventId, input.processedPrice.eventId);
+        assert.equal(stored.priceStreamId, input.processedPrice.streamId);
+        assert.equal(+stored.managedThroughAt!, +input.processedPrice.throughAt);
+        assert.equal(stored.runtimeVersion, context.position.runtimeVersion + 1);
+        assert.equal(stored.trade!.netPnl.toFixed(), "1.8788");
+        assert.deepEqual(await runtime.persistRealtimeQuote(input), {
+          applied: false,
+          closed: false,
+        });
+        assert.equal(await prisma.trade.count({ where: { positionId: stored.id } }), 1);
+      },
+    );
+
     await t.test("quote protection is durable; stale updates cannot loosen it", async () => {
       const context = await open();
       assert.equal((await runtime.persistRealtimeQuote(context.quote)).applied, true);

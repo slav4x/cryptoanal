@@ -4,7 +4,7 @@
 
 - [x] Исключить неизвестные экстремумы до intrabar limit fill из TP и переносов защиты.
 - [x] Проверить long/short, известный opening fill и подтверждённый ценой close TP.
-- [ ] Проверить validation/replay parity, версионировать и обновить worker.
+- [x] Проверить validation/replay parity, версионировать и обновить worker.
 
 ## Корректность защитных выходов — 14 октября 2026
 

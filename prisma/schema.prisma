@@ -695,6 +695,7 @@ model Position {
   instrument        MarketInstrument   @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   orders            Order[]
   trade             Trade?
+  executionTrace    PositionExecutionTrace?
   decisions         Decision[]
 
   @@index([workspaceId, status, openedAt])
@@ -1134,6 +1135,59 @@ model MarketPriceEvent {
 
   @@index([symbol, id])
   @@index([observedAt])
+}
+
+model MarketPriceArchiveChunk {
+  firstEventId BigInt   @id
+  lastEventId  BigInt
+  symbol       String
+  startsAt     DateTime @db.Timestamptz(3)
+  endsAt       DateTime @db.Timestamptz(3)
+  eventCount   Int
+  payload      Bytes
+  sha256       String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([symbol, firstEventId])
+  @@index([symbol, lastEventId])
+}
+
+model PositionExecutionTrace {
+  positionId    String                @id
+  workspaceId   String
+  symbol        String
+  startEventId  BigInt
+  endEventId    BigInt?
+  fullFromEntry Boolean
+  eventCount    BigInt?               @default(0)
+  policyHash    String
+  snapshot      Json
+  snapshotHash  String
+  startedAt     DateTime              @db.Timestamptz(3)
+  closedAt      DateTime?             @db.Timestamptz(3)
+  retainUntil   DateTime?             @db.Timestamptz(3)
+  createdAt     DateTime              @default(now()) @db.Timestamptz(3)
+  position      Position              @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  records       PositionTraceRecord[]
+
+  @@index([symbol, startEventId])
+  @@index([workspaceId, startedAt])
+  @@index([retainUntil])
+}
+
+model PositionTraceRecord {
+  id             BigInt                 @id @default(autoincrement())
+  positionId     String
+  runtimeVersion Int
+  eventId        BigInt?
+  kind           String
+  payload        Json
+  payloadHash    String
+  recordedAt     DateTime               @default(now()) @db.Timestamptz(3)
+  trace          PositionExecutionTrace @relation(fields: [positionId], references: [positionId], onDelete: Cascade)
+
+  @@unique([positionId, runtimeVersion, kind])
+  @@index([positionId, id])
 }
 
 model MarketStreamLease {

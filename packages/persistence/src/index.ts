@@ -137,6 +137,9 @@ export {
   type RuntimeCycleSettlement,
 } from "./runtime-repository";
 export * from "./price-event-repository";
+export * from "./price-archive-repository";
+export * from "./price-archive-codec";
+export { hashTracePayload } from "./position-trace";
 export * from "./runtime-risk";
 
 export { runtimeSignalId } from "./runtime-signal";

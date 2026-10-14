@@ -6,6 +6,13 @@ import {
   type RuntimeMarketEntryPolicy,
 } from "./runtime-entry-policy";
 import { runtimeSignalState, withRuntimeSignal } from "./runtime-signal";
+import {
+  ensurePositionTrace,
+  closePositionTrace,
+  defaultPositionTraceOptions,
+  hashTracePayload,
+  type PositionTraceOptions,
+} from "./position-trace";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 import {
@@ -103,6 +110,8 @@ export type PersistRuntimeCycleInput = {
 };
 
 export type PersistRuntimeQuoteInput = {
+  processedEventCount?: number;
+  traceInputs?: Prisma.InputJsonValue;
   profitProtection?: Prisma.InputJsonValue;
   indicatorState?: Prisma.InputJsonValue;
   signalCandleAt?: Date | null;
@@ -166,6 +175,7 @@ export class RuntimeRepository {
     private readonly prisma: CryptoAnalPrismaClient,
     private readonly riskPolicy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
     private readonly marketEntryPolicy: RuntimeMarketEntryPolicy = defaultRuntimeMarketEntryPolicy,
+    private readonly traceOptions: PositionTraceOptions = defaultPositionTraceOptions,
   ) {}
 
   public listActiveTargets(workspaceId: string) {
@@ -381,6 +391,13 @@ export class RuntimeRepository {
   }
 
   public async persistRealtimeQuote(input: PersistRuntimeQuoteInput) {
+    if (
+      input.processedEventCount !== undefined &&
+      (!Number.isInteger(input.processedEventCount) ||
+        input.processedEventCount < 0 ||
+        input.processedEventCount > 10_000)
+    )
+      throw new Error("Invalid trace event count");
     return this.prisma.$transaction(async (transaction) => {
       await lockRuntimeRisk(transaction, input.workspaceId);
       await transaction.$executeRaw(Prisma.sql`
@@ -400,6 +417,18 @@ export class RuntimeRepository {
         select: {
           id: true,
           profitProtection: true,
+          symbol: true,
+          priceEventId: true,
+          priceStreamId: true,
+          managedThroughAt: true,
+          markPrice: true,
+          stopPrice: true,
+          takePrice: true,
+          trailingPrice: true,
+          bestPrice: true,
+          entrySlippage: true,
+          signalCandleAt: true,
+          indicatorState: true,
           side: true,
           quantity: true,
           entryPrice: true,
@@ -426,7 +455,97 @@ export class RuntimeRepository {
       }
 
       const protection = input.profitProtection as { policyKey?: string } | undefined;
+      const trace = await ensurePositionTrace(transaction, {
+        positionId: position.id,
+        workspaceId: input.workspaceId,
+        strategyVersionId: input.strategyVersionId,
+        position: {
+          ...position,
+          quantity: position.quantity.toFixed(),
+          entryPrice: position.entryPrice.toFixed(),
+          stopPrice: position.stopPrice.toFixed(),
+          takePrice: position.takePrice.toFixed(),
+          trailingPrice: position.trailingPrice?.toFixed() ?? null,
+          bestPrice: position.bestPrice.toFixed(),
+          entryFee: position.entryFee.toFixed(),
+          entrySlippage: position.entrySlippage.toFixed(),
+        },
+        eventId: position.priceEventId ?? input.processedPrice.eventId,
+        streamId: position.priceStreamId,
+        throughAt: position.managedThroughAt ?? position.openedAt,
+        markPrice: (position.markPrice ?? position.entryPrice).toFixed(),
+        signalCandleAt: position.signalCandleAt,
+        indicatorState: position.indicatorState,
+        profitProtectionState: position.profitProtection,
+        fullFromEntry: false,
+        riskPolicy: this.riskPolicy,
+        marketEntryPolicy: this.marketEntryPolicy,
+        options: this.traceOptions,
+      });
       const previousProtection = position.profitProtection as { policyKey?: string } | null;
+      const traceInputs = input.traceInputs as
+        { signals?: unknown[]; recoveries?: unknown[]; policy?: unknown } | undefined;
+      const policyHash =
+        traceInputs && "policy" in traceInputs ? hashTracePayload(traceInputs.policy) : null;
+      await transaction.positionExecutionTrace.update({
+        where: { positionId: position.id },
+        data: {
+          eventCount:
+            input.processedEventCount === undefined || position.priceEventId === null
+              ? null
+              : { increment: BigInt(input.processedEventCount) },
+          ...(policyHash === null ? {} : { policyHash }),
+        },
+      });
+      const recordTrace =
+        (policyHash !== null && policyHash !== trace.policyHash) ||
+        input.action.kind === "close" ||
+        input.recoveryEvidence !== undefined ||
+        (input.signalCandleAt !== undefined &&
+          +input.signalCandleAt! !== +position.signalCandleAt!) ||
+        (protection?.policyKey && protection.policyKey !== previousProtection?.policyKey) ||
+        Boolean(traceInputs?.signals?.length || traceInputs?.recoveries?.length) ||
+        (input.action.kind === "update" &&
+          (input.action.stopPrice !== position.stopPrice.toFixed() ||
+            input.action.trailingPrice !== (position.trailingPrice?.toFixed() ?? null)));
+      if (recordTrace) {
+        const payload = {
+          quotePrice: input.quotePrice,
+          quoteAt: input.quoteAt.toISOString(),
+          processedPrice: {
+            eventId: String(input.processedPrice.eventId),
+            streamId: input.processedPrice.streamId,
+            throughAt: input.processedPrice.throughAt.toISOString(),
+          },
+          decidedAt: (input.decidedAt ?? input.quoteAt).toISOString(),
+          action:
+            input.action.kind === "close"
+              ? {
+                  ...input.action,
+                  settlement: {
+                    ...input.action.settlement,
+                    closedAt: input.action.settlement.closedAt.toISOString(),
+                  },
+                }
+              : input.action,
+          profitProtectionState: input.profitProtection ?? null,
+          signalCandleAt:
+            input.signalCandleAt?.toISOString() ?? position.signalCandleAt?.toISOString() ?? null,
+          inputs: input.traceInputs ?? null,
+          factors: input.factors,
+          indicatorState: input.indicatorState ?? null,
+        };
+        await transaction.positionTraceRecord.create({
+          data: {
+            positionId: position.id,
+            runtimeVersion: input.expectedPositionVersion + 1,
+            eventId: input.processedPrice.eventId,
+            kind: "journal",
+            payload,
+            payloadHash: hashTracePayload(payload),
+          },
+        });
+      }
       if (protection?.policyKey && protection.policyKey !== previousProtection?.policyKey) {
         await transaction.auditEvent.create({
           data: {
@@ -539,6 +658,10 @@ export class RuntimeRepository {
         },
       });
       await clearRecoveredCursor(transaction, input, true);
+      await transaction.positionExecutionTrace.update({
+        where: { positionId: position.id },
+        data: { endEventId: input.processedPrice.eventId },
+      });
       return { applied: true, closed: true };
     });
   }
@@ -751,6 +874,23 @@ export class RuntimeRepository {
         price: input.position.entryPrice,
         fee: input.position.entryFee,
         filledAt: input.position.openedAt,
+      });
+      await ensurePositionTrace(transaction, {
+        positionId: position.id,
+        workspaceId: input.workspaceId,
+        strategyVersionId: input.strategyVersionId,
+        position: input.position,
+        eventId: entryEvent.id,
+        streamId: entryEvent.streamId,
+        throughAt: entryEvent.observedAt,
+        markPrice: input.quotePrice,
+        signalCandleAt: input.expectedCandleAt,
+        indicatorState: cursor.indicatorState,
+        profitProtectionState: null,
+        fullFromEntry: true,
+        riskPolicy: this.riskPolicy,
+        marketEntryPolicy: this.marketEntryPolicy,
+        options: this.traceOptions,
       });
       const decision = await transaction.decision.create({
         data: {
@@ -1315,6 +1455,23 @@ export class RuntimeRepository {
           select: { id: true, entryFee: true },
         });
         decisionPositionId = position.id;
+        await ensurePositionTrace(transaction, {
+          positionId: position.id,
+          workspaceId: input.workspaceId,
+          strategyVersionId: input.strategyVersionId,
+          position: action.position,
+          eventId: entryEvent.id,
+          streamId: entryEvent.streamId,
+          throughAt: entryEvent.observedAt,
+          markPrice: action.markPrice,
+          signalCandleAt: input.candleAt,
+          indicatorState: (input.indicatorState ?? null) as Prisma.JsonValue,
+          profitProtectionState: null,
+          fullFromEntry: true,
+          riskPolicy: this.riskPolicy,
+          marketEntryPolicy: this.marketEntryPolicy,
+          options: this.traceOptions,
+        });
         await createFilledOrder(transaction, {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
@@ -1977,6 +2134,7 @@ async function persistClosedPosition(
       closedAt: settlement.closedAt,
     },
   });
+  await closePositionTrace(transaction, position.positionId, settlement);
   return transaction.trade.create({
     data: {
       workspaceId: position.workspaceId,

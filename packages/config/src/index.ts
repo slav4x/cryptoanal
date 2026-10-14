@@ -72,6 +72,7 @@ const serverConfigSchema = z
     RUNTIME_RECOVERY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
     RUNTIME_POSITION_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
     RUNTIME_EVENT_RETENTION_HOURS: z.coerce.number().int().min(24).max(720).default(24),
+    RUNTIME_TRACE_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(10_000).default(30_000),
     DRY_RUN_ACCOUNT_ID: z.string().min(1).default("development-dry-run"),
     DRY_RUN_INITIAL_BALANCE: z.coerce.number().nonnegative().default(10_000),

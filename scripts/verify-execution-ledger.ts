@@ -91,6 +91,21 @@ try {
       count(*) FILTER (WHERE "netPnl" > 0)::int AS wins,
       count(*) FILTER (WHERE "netPnl" < 0)::int AS losses,
       sum("netPnl")::text AS "sumAcrossVirtualAccounts" FROM "Trade"`),
+    virtualAccounts: await rows(`SELECT d."exchangeAccountId",d.environment,
+      count(t.id)::int AS trades,coalesce(sum(t."netPnl"),0)::text AS "netPnl"
+      FROM "Deployment" d LEFT JOIN "ExecutionRun" r ON r."deploymentId"=d.id
+      LEFT JOIN "Trade" t ON t."executionRunId"=r.id GROUP BY 1,2 ORDER BY 1,2`),
+    virtualStrategies: await rows(`SELECT d."exchangeAccountId",t."strategyVersionId",
+      count(*)::int AS trades,count(*) FILTER(WHERE t."netPnl">0)::int AS wins,
+      sum(t."netPnl")::text AS "netPnl" FROM "Trade" t
+      JOIN "ExecutionRun" r ON r.id=t."executionRunId"
+      JOIN "Deployment" d ON d.id=r."deploymentId" GROUP BY 1,2 ORDER BY 1,2`),
+    traceCoverage: await one(`SELECT count(*) FILTER(WHERE t."fullFromEntry")::int AS "fromEntry",
+      count(*) FILTER(WHERE NOT t."fullFromEntry")::int AS "fromCheckpoint",
+      count(*) FILTER(WHERE t."retainUntil"<=now())::int AS expired,
+      (SELECT count(*) FROM "Position" p WHERE p.status='OPEN' AND p.environment='DRY_RUN'
+        AND NOT EXISTS(SELECT 1 FROM "PositionExecutionTrace" x WHERE x."positionId"=p.id))::int AS "openWithoutTrace"
+      FROM "PositionExecutionTrace" t`),
     exits: await rows(
       'SELECT "exitReason", count(*)::int AS count, sum("netPnl")::text AS "netPnl" FROM "Trade" GROUP BY 1 ORDER BY 2 DESC',
     ),

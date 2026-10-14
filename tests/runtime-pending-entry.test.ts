@@ -139,17 +139,21 @@ test("journal retention preserves the oldest pending entry cursor even without o
   const { PriceEventRepository } =
     await import("../packages/persistence/src/price-event-repository");
   let retained: unknown;
-  const repository = new PriceEventRepository({
+  const transaction = {
+    $queryRaw: async () => [{ owned: true }],
     runtimeCursor: { aggregate: async () => ({ _min: { pendingPriceEventId: 5n } }) },
     position: { aggregate: async () => ({ _min: { priceEventId: null } }) },
     marketPriceEvent: {
-      deleteMany: async (input: unknown) => {
-        retained = input;
-        return { count: 0 };
+      findMany: async (input: { where: unknown }) => {
+        retained = input.where;
+        return [];
       },
     },
+  };
+  const repository = new PriceEventRepository({
+    $transaction: async (run: (client: typeof transaction) => Promise<unknown>) => run(transaction),
   } as unknown as ConstructorParameters<typeof PriceEventRepository>[0]);
   const before = new Date(now);
   await repository.prune(before);
-  assert.deepEqual(retained, { where: { observedAt: { lt: before }, id: { lt: 5n } } });
+  assert.deepEqual(retained, { observedAt: { lt: before }, id: { lt: 5n } });
 });

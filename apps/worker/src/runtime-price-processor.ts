@@ -70,7 +70,7 @@ export async function processRuntimePriceEvents(input: {
   recover: (
     position: ExecutionPosition,
     since: Date,
-    quote: ExecutionQuote,
+    quote: RuntimePriceEvent,
   ) => Promise<{
     position: ExecutionPosition;
     settlement: ExecutionSettlement | null;

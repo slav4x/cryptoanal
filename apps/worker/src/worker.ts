@@ -1,4 +1,5 @@
 import { runtimeErrorMessage } from "./runtime-error";
+import { runtimeTraceInputs, type RuntimeTraceRecovery } from "./runtime-trace";
 import { replayPendingEntryEvents } from "./runtime-pending-entry";
 import {
   positionIndicatorCheckpoint,
@@ -73,6 +74,7 @@ import {
   runtimeMarketEntryFailure,
   RuntimeRiskRepository,
   PriceEventRepository,
+  PriceArchiveRepository,
   type PriceEventInput,
   RuntimeStateConflictError,
   ValidationDatasetConflictError,
@@ -84,7 +86,11 @@ import {
 import { randomUUID } from "node:crypto";
 import pino from "pino";
 import { OrderedPriceJournal } from "./price-journal";
-import { forEachConcurrent, processRuntimePriceEvents } from "./runtime-price-processor";
+import {
+  forEachConcurrent,
+  processRuntimePriceEvents,
+  type RuntimeSignalEvent,
+} from "./runtime-price-processor";
 import { RecoveryRequestCache } from "./recovery-request-cache";
 import { processRuntimeSymbols } from "./runtime-symbol-loop";
 import {
@@ -135,10 +141,15 @@ const runtimeRepository = new RuntimeRepository(
   prisma,
   runtimeRiskPolicy,
   runtimeMarketEntryPolicy,
+  {
+    retentionDays: config.RUNTIME_TRACE_RETENTION_DAYS,
+    profitProtectionPolicy: runtimeProfitProtectionPolicy,
+  },
 );
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
 const priceEventRepository = new PriceEventRepository(prisma);
+const priceArchiveRepository = new PriceArchiveRepository(prisma);
 const healthRepository = new HealthRepository(prisma);
 const workspaceRepository = new WorkspaceRepository(prisma);
 const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
@@ -370,20 +381,32 @@ async function marketStreamLoop() {
 }
 
 async function priceJournalLoop() {
-  let nextCleanup = 0;
   while (!stopping) {
     try {
       await priceJournal.flush();
-      if (Date.now() >= nextCleanup) {
-        await priceEventRepository.prune(
-          new Date(Date.now() - config.RUNTIME_EVENT_RETENTION_HOURS * 3600_000),
-        );
-        nextCleanup = Date.now() + 3600_000;
-      }
     } catch (error) {
       logger.error({ err: error }, "Market price journal write failed; entries blocked");
     }
     await delay(50);
+  }
+}
+
+async function priceArchiveLoop() {
+  while (!stopping) {
+    try {
+      const result = await priceArchiveRepository.archiveAndPrune(
+        new Date(Date.now() - config.RUNTIME_EVENT_RETENTION_HOURS * 3600_000),
+      );
+      if (result.count === 10_000) {
+        await delay(50);
+        continue;
+      }
+      const cleanup = await priceArchiveRepository.cleanup();
+      logger.info({ ...result, cleanup }, "Price archive maintenance completed");
+    } catch (error) {
+      logger.error({ err: error }, "Price archive maintenance failed; hot history retained");
+    }
+    await delay(60_000);
   }
 }
 
@@ -848,6 +871,8 @@ async function processRealtimePosition(
     target.managedThroughAt ?? target.openedAt,
   );
   let signalReplay: ReturnType<typeof replayPositionIndicators> | null = null;
+  let traceSignals: RuntimeSignalEvent[] = [];
+  const traceRecoveries: RuntimeTraceRecovery[] = [];
   const loadPositionSignals = async (lastOpen: Date, deadline: AbortSignal) => {
     let checkpoint = positionIndicatorCheckpoint(
       target.indicatorState,
@@ -922,9 +947,11 @@ async function processRealtimePosition(
       strategyConfig,
       checkpoint,
     );
-    return signalReplay.signals;
+    traceSignals = signalReplay.signals;
+    return traceSignals;
   };
   let version = target.runtimeVersion;
+  let traceEventCursor = target.priceEventId ?? 0n;
   await processRuntimePriceEvents({
     position: deserializeExecutionPosition(target),
     profitProtection: {
@@ -988,11 +1015,13 @@ async function processRealtimePosition(
               minuteRange.end,
               deadline,
             );
+      const recoveryMinutes = minutes.map(toExecutionCandle);
+      traceRecoveries.push({ eventId: quote.id, since: through, quote, minutes: recoveryMinutes });
       return recoverRuntimeGap({
         position,
         since: through,
         quote,
-        minutes: minutes.map(toExecutionCandle),
+        minutes: recoveryMinutes,
         config: strategyConfig,
       });
     },
@@ -1014,6 +1043,15 @@ async function processRealtimePosition(
         ? signalReplay?.checkpointThrough(signalCandleAt)
         : null;
       const result = await runtimeRepository.persistRealtimeQuote({
+        processedEventCount: events.filter(
+          (price) => price.id > traceEventCursor && price.id <= event.id,
+        ).length,
+        traceInputs: runtimeTraceInputs({
+          firstEventId: events[0]!.id,
+          policy: runtimeProfitProtectionPolicy,
+          signals: traceSignals,
+          recoveries: traceRecoveries,
+        }),
         workspaceId: target.workspaceId,
         deploymentId: target.executionRun.deployment.id,
         executionRunId: target.executionRunId,
@@ -1077,7 +1115,10 @@ async function processRealtimePosition(
                 position.trailingPrice === null ? null : String(position.trailingPrice),
             },
       });
-      if (result.applied) version += 1;
+      if (result.applied) {
+        version += 1;
+        traceEventCursor = event.id;
+      }
       if (result.closed)
         logger.info(
           { positionId: target.id, symbol: target.symbol, reason: settlement?.exitReason },
@@ -2752,6 +2793,7 @@ await Promise.all([
   instrumentMetadataLoop(),
   marketStreamLoop(),
   priceJournalLoop(),
+  priceArchiveLoop(),
   accountSnapshotLoop(),
   validationJobLoop(),
   exchangeVerificationLoop(),

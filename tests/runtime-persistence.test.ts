@@ -38,6 +38,12 @@ import {
   defaultRuntimeRiskPolicy,
 } from "../packages/persistence/src/runtime-risk";
 import { PriceEventRepository } from "../packages/persistence/src/price-event-repository";
+import { PriceArchiveRepository } from "../packages/persistence/src/price-archive-repository";
+import { encodePriceArchive } from "../packages/persistence/src/price-archive-codec";
+import { hashTracePayload } from "../packages/persistence/src/position-trace";
+import { processRuntimePriceEvents } from "../apps/worker/src/runtime-price-processor";
+import { runtimeTraceInputs } from "../apps/worker/src/runtime-trace";
+import { replayRuntimeTrace } from "../apps/worker/src/runtime-trace-replay";
 import { createApp } from "../apps/api/src/app";
 import { loadServerConfig } from "../packages/config/src/index";
 
@@ -258,6 +264,335 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
     } satisfies Pick<PersistRuntimeCycleInput, "providerVersion" | "candidate" | "contextSnapshot">;
   }
   try {
+    await t.test(
+      "archive cleanup retains a pending entry cursor without open positions",
+      async () => {
+        const context = await setup();
+        const pending = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "100",
+            observedAt: new Date(0),
+            streamId: "same",
+          },
+        });
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+          data: { pendingPriceEventId: pending.id },
+        });
+        await new PriceArchiveRepository(prisma).archiveAndPrune(new Date(Date.now() + 10000));
+        assert.ok(await prisma.marketPriceEvent.findUnique({ where: { id: pending.id } }));
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+          data: { pendingPriceEventId: null, pendingSignal: Prisma.DbNull },
+        });
+      },
+    );
+    await t.test(
+      "complete entry-to-stop trace survives hot cleanup, repository restart and checksum verification",
+      async () => {
+        const context = await open();
+        const config = strategyConfigSchema.parse(fixture.config);
+        const initial = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: context.position.id },
+        });
+        assert.equal(initial.fullFromEntry, true);
+        assert.equal(hashTracePayload(initial.snapshot), initial.snapshotHash);
+        const extra = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "97",
+            observedAt: new Date(+context.quote.quoteAt + 1),
+            streamId: context.quote.processedPrice.streamId,
+          },
+        });
+        const first = await prisma.marketPriceEvent.findUniqueOrThrow({
+          where: { id: context.quote.processedPrice.eventId },
+        });
+        const events = [first, extra].map((event) => ({ ...event, price: Number(event.price) }));
+        await processRuntimePriceEvents({
+          position: {
+            ...context.entry.position,
+            symbol: context.symbol,
+            side: "long",
+            entryRegime: "neutral",
+            entrySession: "europe",
+            entryPrice: 100,
+            quantity: 1,
+            stopPrice: 98,
+            takePrice: 104,
+            bestPrice: 100,
+            trailingPrice: null,
+            entryFee: 0.06,
+            entrySlippage: 0,
+          },
+          through: context.entry.quoteAt,
+          streamId: first.streamId,
+          events,
+          config,
+          recover: async () => {
+            throw new Error("unexpected gap");
+          },
+          checkpoint: async (checkpoint) => {
+            assert.ok(checkpoint.settlement);
+            const settlement = checkpoint.settlement;
+            const result = await runtime.persistRealtimeQuote({
+              ...context.quote,
+              processedEventCount: events.length,
+              quoteAt: checkpoint.through,
+              quotePrice: String(checkpoint.markPrice),
+              processedPrice: {
+                eventId: checkpoint.event.id,
+                streamId: checkpoint.streamId,
+                throughAt: checkpoint.through,
+              },
+              traceInputs: runtimeTraceInputs({
+                firstEventId: first.id,
+                policy: null,
+                signals: [],
+                recoveries: [],
+              }),
+              action: {
+                kind: "close",
+                protection: {
+                  stopPrice: String(checkpoint.position.stopPrice),
+                  bestPrice: String(checkpoint.position.bestPrice),
+                  trailingPrice: null,
+                },
+                settlement: {
+                  exitPrice: String(settlement.exitPrice),
+                  grossPnl: String(settlement.grossPnl),
+                  netPnl: String(settlement.netPnl),
+                  fees: String(settlement.fees),
+                  slippage: String(settlement.slippage),
+                  exitReason: settlement.exitReason,
+                  closedAt: new Date(settlement.closedAt),
+                },
+              },
+            });
+            return result.applied;
+          },
+        });
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: initial.positionId },
+          include: { records: true, position: { include: { trade: true } } },
+        });
+        assert.equal(trace.snapshotHash, initial.snapshotHash);
+        assert.equal(trace.endEventId, extra.id);
+        assert.ok(trace.retainUntil && +trace.retainUntil > +trace.closedAt!);
+        const archive = new PriceArchiveRepository(prisma);
+        const result = await archive.archiveAndPrune(new Date(Date.now() + 10000));
+        assert.equal(result.archived, 3);
+        assert.equal(await prisma.marketPriceEvent.count({ where: { symbol: context.symbol } }), 0);
+        const restarted = new PriceArchiveRepository(prisma),
+          trade = trace.position.trade!;
+        const replay = await replayRuntimeTrace({
+          snapshot: trace.snapshot,
+          snapshotHash: trace.snapshotHash,
+          fullFromEntry: trace.fullFromEntry,
+          startEventId: trace.startEventId,
+          endEventId: trace.endEventId!,
+          expectedEventCount: trace.eventCount,
+          records: trace.records,
+          loadEvents: (cursor, through) => restarted.after(context.symbol, cursor, through),
+          trade: {
+            exitReason: trade.exitReason,
+            closedAt: trade.closedAt,
+            averageExitPrice: trade.averageExitPrice.toFixed(),
+            grossPnl: trade.grossPnl.toFixed(),
+            netPnl: trade.netPnl.toFixed(),
+            fees: trade.fees.toFixed(),
+            slippage: trade.slippage.toFixed(),
+          },
+        });
+        assert.equal(replay.status, "matched");
+        assert.equal(replay.events, 2);
+        assert.equal(replay.coverage, "from-entry");
+        await archive.cleanup();
+        assert.equal(
+          await prisma.marketPriceArchiveChunk.count({ where: { symbol: context.symbol } }),
+          1,
+        );
+        await prisma.positionExecutionTrace.update({
+          where: { positionId: trace.positionId },
+          data: { retainUntil: new Date(0) },
+        });
+        await archive.cleanup();
+        assert.equal(
+          await prisma.marketPriceArchiveChunk.count({ where: { symbol: context.symbol } }),
+          0,
+        );
+      },
+    );
+    await t.test(
+      "archive insertion failure preserves hot events and does not release the unprocessed cursor",
+      async () => {
+        const context = await open(),
+          archive = new PriceArchiveRepository(prisma);
+        const candidate = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "99",
+            observedAt: new Date(Date.now() - 2 * 86400_000),
+            streamId: "old",
+          },
+        });
+        await prisma.position.update({
+          where: { id: context.position.id },
+          data: { priceEventId: candidate.id },
+        });
+        assert.equal((await archive.archiveAndPrune(new Date())).count, 2);
+        assert.ok(await prisma.marketPriceEvent.findUnique({ where: { id: candidate.id } }));
+        await prisma.position.update({
+          where: { id: context.position.id },
+          data: { priceEventId: candidate.id + 1n },
+        });
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION fail_trace_archive() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'archive unavailable'; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER fail_trace_archive BEFORE INSERT ON "MarketPriceArchiveChunk" FOR EACH ROW EXECUTE FUNCTION fail_trace_archive()`,
+        );
+        try {
+          await assert.rejects(archive.archiveAndPrune(new Date()), /archive unavailable/);
+          assert.ok(await prisma.marketPriceEvent.findUnique({ where: { id: candidate.id } }));
+        } finally {
+          await prisma.$executeRawUnsafe(
+            `DROP TRIGGER fail_trace_archive ON "MarketPriceArchiveChunk"`,
+          );
+          await prisma.$executeRawUnsafe(`DROP FUNCTION fail_trace_archive()`);
+          await prisma.position.update({
+            where: { id: context.position.id },
+            data: { priceEventId: null },
+          });
+          await prisma.positionExecutionTrace.update({
+            where: { positionId: context.position.id },
+            data: { retainUntil: new Date(0) },
+          });
+        }
+      },
+    );
+    await t.test(
+      "archive pagination never jumps over quiet-symbol chunks to newer hot prices",
+      async () => {
+        const symbol = randomUUID(),
+          at = new Date();
+        for (let index = 0; index < 9; index++) {
+          const encoded = await encodePriceArchive([
+            {
+              id: 1000000000n + BigInt(index * 2),
+              symbol,
+              eventKey: randomUUID(),
+              price: "100",
+              observedAt: at,
+              receivedAt: at,
+              streamId: "same",
+            },
+          ]);
+          const { rawBytes, ...data } = encoded;
+          assert.ok(rawBytes > data.payload.byteLength);
+          await prisma.marketPriceArchiveChunk.create({ data });
+        }
+        await prisma.marketPriceEvent.create({
+          data: {
+            id: 1000000030n,
+            symbol,
+            eventKey: randomUUID(),
+            price: "101",
+            observedAt: at,
+            streamId: "same",
+          },
+        });
+        const archive = new PriceArchiveRepository(prisma);
+        const first = await archive.after(symbol, 999999999n, 1000000030n);
+        assert.equal(first.length, 8);
+        assert.equal(first.at(-1)!.id, 1000000014n);
+        const next = await archive.after(symbol, first.at(-1)!.id, 1000000030n);
+        assert.deepEqual(
+          next.map((event) => event.id),
+          [1000000016n, 1000000030n],
+        );
+      },
+    );
+    await t.test(
+      "trace records policy enable/disable without a protective-level move and rejects stale writes",
+      async () => {
+        const context = await open();
+        const policy = {
+          enabledAt: new Date(Date.now() + 86400_000).toISOString(),
+          breakEvenActivationR: 0.5,
+          trailingActivationR: 1,
+          trailingDistanceR: 0.5,
+        };
+        const first = {
+          ...context.quote,
+          processedEventCount: 1,
+          traceInputs: runtimeTraceInputs({
+            firstEventId: context.quote.processedPrice.eventId,
+            policy,
+            signals: [],
+            recoveries: [],
+          }),
+          action: {
+            kind: "update" as const,
+            markPrice: "103",
+            unrealizedPnl: "2.94",
+            bestPrice: "103",
+            stopPrice: "98",
+            trailingPrice: null,
+          },
+        };
+        assert.equal((await runtime.persistRealtimeQuote(first)).applied, true);
+        const event = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "100",
+            streamId: context.quote.processedPrice.streamId,
+            observedAt: new Date(+context.quote.quoteAt + 1),
+          },
+        });
+        assert.equal(
+          (
+            await runtime.persistRealtimeQuote({
+              ...first,
+              expectedPositionVersion: 1,
+              quotePrice: "100",
+              quoteAt: event.observedAt,
+              action: { ...first.action, markPrice: "100", unrealizedPnl: "-0.06" },
+              processedPrice: {
+                eventId: event.id,
+                streamId: event.streamId,
+                throughAt: event.observedAt,
+              },
+              traceInputs: runtimeTraceInputs({
+                firstEventId: event.id,
+                policy: null,
+                signals: [],
+                recoveries: [],
+              }),
+            })
+          ).applied,
+          true,
+        );
+        assert.equal((await runtime.persistRealtimeQuote(first)).applied, false);
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: context.position.id },
+          include: { records: true },
+        });
+        assert.equal(trace.records.length, 2);
+        assert.equal(trace.eventCount, 2n);
+        assert.equal(trace.policyHash, hashTracePayload(null));
+        assert.equal(trace.snapshotHash, hashTracePayload(trace.snapshot));
+      },
+    );
     await t.test(
       "deployment pins its immutable validation seed and changed snapshot data is rejected",
       async () => {

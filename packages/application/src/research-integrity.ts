@@ -1,4 +1,5 @@
 import {
+  executionEntryCandleRange,
   enrichExecutionCandles,
   evaluateExecutionExit,
   getExecutionSignal,
@@ -14,7 +15,7 @@ import {
 } from "./execution-engine";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.4.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.5.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -119,15 +120,19 @@ export function runRuntimeReplay(input: {
         input.config,
       );
       if (!position) continue;
+      const entryRange = executionEntryCandleRange(position, candle, input.config);
       decisions.push({
         sequence: sequence++,
         symbol: candle.symbol,
         candleAt: candle.openTime.toISOString(),
         action: "open",
-        reasonCode: "pending-signal-filled",
+        reasonCode:
+          entryRange.mode === "intrabar-uncertain"
+            ? "pending-limit-filled-intrabar-uncertain"
+            : "pending-signal-filled",
         price: position.entryPrice,
       });
-      const settlement = evaluateExecutionExit(position, candle, input.config);
+      const settlement = evaluateExecutionExit(position, entryRange.candle, input.config);
       if (settlement) {
         trades.push(settlement);
         equity += settlement.netPnl;
@@ -141,7 +146,10 @@ export function runRuntimeReplay(input: {
           price: settlement.exitPrice,
         });
       } else {
-        positions.set(candle.symbol, updateExecutionTrailing(position, candle, input.config));
+        positions.set(
+          candle.symbol,
+          updateExecutionTrailing(position, entryRange.candle, input.config),
+        );
       }
     }
 

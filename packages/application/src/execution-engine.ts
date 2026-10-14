@@ -780,6 +780,29 @@ export function limitExecutionPositionRisk(
   };
 }
 
+export function executionEntryCandleRange(
+  position: ExecutionPosition,
+  candle: EnrichedExecutionCandle,
+  config: ExecutionStrategyConfig,
+) {
+  const intrabarLimit =
+    config.entry.orderType === "limit" &&
+    (position.side === "long"
+      ? candle.open > position.entryPrice
+      : candle.open < position.entryPrice);
+  if (!intrabarLimit) return { candle, mode: "opening-fill" as const };
+  // The adverse extreme follows crossing the limit; the favorable extreme may predate it.
+  return {
+    candle: {
+      ...candle,
+      open: position.entryPrice,
+      high: position.side === "long" ? Math.max(position.entryPrice, candle.close) : candle.high,
+      low: position.side === "short" ? Math.min(position.entryPrice, candle.close) : candle.low,
+    },
+    mode: "intrabar-uncertain" as const,
+  };
+}
+
 function executionProtectionLevel(position: ExecutionPosition): {
   price: number;
   reason: "stop-loss" | "trailing-stop";

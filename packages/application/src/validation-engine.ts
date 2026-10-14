@@ -1,4 +1,5 @@
 import {
+  executionEntryCandleRange,
   enrichExecutionCandles,
   minimumExecutionCandleCount,
   evaluateExecutionExit,
@@ -16,7 +17,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.10.0";
+export const validationEngineVersion = "cryptoanal-validation@0.11.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -323,13 +324,17 @@ function runBacktest(
         input.config,
       );
       if (!position) continue;
-      const closed = evaluateExecutionExit(position, candle, input.config);
+      const entryRange = executionEntryCandleRange(position, candle, input.config);
+      const closed = evaluateExecutionExit(position, entryRange.candle, input.config);
       if (closed) {
         trades.push(closed);
         equity += closed.netPnl;
         dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + closed.netPnl);
       } else {
-        positions.set(candle.symbol, updateExecutionTrailing(position, candle, input.config));
+        positions.set(
+          candle.symbol,
+          updateExecutionTrailing(position, entryRange.candle, input.config),
+        );
       }
     }
 

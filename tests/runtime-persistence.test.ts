@@ -53,7 +53,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
   const snapshots = new AccountSnapshotRepository(prisma);
   const decisions = new DecisionRepository(prisma);
   const candleAt = new Date("2026-01-01T12:00:00Z");
-  const quoteAt = new Date();
+  let quoteAt = new Date();
+  t.beforeEach(() => {
+    quoteAt = new Date();
+  });
   async function setup(shared?: { workspace: { id: string }; account: string }) {
     const suffix = randomUUID();
     const workspace =

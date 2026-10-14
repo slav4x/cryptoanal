@@ -10,6 +10,10 @@
 
 ### Fixed
 
+- Validation 0.11.0 / replay 1.5.0 не используют favorable extreme до неизвестного
+  intrabar limit fill для TP/BE/trailing. Close и adverse crossing остаются доступны;
+  opening fill сохраняет полную свечу. Replay маркирует uncertain limit fill.
+
 - OHLC/recovery выбирает ближайшую защиту: max(SL, trailing) для long и min для short,
   вместо устаревшего SL. Opening gap проверяется перед неизвестными intrabar экстремумами;
   gap через защиту исполняется по open, внутри свечи SL/TP остаётся protective-first.

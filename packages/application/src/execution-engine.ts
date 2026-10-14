@@ -780,50 +780,54 @@ export function limitExecutionPositionRisk(
   };
 }
 
+function executionProtectionLevel(position: ExecutionPosition): {
+  price: number;
+  reason: "stop-loss" | "trailing-stop";
+} {
+  if (
+    position.trailingPrice !== null &&
+    (position.side === "long"
+      ? position.trailingPrice > position.stopPrice
+      : position.trailingPrice < position.stopPrice)
+  ) {
+    return { price: position.trailingPrice, reason: "trailing-stop" };
+  }
+  return { price: position.stopPrice, reason: "stop-loss" };
+}
+
 export function evaluateExecutionExit(
   position: ExecutionPosition,
   candle: EnrichedExecutionCandle,
   config: ExecutionStrategyConfig,
 ): ExecutionSettlement<AutomaticExitReason> | null {
-  if (position.side === "long") {
-    if (candle.low <= position.stopPrice) {
-      const exitPrice = candle.open <= position.stopPrice ? candle.open : position.stopPrice;
-      return settleExecutionPosition(position, exitPrice, candle.openTime, "stop-loss", config);
-    }
-    if (position.trailingPrice !== null && candle.low <= position.trailingPrice) {
-      const exitPrice =
-        candle.open <= position.trailingPrice ? candle.open : position.trailingPrice;
-      return settleExecutionPosition(position, exitPrice, candle.openTime, "trailing-stop", config);
-    }
-    if (candle.high >= position.takePrice) {
-      return settleExecutionPosition(
-        position,
-        position.takePrice,
-        candle.openTime,
-        "take-profit",
-        config,
-      );
-    }
-  } else {
-    if (candle.high >= position.stopPrice) {
-      const exitPrice = candle.open >= position.stopPrice ? candle.open : position.stopPrice;
-      return settleExecutionPosition(position, exitPrice, candle.openTime, "stop-loss", config);
-    }
-    if (position.trailingPrice !== null && candle.high >= position.trailingPrice) {
-      const exitPrice =
-        candle.open >= position.trailingPrice ? candle.open : position.trailingPrice;
-      return settleExecutionPosition(position, exitPrice, candle.openTime, "trailing-stop", config);
-    }
-    if (candle.low <= position.takePrice) {
-      return settleExecutionPosition(
-        position,
-        position.takePrice,
-        candle.openTime,
-        "take-profit",
-        config,
-      );
-    }
-  }
+  // An exit already reached at open precedes all unknown intrabar extrema.
+  const openingExit = evaluateExecutionPriceExit(
+    position,
+    { symbol: candle.symbol, price: candle.open, observedAt: candle.openTime },
+    config,
+  );
+  if (openingExit) return openingExit;
+  const protection = executionProtectionLevel(position);
+  const stopTouched =
+    position.side === "long" ? candle.low <= protection.price : candle.high >= protection.price;
+  if (stopTouched)
+    return settleExecutionPosition(
+      position,
+      protection.price,
+      candle.openTime,
+      protection.reason,
+      config,
+    );
+  const takeTouched =
+    position.side === "long" ? candle.high >= position.takePrice : candle.low <= position.takePrice;
+  if (takeTouched)
+    return settleExecutionPosition(
+      position,
+      position.takePrice,
+      candle.openTime,
+      "take-profit",
+      config,
+    );
   return evaluateExecutionSignalExit(position, candle, config);
 }
 
@@ -832,51 +836,29 @@ export function evaluateExecutionPriceExit(
   quote: ExecutionQuote,
   config: ExecutionStrategyConfig,
 ): ExecutionSettlement<Exclude<AutomaticExitReason, "signal-exit">> | null {
-  if (position.side === "long") {
-    if (quote.price <= position.stopPrice) {
-      return settleExecutionPosition(position, quote.price, quote.observedAt, "stop-loss", config);
-    }
-    if (position.trailingPrice !== null && quote.price <= position.trailingPrice) {
-      return settleExecutionPosition(
-        position,
-        quote.price,
-        quote.observedAt,
-        "trailing-stop",
-        config,
-      );
-    }
-    if (quote.price >= position.takePrice) {
-      return settleExecutionPosition(
-        position,
-        position.takePrice,
-        quote.observedAt,
-        "take-profit",
-        config,
-      );
-    }
-  } else {
-    if (quote.price >= position.stopPrice) {
-      return settleExecutionPosition(position, quote.price, quote.observedAt, "stop-loss", config);
-    }
-    if (position.trailingPrice !== null && quote.price >= position.trailingPrice) {
-      return settleExecutionPosition(
-        position,
-        quote.price,
-        quote.observedAt,
-        "trailing-stop",
-        config,
-      );
-    }
-    if (quote.price <= position.takePrice) {
-      return settleExecutionPosition(
-        position,
-        position.takePrice,
-        quote.observedAt,
-        "take-profit",
-        config,
-      );
-    }
-  }
+  const protection = executionProtectionLevel(position);
+  const stopTouched =
+    position.side === "long" ? quote.price <= protection.price : quote.price >= protection.price;
+  if (stopTouched)
+    return settleExecutionPosition(
+      position,
+      quote.price,
+      quote.observedAt,
+      protection.reason,
+      config,
+    );
+  const takeTouched =
+    position.side === "long"
+      ? quote.price >= position.takePrice
+      : quote.price <= position.takePrice;
+  if (takeTouched)
+    return settleExecutionPosition(
+      position,
+      position.takePrice,
+      quote.observedAt,
+      "take-profit",
+      config,
+    );
   return null;
 }
 

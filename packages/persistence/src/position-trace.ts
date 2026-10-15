@@ -91,6 +91,9 @@ export async function ensurePositionTrace(
       bestPrice: true,
       entryFee: true,
       entrySlippage: true,
+      exitState: true,
+      remainingQuantity: true,
+      remainingEntryFee: true,
     },
   });
   const snapshot = {
@@ -103,6 +106,13 @@ export async function ensurePositionTrace(
       ...(input.position.entryExecution ? { entryExecution: input.position.entryExecution } : {}),
       ...(input.position.instrumentRules
         ? { instrumentRules: readExecutionInstrumentRules(input.position.instrumentRules)! }
+        : {}),
+      ...(persisted.remainingQuantity !== null
+        ? {
+            remainingQuantity: persisted.remainingQuantity.toFixed(),
+            remainingEntryFee: persisted.remainingEntryFee?.toFixed() ?? null,
+            exitState: persisted.exitState,
+          }
         : {}),
       symbol: input.position.symbol,
       side: input.position.side,

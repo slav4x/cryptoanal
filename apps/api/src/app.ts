@@ -1,3 +1,4 @@
+import { isLiquidityExitPolicy } from "../../../packages/application/src/execution-exit-policy";
 import {
   calculateMarketAnalysis,
   buildExperimentRanking,
@@ -3569,6 +3570,18 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           }
           throw new ApiError(409, "POSITION_STATUS_CONFLICT", "Позиция уже закрыта");
         }
+        if (isLiquidityExitPolicy(position.exitPolicy)) {
+          const result = await runtimeRepository.requestManualLiquidityExit({
+            workspaceId: workspace.id,
+            positionId: position.id,
+            executionRunId: position.executionRunId,
+            actorId: requireContext(request).actorId,
+            requestId: request.id,
+            idempotencyKey: request.body.idempotencyKey,
+            reason: request.body.reason,
+          });
+          return { data: result, meta: createMeta(request.id, "fresh") };
+        }
         const quote = position.instrument.snapshots[0];
         if (!quote) {
           throw new ApiError(
@@ -3647,6 +3660,8 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
         data: {
           summary: ledger.summary,
           positions: ledger.positions.map((position) => ({
+            closing: position.closing,
+            realizedPnl: position.realizedPnl.toFixed(),
             id: position.id,
             symbol: position.symbol,
             environment: tradingEnvironment[position.environment],

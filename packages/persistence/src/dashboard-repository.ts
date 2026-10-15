@@ -1,3 +1,4 @@
+import { realizedCashPnl } from "./realized-cash";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 
@@ -23,66 +24,76 @@ export class DashboardRepository {
       account,
       heartbeat,
       activeDeployments,
-    ] = await Promise.all([
-      this.prisma.position.findMany({
-        where: { workspaceId, status: "OPEN" },
-        select: {
-          quantity: true,
-          entryPrice: true,
-          markPrice: true,
-          unrealizedPnl: true,
-        },
-      }),
-      this.prisma.strategy.count({
-        where: { workspaceId, status: { in: ["DEPLOYED", "PAUSED"] } },
-      }),
-      this.prisma.trade.aggregate({
-        where: { workspaceId },
-        _sum: { netPnl: true },
-      }),
-      this.prisma.trade.aggregate({
-        where: { workspaceId, closedAt: { gte: startOfUtcDay } },
-        _sum: { netPnl: true },
-      }),
-      this.prisma.accountSnapshot.findFirst({
-        where: { workspaceId, exchangeAccountId: portfolioAccountId },
-        orderBy: { observedAt: "desc" },
-        select: {
-          exchangeAccountId: true,
-          environment: true,
-          equity: true,
-          availableBalance: true,
-          observedAt: true,
-        },
-      }),
-      this.prisma.workerHeartbeat.findFirst({
-        where: { service: "worker" },
-        orderBy: { lastSeenAt: "desc" },
-        select: { lastSeenAt: true },
-      }),
-      this.prisma.deployment.findMany({
-        where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
-        select: {
-          status: true,
-          executionRuns: {
-            where: { status: "RUNNING" },
-            orderBy: { createdAt: "desc" },
-            take: 1,
+    ] = await this.prisma.$transaction(
+      async (tx) =>
+        Promise.all([
+          tx.position.findMany({
+            where: { workspaceId, status: "OPEN" },
             select: {
-              runtimeCursors: {
-                where: { consecutiveFailures: { gt: 0 } },
+              quantity: true,
+              remainingQuantity: true,
+              entryPrice: true,
+              markPrice: true,
+              unrealizedPnl: true,
+              realizedPnl: true,
+              exitState: true,
+            },
+          }),
+          tx.strategy.count({
+            where: { workspaceId, status: { in: ["DEPLOYED", "PAUSED"] } },
+          }),
+          tx.trade.aggregate({
+            where: { workspaceId },
+            _sum: { netPnl: true },
+          }),
+          realizedCashPnl(tx, { workspaceId, since: startOfUtcDay }).then((value) => ({
+            _sum: { netPnl: new Prisma.Decimal(value) },
+          })),
+          tx.accountSnapshot.findFirst({
+            where: { workspaceId, exchangeAccountId: portfolioAccountId },
+            orderBy: { observedAt: "desc" },
+            select: {
+              exchangeAccountId: true,
+              environment: true,
+              equity: true,
+              availableBalance: true,
+              observedAt: true,
+            },
+          }),
+          tx.workerHeartbeat.findFirst({
+            where: { service: "worker" },
+            orderBy: { lastSeenAt: "desc" },
+            select: { lastSeenAt: true },
+          }),
+          tx.deployment.findMany({
+            where: { workspaceId, status: { in: ["RUNNING", "PAUSED"] } },
+            select: {
+              status: true,
+              executionRuns: {
+                where: { status: "RUNNING" },
+                orderBy: { createdAt: "desc" },
                 take: 1,
-                select: { symbol: true },
+                select: {
+                  runtimeCursors: {
+                    where: { consecutiveFailures: { gt: 0 } },
+                    take: 1,
+                    select: { symbol: true },
+                  },
+                },
               },
             },
-          },
-        },
-      }),
-    ]);
+          }),
+        ]),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
 
     const openExposure = positions.reduce(
       (sum, position) =>
-        sum.add(position.quantity.mul(position.markPrice ?? position.entryPrice).abs()),
+        sum.add(
+          (position.remainingQuantity ?? position.quantity)
+            .mul(position.markPrice ?? position.entryPrice)
+            .abs(),
+        ),
       new Prisma.Decimal(0),
     );
     const unrealizedPnl = positions.reduce(
@@ -103,7 +114,12 @@ export class DashboardRepository {
       openExposure: openExposure.toFixed(),
       unrealizedPnl: unrealizedPnl.toFixed(),
       activeStrategies,
-      totalPnl: totalAggregate._sum.netPnl?.toFixed() ?? "0",
+      totalPnl: positions
+        .reduce(
+          (sum, p) => sum.add(p.realizedPnl),
+          totalAggregate._sum.netPnl ?? new Prisma.Decimal(0),
+        )
+        .toFixed(),
       dayPnl: dayAggregate._sum.netPnl?.toFixed() ?? "0",
       account: account
         ? {
@@ -272,69 +288,80 @@ export class DashboardRepository {
   }
 
   public async getTradingLedger(workspaceId: string) {
-    const [positions, trades, tradeSummary] = await Promise.all([
-      this.prisma.position.findMany({
-        where: { workspaceId, status: "OPEN" },
-        orderBy: { openedAt: "desc" },
-        select: {
-          id: true,
-          symbol: true,
-          environment: true,
-          side: true,
-          quantity: true,
-          entryPrice: true,
-          stopPrice: true,
-          takePrice: true,
-          trailingPrice: true,
-          markPrice: true,
-          unrealizedPnl: true,
-          openedAt: true,
-          strategyVersion: {
-            select: { version: true, strategy: { select: { id: true, name: true } } },
-          },
-        },
-      }),
-      this.prisma.trade.findMany({
-        where: { workspaceId },
-        orderBy: { closedAt: "desc" },
-        take: 100,
-        select: {
-          id: true,
-          symbol: true,
-          environment: true,
-          side: true,
-          entryRegime: true,
-          entrySession: true,
-          quantity: true,
-          averageEntryPrice: true,
-          averageExitPrice: true,
-          grossPnl: true,
-          fees: true,
-          funding: true,
-          slippage: true,
-          netPnl: true,
-          exitReason: true,
-          openedAt: true,
-          closedAt: true,
-          position: {
-            select: { stopPrice: true, takePrice: true, trailingPrice: true },
-          },
-          strategyVersion: {
-            select: { version: true, strategy: { select: { id: true, name: true } } },
-          },
-        },
-      }),
-      this.prisma.trade.aggregate({
-        where: { workspaceId },
-        _count: true,
-        _sum: { netPnl: true },
-      }),
-    ]);
+    const [positions, trades, tradeSummary] = await this.prisma.$transaction(
+      async (tx) =>
+        Promise.all([
+          tx.position.findMany({
+            where: { workspaceId, status: "OPEN" },
+            orderBy: { openedAt: "desc" },
+            select: {
+              id: true,
+              symbol: true,
+              environment: true,
+              side: true,
+              quantity: true,
+              remainingQuantity: true,
+              entryPrice: true,
+              stopPrice: true,
+              takePrice: true,
+              trailingPrice: true,
+              markPrice: true,
+              unrealizedPnl: true,
+              realizedPnl: true,
+              exitState: true,
+              openedAt: true,
+              strategyVersion: {
+                select: { version: true, strategy: { select: { id: true, name: true } } },
+              },
+            },
+          }),
+          tx.trade.findMany({
+            where: { workspaceId },
+            orderBy: { closedAt: "desc" },
+            take: 100,
+            select: {
+              id: true,
+              symbol: true,
+              environment: true,
+              side: true,
+              entryRegime: true,
+              entrySession: true,
+              quantity: true,
+              averageEntryPrice: true,
+              averageExitPrice: true,
+              grossPnl: true,
+              fees: true,
+              funding: true,
+              slippage: true,
+              netPnl: true,
+              exitReason: true,
+              openedAt: true,
+              closedAt: true,
+              position: {
+                select: { stopPrice: true, takePrice: true, trailingPrice: true },
+              },
+              strategyVersion: {
+                select: { version: true, strategy: { select: { id: true, name: true } } },
+              },
+            },
+          }),
+          tx.trade.aggregate({
+            where: { workspaceId },
+            _count: true,
+            _sum: { netPnl: true },
+          }),
+        ]),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
 
     const openExposure = positions
       .reduce(
         (sum, position) =>
-          sum.add(position.quantity.mul(position.markPrice ?? position.entryPrice).abs()),
+          sum.add(
+            (position.remainingQuantity ?? position.quantity)
+              .mul(position.markPrice ?? position.entryPrice)
+              .abs(),
+          ),
         new Prisma.Decimal(0),
       )
       .toFixed();
@@ -343,14 +370,23 @@ export class DashboardRepository {
       .toFixed();
 
     return {
-      positions,
+      positions: positions.map((p) => ({
+        ...p,
+        quantity: p.remainingQuantity ?? p.quantity,
+        closing: p.exitState !== null,
+      })),
       trades,
       summary: {
         openPositions: positions.length,
         openExposure,
         unrealizedPnl,
         closedTrades: tradeSummary._count,
-        netPnl: tradeSummary._sum.netPnl?.toFixed() ?? "0",
+        netPnl: positions
+          .reduce(
+            (sum, p) => sum.add(p.realizedPnl),
+            tradeSummary._sum.netPnl ?? new Prisma.Decimal(0),
+          )
+          .toFixed(),
       },
     };
   }

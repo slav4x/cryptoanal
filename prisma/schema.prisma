@@ -662,6 +662,9 @@ model ExecutionRun {
 }
 
 model Position {
+  remainingQuantity Decimal? @db.Decimal(38, 18)
+  remainingEntryFee Decimal? @db.Decimal(38, 18)
+  exitState        Json?
   exitPolicy       Json?
   entryExecution   Json?
   instrumentRules  Json?
@@ -739,6 +742,9 @@ model Order {
 }
 
 model Fill {
+  realizedGrossPnl Decimal? @db.Decimal(38, 18)
+  realizedNetPnl Decimal? @db.Decimal(38, 18)
+  entryFeeAllocated Decimal? @db.Decimal(38, 18)
   execution      Json?
   id             String    @id @default(uuid())
   workspaceId    String
@@ -755,6 +761,7 @@ model Fill {
 
   @@unique([workspaceId, exchangeFillId])
   @@index([orderId, filledAt])
+  @@index([workspaceId, filledAt])
 }
 
 model Trade {

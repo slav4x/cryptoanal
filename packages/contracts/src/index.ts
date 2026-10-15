@@ -345,6 +345,8 @@ export const watchlistStateSchema = z.object({
 });
 
 export const positionSchema = z.object({
+  closing: z.boolean().default(false),
+  realizedPnl: z.string().default("0"),
   id: z.string(),
   symbol: z.string(),
   environment: z.enum(["dry-run", "demo", "live"]),
@@ -544,7 +546,8 @@ export const positionCloseInputSchema = z.object({
 });
 export const positionCloseResultSchema = z.object({
   positionId: z.string(),
-  tradeId: z.string(),
+  tradeId: z.string().nullable(),
+  status: z.enum(["closing", "closed"]).optional(),
   replayed: z.boolean(),
 });
 

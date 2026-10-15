@@ -158,3 +158,6 @@ export {
 } from "./runtime-entry-wait";
 export { captureInstrumentRules, instrumentRulesSelect } from "./instrument-rules";
 export { ValidationInstrumentRulesError } from "./validation-repository";
+
+export * from "./liquidity-exit-model";
+export * from "./liquidity-exit-proof";

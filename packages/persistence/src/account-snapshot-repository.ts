@@ -45,7 +45,12 @@ export class AccountSnapshotRepository {
         }),
         this.prisma.position.findMany({
           where: { workspaceId, environment: "DRY_RUN", status: "OPEN", ...accountFilter },
-          select: { unrealizedPnl: true, entryFee: true },
+          select: {
+            unrealizedPnl: true,
+            entryFee: true,
+            remainingEntryFee: true,
+            realizedPnl: true,
+          },
         }),
       ],
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
@@ -53,7 +58,11 @@ export class AccountSnapshotRepository {
 
     const realizedPnl = tradeAggregate._sum.netPnl ?? new Prisma.Decimal(0);
     const unrealizedPnl = positions.reduce(
-      (sum, position) => sum.add(position.unrealizedPnl).sub(position.entryFee),
+      (sum, position) =>
+        sum
+          .add(position.realizedPnl)
+          .add(position.unrealizedPnl)
+          .sub(position.remainingEntryFee ?? position.entryFee),
       new Prisma.Decimal(0),
     );
     const equity = new Prisma.Decimal(initialBalance).add(realizedPnl).add(unrealizedPnl);

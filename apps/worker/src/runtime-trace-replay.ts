@@ -11,6 +11,8 @@ import {
   readEntryExecutionMarker,
   readExecutionExitPolicy,
 } from "@cryptoanal/application";
+import { isLiquidityExitPolicy } from "@cryptoanal/application";
+import { replayLiquidityRuntimeTrace } from "./liquidity-trace-replay";
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
 import { processRuntimePriceEvents, type RuntimeSignalEvent } from "./runtime-price-processor";
@@ -62,7 +64,7 @@ type TracePayload = {
 };
 class RuntimeTraceIncompleteError extends Error {}
 
-export async function replayRuntimeTrace(input: {
+export type RuntimeTraceReplayInput = {
   snapshot: unknown;
   snapshotHash: string;
   fullFromEntry: boolean;
@@ -80,13 +82,31 @@ export async function replayRuntimeTrace(input: {
     fees: string;
     slippage: string;
   };
-}) {
+};
+
+export async function replayRuntimeTrace(input: RuntimeTraceReplayInput) {
+  const snapshot = input.snapshot as { position?: { exitPolicy?: unknown } };
+  if (
+    isLiquidityExitPolicy(snapshot.position?.exitPolicy) &&
+    input.records.some((r) => r.kind === "liquidity-trigger")
+  )
+    return replayLiquidityRuntimeTrace(input, replayRuntimeTraceBase);
+  if (
+    isLiquidityExitPolicy(snapshot.position?.exitPolicy) &&
+    (input.trade || input.records.some((r) => r.kind === "liquidity-step"))
+  )
+    throw new Error("Liquidity exit trigger missing");
+  return replayRuntimeTraceBase(input);
+}
+
+export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   if (hashTracePayload(input.snapshot) !== input.snapshotHash)
     throw new Error("Trace snapshot checksum mismatch");
   const snapshot = input.snapshot as Snapshot;
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.7.0" &&
       !(
         snapshot.executionEngineVersion === "cryptoanal-execution@0.6.0" &&
         !snapshot.position.exitPolicy

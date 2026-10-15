@@ -1,6 +1,24 @@
 import "dotenv/config";
 import { Client } from "pg";
 import { writeFile } from "node:fs/promises";
+import { hashTracePayload } from "../packages/persistence/src/position-trace";
+import {
+  verifyLiquidityExitFill,
+  verifyLiquidityExitStep,
+} from "../packages/persistence/src/liquidity-exit-proof";
+import {
+  exitDecimal,
+  initialLiquidityExitState,
+  remainingExitQuantity,
+  remainingExitEntryFee,
+  type ExitPositionBasis,
+  type LiquidityExitState,
+} from "../packages/persistence/src/liquidity-exit-model";
+import {
+  isLiquidityExitPolicy,
+  liquidityExitVersion,
+} from "../packages/application/src/execution-exit-policy";
+import { entryLiquidityVersion } from "../packages/application/src/execution-entry-liquidity";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import {
   updateExecutionTrailingAtPrice,
@@ -54,12 +72,12 @@ try {
         side: stored.side === "BUY" ? "long" : "short",
         openedAt: stored.openedAt,
         entryPrice: Number(stored.entryPrice),
-        quantity: Number(stored.quantity),
+        quantity: Number(stored.remainingQuantity ?? stored.quantity),
         stopPrice: Number(stored.stopPrice),
         takePrice: Number(stored.takePrice),
         trailingPrice: stored.trailingPrice === null ? null : Number(stored.trailingPrice),
         bestPrice: Number(stored.bestPrice),
-        entryFee: Number(stored.entryFee),
+        entryFee: Number(stored.remainingEntryFee ?? stored.entryFee),
         entrySlippage: Number(stored.entrySlippage),
         entryRegime: "unknown",
         entrySession: "unknown",
@@ -68,13 +86,14 @@ try {
         instrumentCompliance.checked++;
         if (
           executionInstrumentSizeFailure(
-            position,
+            { ...position, quantity: Number(stored.quantity) },
             position.instrumentRules,
             !!position.entryExecution,
           )
         )
           instrumentCompliance.invalidInstrumentPositions++;
       } else instrumentCompliance.legacyOpenPositions++;
+      if (stored.exitState) continue;
       const quote = {
         source: "LastPrice" as const,
         symbol: position.symbol,
@@ -124,7 +143,7 @@ try {
     JOIN "ExecutionRun" r ON r.id=o."executionRunId" JOIN "StrategyVersion" v ON v.id=r."strategyVersionId"
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('quantity',f.quantity::text,'price',f.price::text,'fee',f.fee::text,
       'filledAt',f."filledAt",'execution',f.execution) ORDER BY f."filledAt") AS fills FROM "Fill" f WHERE f."orderId"=o.id) x ON true
-    WHERE o.execution IS NOT NULL`)) {
+    WHERE o.execution->'snapshot'->>'version'='${entryLiquidityVersion}'`)) {
     if (order.status === "OPEN") {
       entryExecution.open++;
       continue;
@@ -132,7 +151,10 @@ try {
     entryExecution.checked++;
     try {
       const proof = verifyEntryExecutionProof(order, strategyConfigSchema.parse(order.config));
-      entryExecution[proof.outcome]++;
+      if (proof.outcome === "full") entryExecution.full++;
+      else if (proof.outcome === "partial") entryExecution.partial++;
+      else if (proof.outcome === "cancelled") entryExecution.cancelled++;
+      else throw new Error("Unsupported entry outcome");
     } catch {
       entryExecution.invalidEntryReceipts++;
     }
@@ -157,9 +179,143 @@ try {
   }
   const missingExitReceipts = await one(`SELECT count(*)::int AS "missingExitReceipts" FROM "Fill" f
     JOIN "Order" o ON o.id=f."orderId" JOIN "Position" p ON p.id=o."positionId" JOIN "Trade" t ON t."positionId"=p.id
-    WHERE p."exitPolicy" IS NOT NULL AND o.side<>p.side AND t."exitReason" IN ('stop-loss','take-profit','trailing-stop')
+    WHERE p."exitPolicy"->>'fillModel'='fixed-slippage@1' AND o.side<>p.side AND t."exitReason" IN ('stop-loss','take-profit','trailing-stop')
     AND (f.execution->'payload'->>'version' IS DISTINCT FROM '${executionExitPolicyVersion}')`);
+  const liquidityExits = {
+    checked: 0,
+    fills: 0,
+    closing: 0,
+    invalidLiquidityExitPositions: 0,
+    errors: [] as Array<{ positionId: string; message: string }>,
+  };
+  for (const p of await rows(
+    `SELECT p.*,v.config FROM "Position" p JOIN "StrategyVersion" v ON v.id=p."strategyVersionId" WHERE p."exitPolicy"->>'fillModel'='l1-ioc@1'`,
+  )) {
+    liquidityExits.checked++;
+    if (p.status === "OPEN" && p.exitState) liquidityExits.closing++;
+    try {
+      const policy = readExecutionExitPolicy(p.exitPolicy);
+      if (!isLiquidityExitPolicy(policy)) throw new Error("Invalid liquidity exit policy");
+      const basis: ExitPositionBasis = {
+        id: p.id,
+        symbol: p.symbol,
+        side: p.side,
+        quantity: exitDecimal(p.quantity).toFixed(),
+        entryPrice: exitDecimal(p.entryPrice).toFixed(),
+        entryFee: exitDecimal(p.entryFee).toFixed(),
+        entrySlippage: exitDecimal(p.entrySlippage).toFixed(),
+        instrumentRules: readExecutionInstrumentRules(p.instrumentRules)!,
+        policy,
+      };
+      const config = strategyConfigSchema.parse(p.config);
+      const orders = (await client.query('SELECT * FROM "Order" WHERE "positionId"=$1', [p.id]))
+        .rows;
+      let net = exitDecimal(0),
+        gross = exitDecimal(0),
+        allocated = exitDecimal(0),
+        exits = exitDecimal(0),
+        fees = exitDecimal(0),
+        entries = exitDecimal(0),
+        open = 0;
+      for (const o of orders) {
+        const fills = (await client.query('SELECT * FROM "Fill" WHERE "orderId"=$1', [o.id])).rows;
+        for (const f of fills) {
+          fees = fees.add(f.fee);
+          if (o.side === p.side) entries = entries.add(f.quantity);
+        }
+        if (o.side === p.side) continue;
+        const receipt = o.execution;
+        if (
+          !receipt ||
+          receipt.snapshot?.version !== liquidityExitVersion ||
+          hashTracePayload(receipt.snapshot) !== receipt.hash ||
+          receipt.snapshot.positionId !== p.id ||
+          hashTracePayload(receipt.snapshot.policy) !== hashTracePayload(policy) ||
+          !exitDecimal(o.quantity).eq(receipt.snapshot.ioc.quantity) ||
+          o.type !== "MARKET" ||
+          fills.length > 1
+        )
+          throw new Error("Invalid liquidity exit order receipt");
+        let filled = exitDecimal(0);
+        for (const f of fills) {
+          verifyLiquidityExitFill(f, config, basis);
+          liquidityExits.fills++;
+          if (
+            f.execution.payload.orderId !== o.id ||
+            hashTracePayload(f.execution.payload.snapshot) !== receipt.hash
+          )
+            throw new Error("Fill order link mismatch");
+          filled = filled.add(f.quantity);
+          exits = exits.add(f.quantity);
+          net = net.add(f.realizedNetPnl);
+          gross = gross.add(f.realizedGrossPnl);
+          allocated = allocated.add(f.entryFeeAllocated);
+        }
+        if (o.status === "OPEN") {
+          open++;
+          if (fills.length || receipt.terminal || p.exitState?.order?.id !== o.id)
+            throw new Error("Open exit order mismatch");
+        } else if (
+          !receipt.terminal ||
+          !filled.eq(receipt.terminal.filledQuantity) ||
+          !filled.add(receipt.terminal.cancelledQuantity).eq(o.quantity) ||
+          (o.status === "FILLED") !== filled.eq(o.quantity)
+        )
+          throw new Error("Exit terminal balance mismatch");
+      }
+      if (
+        !entries.eq(p.quantity) ||
+        !exits.add(p.remainingQuantity).eq(p.quantity) ||
+        !allocated.add(p.remainingEntryFee).eq(p.entryFee) ||
+        !net.eq(p.realizedPnl) ||
+        open !== (p.exitState?.order ? 1 : 0) ||
+        (p.status === "CLOSED") !== exitDecimal(p.remainingQuantity).eq(0)
+      )
+        throw new Error("Position partial balance mismatch");
+      if (p.exitState) {
+        let state: LiquidityExitState | null = null;
+        for (const r of (
+          await client.query(
+            'SELECT * FROM "PositionTraceRecord" WHERE "positionId"=$1 ORDER BY id',
+            [p.id],
+          )
+        ).rows) {
+          if (hashTracePayload(r.payload) !== r.payloadHash) throw new Error("Trace hash mismatch");
+          if (r.kind === "liquidity-trigger") {
+            if (state || hashTracePayload(r.payload.basis) !== hashTracePayload(basis))
+              throw new Error("Trigger basis mismatch");
+            state = initialLiquidityExitState(basis, r.payload.state.intent);
+            if (hashTracePayload(state) !== hashTracePayload(r.payload.state))
+              throw new Error("Initial exit balance mismatch");
+          } else if (r.kind === "liquidity-step") {
+            if (!state) throw new Error("Missing exit intent");
+            state = verifyLiquidityExitStep(r.payload, config, basis, state).state;
+          }
+        }
+        if (
+          !state ||
+          hashTracePayload(state) !== hashTracePayload(p.exitState) ||
+          !exitDecimal(remainingExitQuantity(state)).eq(p.remainingQuantity) ||
+          !exitDecimal(remainingExitEntryFee(state)).eq(p.remainingEntryFee)
+        )
+          throw new Error("Stored exit state mismatch");
+      }
+      if (p.status === "CLOSED") {
+        const t = (await client.query('SELECT * FROM "Trade" WHERE "positionId"=$1', [p.id]))
+          .rows[0];
+        if (!t || !net.eq(t.netPnl) || !gross.eq(t.grossPnl) || !fees.eq(t.fees))
+          throw new Error("Aggregate trade mismatch");
+      }
+    } catch (error) {
+      liquidityExits.invalidLiquidityExitPositions++;
+      liquidityExits.errors.push({
+        positionId: p.id,
+        message: error instanceof Error ? error.message : "Unknown receipt failure",
+      });
+    }
+  }
   const summary = {
+    liquidityExits,
     exitExecution: { ...exitExecution, ...missingExitReceipts },
     entryExecution: { ...entryExecution, ...sourceUse },
     instrumentCompliance,
@@ -214,7 +370,8 @@ try {
         count(f.id) FILTER(WHERE o.side=p.side)::int AS entries,
         count(f.id) FILTER(WHERE o.side<>p.side)::int AS exits,
         count(f.id) FILTER(WHERE f.quantity<>p.quantity)::int AS "quantityMismatch",sum(f.fee) AS fees
-        FROM "Order" o LEFT JOIN "Fill" f ON f."orderId"=o.id WHERE o."positionId"=p.id) x ON true`),
+        FROM "Order" o LEFT JOIN "Fill" f ON f."orderId"=o.id WHERE o."positionId"=p.id) x ON true
+      WHERE p."exitPolicy"->>'fillModel' IS DISTINCT FROM 'l1-ioc@1'`),
     decisions: await one(`SELECT
       count(*) FILTER(WHERE x.opens<>1)::int AS "openDecisionMismatch",
       count(*) FILTER(WHERE x.closes<>CASE WHEN p.status='CLOSED' THEN 1 ELSE 0 END)::int AS "closeDecisionMismatch",
@@ -264,6 +421,7 @@ try {
     summary.instrumentCompliance,
     summary.entryExecution,
     summary.exitExecution,
+    summary.liquidityExits,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)

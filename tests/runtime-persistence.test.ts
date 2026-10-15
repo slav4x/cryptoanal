@@ -52,8 +52,25 @@ import {
   evaluateExecutionPriceExit,
   type ExecutionPosition,
 } from "../packages/application/src/execution-engine";
-import { defaultExecutionExitPolicy } from "../packages/application/src/execution-exit-policy";
-import { encodePriceArchive } from "../packages/persistence/src/price-archive-codec";
+import {
+  defaultLiquidityExitPolicy,
+  defaultExecutionExitPolicy,
+} from "../packages/application/src/execution-exit-policy";
+import {
+  readLiquidityExitState,
+  remainingExitQuantity,
+} from "../packages/persistence/src/liquidity-exit-model";
+import {
+  type LiquidityExitStep,
+  verifyLiquidityExitFill,
+} from "../packages/persistence/src/liquidity-exit-proof";
+import { liquidityExitBasis } from "../packages/persistence/src/liquidity-exit-repository";
+import { realizedCashPnl } from "../packages/persistence/src/realized-cash";
+import { DashboardRepository } from "../packages/persistence/src/dashboard-repository";
+import {
+  archivePriceEvent,
+  encodePriceArchive,
+} from "../packages/persistence/src/price-archive-codec";
 import { type StoredExecutionMarketData } from "../packages/application/src/execution-market-data";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
 import { processRuntimePriceEvents } from "../apps/worker/src/runtime-price-processor";
@@ -3635,7 +3652,12 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         await app.close();
       }
     });
-    async function liquiditySetup(limit = false, passive = false, minimumNotional = "0") {
+    async function liquiditySetup(
+      limit = false,
+      passive = false,
+      minimumNotional = "0",
+      repository = runtime,
+    ) {
       const context = await setup();
       if (limit)
         await prisma.strategyVersion.update({
@@ -3667,7 +3689,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         where: { id: source.id },
         data: { receivedAt: quoteAt, executionData: data },
       });
-      const submitted = await runtime.submitRealtimeEntryOrder({
+      const submitted = await repository.submitRealtimeEntryOrder({
         workspaceId: context.workspace.id,
         executionRunId: context.run.id,
         symbol: context.symbol,
@@ -4211,6 +4233,562 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           },
         });
         assert.equal(replay.status, "matched");
+      },
+    );
+    const exitRepository = () =>
+      new RuntimeRepository(prisma, undefined, undefined, undefined, {
+        ...defaultLiquidityExitPolicy,
+        orderTtlMs: 1000,
+      });
+    async function exitContext() {
+      const repo = exitRepository(),
+        context = await liquiditySetup(false, false, "0", repo);
+      const { input } = await liquidityFill(context);
+      assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
+      const position = await prisma.position.findFirstOrThrow({
+        where: { executionRunId: context.run.id },
+      });
+      return { ...context, repo, position };
+    }
+    async function exitEvent(
+      context: Awaited<ReturnType<typeof exitContext>>,
+      price = "97",
+      size = "0.15",
+      streamId = context.source.streamId,
+    ) {
+      const time = new Date(),
+        bid = new Prisma.Decimal(price).sub("0.05").toFixed(),
+        ask = new Prisma.Decimal(price).add("0.05").toFixed();
+      return prisma.marketPriceEvent.create({
+        data: {
+          eventKey: randomUUID(),
+          symbol: context.symbol,
+          price,
+          observedAt: time,
+          receivedAt: time,
+          streamId,
+          executionData: [
+            1,
+            "0.01",
+            "Buy",
+            false,
+            false,
+            [bid, size, ask, size, +time, +time, String(+time), String(+time)],
+          ],
+        },
+      });
+    }
+    async function latchExit(context: Awaited<ReturnType<typeof exitContext>>) {
+      const event = await exitEvent(context),
+        p = context.position;
+      const settlement = evaluateExecutionPriceExit(
+        {
+          ...context.entry.position,
+          exitPolicy: context.snapshot.exitPolicy!,
+          entryExecution: {
+            version: entryLiquidityVersion,
+            orderId: context.stored.id,
+            requestedQuantity: "1",
+          },
+          side: "long",
+          entryRegime: "neutral",
+          entrySession: "europe",
+          entryPrice: Number(p.entryPrice),
+          quantity: Number(p.quantity),
+          stopPrice: Number(p.stopPrice),
+          takePrice: Number(p.takePrice),
+          trailingPrice: null,
+          bestPrice: Number(p.bestPrice),
+          entryFee: Number(p.entryFee),
+          entrySlippage: Number(p.entrySlippage),
+        },
+        {
+          symbol: p.symbol,
+          price: Number(event.price),
+          observedAt: event.observedAt,
+          source: "LastPrice",
+        },
+        strategyConfigSchema.parse(fixture.config),
+      )!;
+      const request: PersistRuntimeQuoteInput = {
+        workspaceId: p.workspaceId,
+        deploymentId: context.deployment.id,
+        executionRunId: p.executionRunId,
+        strategyVersionId: p.strategyVersionId,
+        positionId: p.id,
+        expectedPositionVersion: p.runtimeVersion,
+        symbol: p.symbol,
+        quoteAt: event.observedAt,
+        quotePrice: event.price.toFixed(),
+        processedPrice: {
+          eventId: event.id,
+          streamId: event.streamId,
+          throughAt: event.observedAt,
+        },
+        processedEventCount: 1,
+        traceInputs: runtimeTraceInputs({
+          firstEventId: event.id,
+          policy: null,
+          signals: [],
+          recoveries: [],
+        }),
+        factors: { source: "durable-price-events" },
+        action: {
+          kind: "close",
+          settlement: {
+            ...settlement,
+            exitPrice: String(settlement.exitPrice),
+            grossPnl: String(settlement.grossPnl),
+            netPnl: String(settlement.netPnl),
+            fees: String(settlement.fees),
+            slippage: String(settlement.slippage),
+            closedAt: new Date(settlement.closedAt),
+          },
+        },
+      };
+      assert.equal((await context.repo.persistRealtimeQuote(request)).closed, false);
+      assert.equal((await context.repo.persistRealtimeQuote(request)).applied, false);
+      return request;
+    }
+    async function advanceExit(
+      context: Awaited<ReturnType<typeof exitContext>>,
+      repo = context.repo,
+    ) {
+      const p = await prisma.position.findUniqueOrThrow({ where: { id: context.position.id } });
+      return repo.advanceLiquidityPosition({
+        workspaceId: p.workspaceId,
+        executionRunId: p.executionRunId,
+        positionId: p.id,
+        expectedPositionVersion: p.runtimeVersion,
+      });
+    }
+    async function replayExit(context: Awaited<ReturnType<typeof exitContext>>, tamper = false) {
+      const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+        where: { positionId: context.position.id },
+        include: { records: { orderBy: { id: "asc" } }, position: { include: { trade: true } } },
+      });
+      const t = trace.position.trade;
+      if (tamper) {
+        const record = trace.records.find(
+          (r) =>
+            r.kind === "liquidity-step" &&
+            (r.payload as unknown as LiquidityExitStep).action.kind === "fill",
+        )!;
+        const payload = structuredClone(record.payload) as unknown as LiquidityExitStep;
+        if (payload.action.kind === "fill") payload.action.fill!.netPnl = "999";
+        record.payload = payload as unknown as Prisma.JsonValue;
+        record.payloadHash = hashTracePayload(payload);
+      }
+      return replayRuntimeTrace({
+        snapshot: trace.snapshot,
+        snapshotHash: trace.snapshotHash,
+        fullFromEntry: trace.fullFromEntry,
+        startEventId: trace.startEventId,
+        endEventId: trace.endEventId ?? trace.position.priceEventId!,
+        expectedEventCount: trace.eventCount,
+        records: trace.records,
+        loadEvents: (cursor, through) =>
+          new PriceArchiveRepository(prisma).after(context.symbol, cursor, through),
+        trade: t
+          ? {
+              exitReason: t.exitReason,
+              closedAt: t.closedAt,
+              averageExitPrice: t.averageExitPrice.toFixed(),
+              grossPnl: t.grossPnl.toFixed(),
+              netPnl: t.netPnl.toFixed(),
+              fees: t.fees.toFixed(),
+              slippage: t.slippage.toFixed(),
+            }
+          : null,
+      });
+    }
+    await t.test(
+      "liquidity stop persists intent, fills in parts, survives restart and books cash exactly once",
+      async () => {
+        const c = await exitContext();
+        await latchExit(c);
+        assert.equal(await prisma.trade.count({ where: { positionId: c.position.id } }), 0);
+        await advanceExit(c);
+        await exitEvent(c);
+        await new Promise((r) => setTimeout(r, 1100));
+        assert.deepEqual(await advanceExit(c), { applied: true, closed: false });
+        let p = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        assert.equal(p.quantity.toFixed(), "0.4");
+        assert.equal(p.remainingQuantity!.toFixed(), "0.25");
+        assert.equal(p.remainingEntryFee!.toFixed(), "0.015");
+        assert.equal(p.realizedPnl.toFixed(), "-0.4752255");
+        assert.equal(
+          await realizedCashPnl(prisma, { workspaceId: p.workspaceId, since: new Date(0) }),
+          "-0.4752255",
+        );
+        const eq = await c.repo.getDryRunEquity(
+          p.workspaceId,
+          c.deployment.exchangeAccountId,
+          "10000",
+        );
+        assert.equal(eq, 9998.7597745);
+        const risk = await new RuntimeRiskRepository(prisma).assess(
+          p.workspaceId,
+          c.deployment.exchangeAccountId,
+          strategyConfigSchema.parse(fixture.config),
+        );
+        assert.equal(risk.exposure, 24.25);
+        assert.ok(risk.dailyPnl < Number(p.realizedPnl));
+        assert.equal(
+          (
+            await snapshots.captureDryRunSnapshot({
+              workspaceId: p.workspaceId,
+              exchangeAccountId: c.deployment.exchangeAccountId,
+              initialBalance: "10000",
+            })
+          ).equity.toNumber(),
+          eq,
+        );
+        const ledger = await new DashboardRepository(prisma).getTradingLedger(p.workspaceId);
+        assert.equal(ledger.positions[0]!.quantity.toFixed(), "0.25");
+        assert.equal(ledger.positions[0]!.closing, true);
+        assert.equal(ledger.summary.netPnl, "-0.4752255");
+        assert.equal((await replayExit(c)).status, "matched");
+        await exitEvent(c, "102", "0.25");
+        await advanceExit(c, exitRepository());
+        await exitEvent(c, "102", "0.25");
+        const current = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        const input = {
+          workspaceId: p.workspaceId,
+          executionRunId: p.executionRunId,
+          positionId: p.id,
+          expectedPositionVersion: current.runtimeVersion,
+        };
+        const reads = Promise.all(
+          Array.from({ length: 5 }, () =>
+            new DashboardRepository(prisma).getTradingLedger(p.workspaceId),
+          ),
+        );
+        const outcomes = await Promise.all([
+          exitRepository().advanceLiquidityPosition(input),
+          exitRepository().advanceLiquidityPosition(input),
+        ]);
+        for (const view of await reads) {
+          assert.ok(["-0.4752255", "-0.018018"].includes(view.summary.netPnl));
+          assert.equal(view.positions.length + view.trades.length, 1);
+        }
+        assert.equal(outcomes.filter((r) => r.closed).length, 1);
+        p = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        assert.equal(p.status, "CLOSED");
+        assert.equal(p.remainingQuantity!.toFixed(), "0");
+        assert.equal(p.remainingEntryFee!.toFixed(), "0");
+        const trade = await prisma.trade.findUniqueOrThrow({ where: { positionId: p.id } });
+        assert.equal(trade.exitReason, "stop-loss");
+        assert.equal(trade.quantity.toFixed(), "0.4");
+        assert.equal(trade.grossPnl.toFixed(), "0.03");
+        assert.equal(trade.netPnl.toFixed(), "-0.018018");
+        assert.equal(trade.averageExitPrice.toFixed(), "100.075");
+        assert.equal(
+          await realizedCashPnl(prisma, { workspaceId: p.workspaceId, since: new Date(0) }),
+          trade.netPnl.toFixed(),
+        );
+        assert.equal(
+          await c.repo.getDryRunEquity(p.workspaceId, c.deployment.exchangeAccountId, "10000"),
+          9999.981982,
+        );
+        const fills = await prisma.fill.findMany({
+          where: { order: { positionId: p.id, side: "SELL" } },
+          orderBy: { filledAt: "asc" },
+        });
+        assert.equal(fills.length, 2);
+        for (const f of fills)
+          assert.equal(
+            verifyLiquidityExitFill(
+              f,
+              strategyConfigSchema.parse(fixture.config),
+              liquidityExitBasis(p),
+            ).status,
+            "matched",
+          );
+        await assert.rejects(
+          async () =>
+            verifyLiquidityExitFill(
+              { ...fills[0]!, realizedNetPnl: new Prisma.Decimal(0) },
+              strategyConfigSchema.parse(fixture.config),
+              liquidityExitBasis(p),
+            ),
+          /stored fill/,
+        );
+        const replay = await replayExit(c);
+        assert.deepEqual(replay.differences, []);
+        assert.deepEqual(replay.gaps, []);
+        assert.equal(replay.status, "matched");
+        await assert.rejects(replayExit(c, true), /accounting mismatch/);
+        const hot = await prisma.marketPriceEvent.findMany({
+          where: { symbol: c.symbol },
+          orderBy: { id: "asc" },
+        });
+        const { rawBytes, ...chunk } = await encodePriceArchive(hot.map(archivePriceEvent));
+        assert.ok(rawBytes > 0);
+        await prisma.$transaction(async (tx) => {
+          await tx.marketPriceArchiveChunk.create({ data: chunk });
+          await tx.marketPriceEvent.deleteMany({ where: { symbol: c.symbol } });
+        });
+        assert.equal(await prisma.marketPriceEvent.count({ where: { symbol: c.symbol } }), 0);
+        assert.equal((await replayExit(c)).status, "matched");
+        const first = fills[0]!.filledAt,
+          second = fills[1]!.filledAt;
+        assert.equal(
+          await realizedCashPnl(prisma, { workspaceId: p.workspaceId, since: first, until: first }),
+          "-0.4752255",
+        );
+        assert.equal(
+          await realizedCashPnl(prisma, {
+            workspaceId: p.workspaceId,
+            since: second,
+            until: second,
+          }),
+          "0.4572075",
+        );
+      },
+    );
+    await t.test(
+      "exit fill, IOC terminal state and remaining balance roll back together",
+      async () => {
+        const c = await exitContext();
+        await latchExit(c);
+        await advanceExit(c);
+        await exitEvent(c);
+        const before = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        const fn = `fail_exit_${randomUUID().replaceAll("-", "")}`;
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW."realizedNetPnl" IS NOT NULL THEN RAISE EXCEPTION 'exit test rollback'; END IF; RETURN NEW; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER ${fn} BEFORE INSERT ON "Fill" FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
+        );
+        try {
+          await assert.rejects(advanceExit(c), /exit test rollback/);
+        } finally {
+          await prisma.$executeRawUnsafe(`DROP TRIGGER ${fn} ON "Fill"`);
+          await prisma.$executeRawUnsafe(`DROP FUNCTION ${fn}()`);
+        }
+        const unchanged = await prisma.position.findUniqueOrThrow({ where: { id: before.id } });
+        assert.equal(unchanged.runtimeVersion, before.runtimeVersion);
+        assert.deepEqual(unchanged.exitState, before.exitState);
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: before.id, side: "SELL" } } }),
+          0,
+        );
+        assert.equal((await advanceExit(c)).applied, true);
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: before.id, side: "SELL" } } }),
+          1,
+        );
+      },
+    );
+    await t.test(
+      "manual exit is an idempotent closing request; stale book and TTL never fake a fill",
+      async () => {
+        const c = await exitContext(),
+          p = c.position;
+        const request = {
+          workspaceId: p.workspaceId,
+          positionId: p.id,
+          executionRunId: p.executionRunId,
+          actorId: "test",
+          requestId: randomUUID(),
+          idempotencyKey: randomUUID(),
+          reason: "test",
+        };
+        const result = await c.repo.requestManualLiquidityExit(request);
+        assert.equal(result.status, "closing");
+        assert.equal(result.tradeId, null);
+        assert.equal((await c.repo.requestManualLiquidityExit(request)).replayed, true);
+        await assert.rejects(
+          c.repo.closeManually({
+            ...request,
+            idempotencyKey: randomUUID(),
+            quoteObservedAt: new Date(),
+            maximumQuoteAgeMs: 1000,
+            settlement: {
+              exitPrice: "100",
+              grossPnl: "0",
+              netPnl: "0",
+              fees: "0",
+              slippage: "0",
+              exitReason: "manual",
+              closedAt: new Date(),
+            },
+          }),
+          /./,
+        );
+        await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: p.symbol,
+            price: "99",
+            observedAt: new Date(),
+            streamId: c.source.streamId,
+          },
+        });
+        await advanceExit(c);
+        let stored = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        assert.equal(
+          readLiquidityExitState(stored.exitState)!.waitingReason,
+          "EXIT_BOOK_UNAVAILABLE",
+        );
+        assert.equal(stored.unrealizedPnl.toFixed(), "-0.4");
+        assert.equal(remainingExitQuantity(readLiquidityExitState(stored.exitState)!), "0.4");
+        await exitEvent(c, "99", "0.4");
+        await advanceExit(c);
+        await new Promise((r) => setTimeout(r, 1100));
+        await advanceExit(c);
+        stored = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        assert.equal(readLiquidityExitState(stored.exitState)!.waitingReason, "EXIT_ORDER_EXPIRED");
+        assert.equal(await prisma.trade.count({ where: { positionId: p.id } }), 0);
+        assert.equal((await replayExit(c)).status, "matched");
+        await exitEvent(c, "99", "0.4");
+        await advanceExit(c);
+        await exitEvent(c, "99", "0.4");
+        assert.equal((await advanceExit(c)).closed, true);
+        assert.equal((await replayExit(c)).status, "matched");
+      },
+    );
+    await t.test(
+      "paused or revoked deployment keeps servicing an already latched liquidity exit",
+      async () => {
+        const c = await exitContext();
+        await latchExit(c);
+        await prisma.deployment.update({
+          where: { id: c.deployment.id },
+          data: { status: "PAUSED" },
+        });
+        await prisma.exchangeConnection.update({
+          where: { id: c.connection.id },
+          data: { status: "INVALID", revokedAt: new Date() },
+        });
+        await advanceExit(c);
+        await c.repo.cancelInactiveEntryOrders(c.workspace.id);
+        await exitEvent(c, "97", "0.4");
+        assert.equal((await advanceExit(c)).closed, true);
+      },
+    );
+    await t.test("exit retries cannot reuse already consumed book liquidity", async () => {
+      const c = await exitContext();
+      await latchExit(c);
+      await advanceExit(c);
+      const first = await exitEvent(c, "97", "0.3");
+      await advanceExit(c);
+      assert.equal(
+        (
+          await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } })
+        ).remainingQuantity!.toFixed(),
+        "0.1",
+      );
+      await advanceExit(c);
+      const next = await exitEvent(c, "97", "0.3");
+      const data = structuredClone(next.executionData) as unknown as StoredExecutionMarketData;
+      data[5]![6] = (first.executionData as unknown as StoredExecutionMarketData)[5]![6];
+      await prisma.marketPriceEvent.update({
+        where: { id: next.id },
+        data: { executionData: data },
+      });
+      await advanceExit(c);
+      let p = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+      assert.equal(p.remainingQuantity!.toFixed(), "0.1");
+      assert.equal(
+        readLiquidityExitState(p.exitState)!.waitingReason,
+        "EXIT_LIQUIDITY_UNAVAILABLE",
+      );
+      assert.equal((await replayExit(c)).status, "matched");
+      await advanceExit(c);
+      await exitEvent(c, "97", "0.3", "new-stream");
+      await advanceExit(c, exitRepository());
+      p = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+      assert.equal(readLiquidityExitState(p.exitState)!.waitingReason, "EXIT_ORDER_STREAM_CHANGED");
+      await advanceExit(c);
+      await exitEvent(c, "97", "0.3", "new-stream");
+      assert.equal((await advanceExit(c)).closed, true);
+      assert.equal((await replayExit(c)).status, "matched");
+    });
+    await t.test(
+      "manual liquidity close API returns closing without REST price, enforces CSRF and replays the receipt",
+      async () => {
+        const c = await exitContext(),
+          config = loadServerConfig({
+            DATABASE_URL: databaseUrl!,
+            NODE_ENV: "test",
+            LOG_LEVEL: "silent",
+          });
+        const app = await createApp({ config, prisma });
+        try {
+          const token = randomUUID(),
+            user = await prisma.user.create({
+              data: {
+                email: `${randomUUID()}@example.test`,
+                passwordHash: "unused",
+                displayName: "Test",
+              },
+            });
+          await prisma.workspaceMembership.create({
+            data: { workspaceId: c.workspace.id, userId: user.id, role: "OWNER" },
+          });
+          await prisma.session.create({
+            data: {
+              userId: user.id,
+              activeWorkspaceId: c.workspace.id,
+              tokenHash: createHash("sha256").update(token).digest("hex"),
+              expiresAt: new Date(Date.now() + 60000),
+            },
+          });
+          const headers = {
+            cookie: `cryptoanal_session=${token}`,
+            "x-csrf-token": createHmac("sha256", config.AUTH_SECRET)
+              .update(token)
+              .digest("base64url"),
+          };
+          const payload = {
+              idempotencyKey: randomUUID(),
+              reason: "Manual exit test",
+              expectedStatus: "open",
+            },
+            url = `/api/v1/positions/${c.position.id}/close`;
+          assert.equal(
+            (
+              await app.inject({
+                method: "POST",
+                url,
+                headers: { cookie: headers.cookie },
+                payload,
+              })
+            ).statusCode,
+            403,
+          );
+          const response = await app.inject({ method: "POST", url, headers, payload });
+          assert.equal(response.statusCode, 200, response.body);
+          assert.equal(response.json().data.status, "closing");
+          assert.equal(response.json().data.tradeId, null);
+          assert.equal(
+            (await app.inject({ method: "POST", url, headers, payload })).json().data.replayed,
+            true,
+          );
+          assert.equal(await prisma.trade.count({ where: { positionId: c.position.id } }), 0);
+        } finally {
+          await app.close();
+        }
+      },
+    );
+    await t.test(
+      "first entry fill crossing the stop latches liquidity exit without inventing a close",
+      async () => {
+        const repo = exitRepository(),
+          context = await liquiditySetup(true, true, "0", repo),
+          { input } = await liquidityFill(context, "97");
+        input.entryOrderType = "LIMIT";
+        assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
+        const position = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.equal(position.status, "OPEN");
+        assert.equal(readLiquidityExitState(position.exitState)!.intent.reason, "stop-loss");
+        assert.equal(await prisma.trade.count({ where: { positionId: position.id } }), 0);
+        assert.equal((await replayExit({ ...context, repo, position })).status, "matched");
       },
     );
     await t.test(

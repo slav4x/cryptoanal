@@ -1,3 +1,4 @@
+import { latchLiquidityExit, advanceLiquidityExit } from "./liquidity-exit-repository";
 import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-entry-wait";
 import { buildExitTriggerProof } from "./exit-trigger-proof";
 import { instrumentRulesSelect } from "./instrument-rules";
@@ -20,6 +21,7 @@ import {
 } from "../../application/src/execution-engine";
 import {
   defaultExecutionExitPolicy,
+  isLiquidityExitPolicy,
   readExecutionExitPolicy,
   type ExecutionExitPolicy,
 } from "../../application/src/execution-exit-policy";
@@ -276,6 +278,9 @@ export class RuntimeRepository {
           id: true,
           instrumentRules: true,
           exitPolicy: true,
+          remainingQuantity: true,
+          remainingEntryFee: true,
+          exitState: true,
           entryExecution: true,
           runtimeVersion: true,
           priceEventId: true,
@@ -350,14 +355,23 @@ export class RuntimeRepository {
             status: "OPEN",
             executionRun: { deployment: { exchangeAccountId } },
           },
-          select: { unrealizedPnl: true, entryFee: true },
+          select: {
+            unrealizedPnl: true,
+            entryFee: true,
+            remainingEntryFee: true,
+            realizedPnl: true,
+          },
         }),
       ],
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
     return positions
       .reduce(
-        (equity, position) => equity.add(position.unrealizedPnl).sub(position.entryFee),
+        (equity, position) =>
+          equity
+            .add(position.realizedPnl)
+            .add(position.unrealizedPnl)
+            .sub(position.remainingEntryFee ?? position.entryFee),
         new Prisma.Decimal(initialBalance).add(trades._sum.netPnl ?? 0),
       )
       .toNumber();
@@ -393,6 +407,9 @@ export class RuntimeRepository {
         profitProtection: true,
         instrumentRules: true,
         exitPolicy: true,
+        remainingQuantity: true,
+        remainingEntryFee: true,
+        exitState: true,
         entryExecution: true,
         id: true,
         runtimeVersion: true,
@@ -455,6 +472,9 @@ export class RuntimeRepository {
           profitProtection: true,
           instrumentRules: true,
           exitPolicy: true,
+          remainingQuantity: true,
+          remainingEntryFee: true,
+          exitState: true,
           entryExecution: true,
           symbol: true,
           priceEventId: true,
@@ -494,6 +514,15 @@ export class RuntimeRepository {
         return { applied: false, closed: false };
       }
 
+      if (isLiquidityExitPolicy(position.exitPolicy) && input.action.kind === "close") {
+        const full = await transaction.position.findUniqueOrThrow({ where: { id: position.id } });
+        return latchLiquidityExit(transaction, full, input, {
+          riskPolicy: this.riskPolicy,
+          marketEntryPolicy: this.marketEntryPolicy,
+          traceOptions: this.traceOptions,
+          origin: (input.factors as { source?: string } | null)?.source ?? "journal",
+        });
+      }
       let exitProof: ReturnType<typeof buildExitTriggerProof> | undefined;
       if (
         position.exitPolicy &&
@@ -1021,7 +1050,8 @@ export class RuntimeRepository {
       where: {
         workspaceId,
         status: "OPEN",
-        execution: { not: Prisma.DbNull },
+        positionId: null,
+        execution: { path: ["snapshot", "version"], equals: entryLiquidityVersion },
         executionRun: { environment: "DRY_RUN" },
         OR: [
           { expiresAt: { lte: new Date() } },
@@ -1112,6 +1142,40 @@ export class RuntimeRepository {
           });
         }
       });
+  }
+
+  public async advanceLiquidityPosition(input: {
+    workspaceId: string;
+    executionRunId: string;
+    positionId: string;
+    expectedPositionVersion: number;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await lockRuntimeRisk(tx, input.workspaceId);
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
+      );
+      const p = await tx.position.findFirst({
+        where: {
+          id: input.positionId,
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          runtimeVersion: input.expectedPositionVersion,
+          status: "OPEN",
+          environment: "DRY_RUN",
+        },
+        include: { executionRun: { include: { deployment: true } } },
+      });
+      if (
+        !p ||
+        !isLiquidityExitPolicy(p.exitPolicy) ||
+        !p.exitState ||
+        p.executionRun.status !== "RUNNING" ||
+        !["RUNNING", "PAUSED"].includes(p.executionRun.deployment.status)
+      )
+        return { applied: false, closed: false };
+      return advanceLiquidityExit(tx, p, p.executionRun.deployment.exchangeAccountId);
+    });
   }
 
   public async persistRealtimeEntry(input: PersistRealtimeEntryInput) {
@@ -1445,7 +1509,17 @@ export class RuntimeRepository {
           symbol: input.symbol,
           environment: "DRY_RUN",
           side: input.position.side,
-          ...(input.position.exitPolicy ? { exitPolicy: input.position.exitPolicy } : {}),
+          ...(input.position.exitPolicy
+            ? {
+                exitPolicy: input.position.exitPolicy,
+                ...(isLiquidityExitPolicy(input.position.exitPolicy)
+                  ? {
+                      remainingQuantity: input.position.quantity,
+                      remainingEntryFee: input.position.entryFee,
+                    }
+                  : {}),
+              }
+            : {}),
           ...(input.position.entryExecution
             ? { entryExecution: input.position.entryExecution }
             : {}),
@@ -1673,6 +1747,41 @@ export class RuntimeRepository {
             exitReason: immediate.exitReason,
             closedAt: new Date(immediate.closedAt),
           };
+          if (isLiquidityExitPolicy(p.exitPolicy)) {
+            const full = await transaction.position.findUniqueOrThrow({
+              where: { id: position.id },
+            });
+            await latchLiquidityExit(
+              transaction,
+              full,
+              {
+                workspaceId: input.workspaceId,
+                deploymentId: input.deploymentId,
+                executionRunId: input.executionRunId,
+                strategyVersionId: input.strategyVersionId,
+                positionId: position.id,
+                expectedPositionVersion: full.runtimeVersion,
+                symbol: input.symbol,
+                quotePrice: entryEvent.price.toFixed(),
+                quoteAt: entryEvent.observedAt,
+                processedPrice: {
+                  eventId: entryEvent.id,
+                  streamId: entryEvent.streamId,
+                  throughAt: entryEvent.observedAt,
+                },
+                factors: { source: "entry-fill-protection" },
+                action: { kind: "close", settlement },
+                processedEventCount: 0,
+              },
+              {
+                riskPolicy: this.riskPolicy,
+                marketEntryPolicy: this.marketEntryPolicy,
+                traceOptions: this.traceOptions,
+                origin: "entry",
+              },
+            );
+            return { applied: true, capacityReached: false };
+          }
           const trade = await persistClosedPosition(
             transaction,
             {
@@ -2293,6 +2402,7 @@ export class RuntimeRepository {
           select: {
             id: true,
             side: true,
+            exitPolicy: true,
             quantity: true,
             entryPrice: true,
             entryFee: true,
@@ -2301,6 +2411,7 @@ export class RuntimeRepository {
             openedAt: true,
           },
         });
+        if (isLiquidityExitPolicy(position.exitPolicy)) throw new RuntimeStateConflictError();
         const trade = await persistClosedPosition(
           transaction,
           {
@@ -2579,6 +2690,9 @@ export class RuntimeRepository {
       select: {
         instrumentRules: true,
         exitPolicy: true,
+        remainingQuantity: true,
+        remainingEntryFee: true,
+        exitState: true,
         entryExecution: true,
         id: true,
         symbol: true,
@@ -2623,6 +2737,124 @@ export class RuntimeRepository {
     });
     if (!receipt) return null;
     return parseManualCloseReceipt(receipt, positionId);
+  }
+
+  public async requestManualLiquidityExit(input: {
+    workspaceId: string;
+    positionId: string;
+    executionRunId: string;
+    actorId: string;
+    requestId: string;
+    idempotencyKey: string;
+    reason: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`command:${input.workspaceId}:${input.idempotencyKey}`}))`,
+      );
+      await lockRuntimeRisk(tx, input.workspaceId);
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
+      );
+      const receipt = await tx.commandReceipt.findUnique({
+        where: {
+          workspaceId_idempotencyKey: {
+            workspaceId: input.workspaceId,
+            idempotencyKey: input.idempotencyKey,
+          },
+        },
+      });
+      if (receipt) return parseManualCloseReceipt(receipt, input.positionId);
+      const p = await tx.position.findFirst({
+        where: { id: input.positionId, workspaceId: input.workspaceId },
+        include: { executionRun: { include: { deployment: true } } },
+      });
+      if (!p) throw new RuntimePositionNotFoundError();
+      if (p.status !== "OPEN") throw new RuntimePositionStatusConflictError();
+      if (
+        p.executionRunId !== input.executionRunId ||
+        p.environment !== "DRY_RUN" ||
+        !isLiquidityExitPolicy(p.exitPolicy) ||
+        p.executionRun.status !== "RUNNING" ||
+        !["RUNNING", "PAUSED"].includes(p.executionRun.deployment.status)
+      )
+        throw new RuntimeManualCloseNotAllowedError();
+      if (!p.exitState) {
+        const event = await tx.marketPriceEvent.findFirst({
+          where: { symbol: p.symbol },
+          orderBy: { id: "desc" },
+        });
+        if (!event) throw new RuntimeMarketPriceUnavailableError();
+        const at = new Date(Math.max(+event.observedAt, +(p.managedThroughAt ?? p.openedAt)));
+        await latchLiquidityExit(
+          tx,
+          p,
+          {
+            workspaceId: p.workspaceId,
+            deploymentId: p.executionRun.deploymentId,
+            executionRunId: p.executionRunId,
+            strategyVersionId: p.strategyVersionId,
+            positionId: p.id,
+            expectedPositionVersion: p.runtimeVersion,
+            symbol: p.symbol,
+            quotePrice: event.price.toFixed(),
+            quoteAt: at,
+            processedPrice: { eventId: event.id, streamId: event.streamId, throughAt: at },
+            processedEventCount: await tx.marketPriceEvent.count({
+              where: { symbol: p.symbol, id: { gt: p.priceEventId ?? 0n, lte: event.id } },
+            }),
+            factors: { source: "manual", reason: input.reason },
+            action: {
+              kind: "close",
+              settlement: {
+                exitPrice: "0",
+                grossPnl: "0",
+                netPnl: "0",
+                fees: "0",
+                slippage: "0",
+                exitReason: "manual",
+                closedAt: at,
+              },
+            },
+          },
+          {
+            riskPolicy: this.riskPolicy,
+            marketEntryPolicy: this.marketEntryPolicy,
+            traceOptions: this.traceOptions,
+            origin: "manual",
+          },
+        );
+      }
+      const result = {
+        positionId: p.id,
+        tradeId: null,
+        status: "closing" as const,
+        replayed: false,
+      };
+      await tx.commandReceipt.create({
+        data: {
+          workspaceId: input.workspaceId,
+          idempotencyKey: input.idempotencyKey,
+          command: "position.close",
+          resourceType: "position",
+          resourceId: p.id,
+          result,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          requestId: input.requestId,
+          action: "position.close.request",
+          resourceType: "position",
+          resourceId: p.id,
+          outcome: "COMPLETED",
+          metadata: { reason: input.reason },
+        },
+      });
+      return result;
+    });
   }
 
   public async closeManually(input: {
@@ -2671,6 +2903,7 @@ export class RuntimeRepository {
         where: { id: input.positionId },
         select: {
           id: true,
+          exitPolicy: true,
           environment: true,
           executionRunId: true,
           strategyVersionId: true,
@@ -2688,6 +2921,7 @@ export class RuntimeRepository {
         },
       });
       if (
+        isLiquidityExitPolicy(position.exitPolicy) ||
         position.executionRunId !== input.executionRunId ||
         position.environment !== "DRY_RUN" ||
         position.executionRun.status !== "RUNNING" ||
@@ -3029,6 +3263,8 @@ function parseManualCloseReceipt(
     throw new RuntimeIdempotencyConflictError();
   }
   const tradeId = getJsonString(receipt.result, "tradeId");
+  if (getJsonString(receipt.result, "status") === "closing")
+    return { positionId, tradeId: null, status: "closing" as const, replayed: true };
   if (!tradeId) throw new RuntimeIdempotencyConflictError();
   return { positionId, tradeId, replayed: true };
 }

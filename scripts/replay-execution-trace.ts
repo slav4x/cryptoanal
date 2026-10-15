@@ -4,7 +4,14 @@ import { replayRuntimeTrace } from "../apps/worker/src/runtime-trace-replay";
 import { Prisma } from "../packages/persistence/src/generated/prisma/client";
 import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
 import { verifyExitTriggerProof } from "../packages/persistence/src/exit-trigger-proof";
-import { executionExitPolicyVersion } from "../packages/application/src/execution-exit-policy";
+import { entryLiquidityVersion } from "../packages/application/src/execution-entry-liquidity";
+import { liquidityExitBasis } from "../packages/persistence/src/liquidity-exit-repository";
+import { verifyLiquidityExitFill } from "../packages/persistence/src/liquidity-exit-proof";
+import {
+  isLiquidityExitPolicy,
+  liquidityExitVersion,
+  executionExitPolicyVersion,
+} from "../packages/application/src/execution-exit-policy";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 
 const [workspaceId, positionId] = process.argv.slice(2).filter((argument) => argument !== "--");
@@ -57,7 +64,11 @@ try {
       : null,
   });
   const entryExecution = trace.position.orders
-    .filter((order) => order.execution !== null)
+    .filter(
+      (order) =>
+        (order.execution as { snapshot?: { version?: string } } | null)?.snapshot?.version ===
+        entryLiquidityVersion,
+    )
     .map((order) =>
       verifyEntryExecutionProof(
         order,
@@ -80,13 +91,28 @@ try {
     );
   if (
     trace.position.exitPolicy &&
+    !isLiquidityExitPolicy(trace.position.exitPolicy) &&
     trade &&
     ["stop-loss", "take-profit", "trailing-stop"].includes(trade.exitReason) &&
     exitExecution.length !== 1
   )
     throw new Error("Exit trigger receipt is missing or duplicated");
+  const liquidityExitExecution = trace.position.orders
+    .flatMap((order) => order.fills)
+    .filter(
+      (fill) =>
+        (fill.execution as { payload?: { version?: string } } | null)?.payload?.version ===
+        liquidityExitVersion,
+    )
+    .map((fill) =>
+      verifyLiquidityExitFill(
+        fill,
+        strategyConfigSchema.parse((trace.snapshot as { config: unknown }).config),
+        liquidityExitBasis(trace.position),
+      ),
+    );
   process.stdout.write(
-    `${JSON.stringify({ positionId, ...result, ...(entryExecution.length ? { entryExecution } : {}), ...(exitExecution.length ? { exitExecution } : {}) }, null, 2)}\n`,
+    `${JSON.stringify({ positionId, ...result, ...(entryExecution.length ? { entryExecution } : {}), ...(exitExecution.length ? { exitExecution } : {}), ...(liquidityExitExecution.length ? { liquidityExitExecution } : {}) }, null, 2)}\n`,
   );
   if (result.status !== "matched") process.exitCode = 1;
 } finally {

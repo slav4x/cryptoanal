@@ -135,12 +135,14 @@ test("expiry during processing stops before the next event; conflicts and risk r
   }
 });
 
-test("journal retention preserves the oldest pending entry cursor even without open positions", async () => {
+test("journal retention preserves pending entry and active exit submission cursors", async () => {
   const { PriceEventRepository } =
     await import("../packages/persistence/src/price-event-repository");
   let retained: unknown;
+  let exitOrders: Array<{ execution: { snapshot: { ioc: { submitEventId: string } } } }> = [];
   const transaction = {
     $queryRaw: async () => [{ owned: true }],
+    order: { findMany: async () => exitOrders },
     runtimeCursor: { aggregate: async () => ({ _min: { pendingPriceEventId: 5n } }) },
     position: { aggregate: async () => ({ _min: { priceEventId: null } }) },
     marketPriceEvent: {
@@ -156,4 +158,7 @@ test("journal retention preserves the oldest pending entry cursor even without o
   const before = new Date(now);
   await repository.prune(before);
   assert.deepEqual(retained, { observedAt: { lt: before }, id: { lt: 5n } });
+  exitOrders = [{ execution: { snapshot: { ioc: { submitEventId: "3" } } } }];
+  await repository.prune(before);
+  assert.deepEqual(retained, { observedAt: { lt: before }, id: { lt: 3n } });
 });

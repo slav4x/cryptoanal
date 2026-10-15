@@ -13,7 +13,8 @@ import {
   openExecutionPositionAtFill,
   readEntryExecutionMarker,
   readExecutionExitPolicy,
-  defaultExecutionExitPolicy,
+  defaultLiquidityExitPolicy,
+  isLiquidityExitPolicy,
   type ExecutionEntryOrder,
   readExecutionProfitProtectionState,
   buildDecisionMarketFrame,
@@ -163,7 +164,14 @@ const runtimeRepository = new RuntimeRepository(
     retentionDays: config.RUNTIME_TRACE_RETENTION_DAYS,
     profitProtectionPolicy: runtimeProfitProtectionPolicy,
   },
-  { ...defaultExecutionExitPolicy, triggerSource: config.RUNTIME_EXIT_TRIGGER_SOURCE },
+  {
+    ...defaultLiquidityExitPolicy,
+    triggerSource: config.RUNTIME_EXIT_TRIGGER_SOURCE,
+    maximumSpreadBps: config.RUNTIME_EXIT_MAX_SPREAD_BPS,
+    maximumSlippageBps: config.RUNTIME_EXIT_MAX_SLIPPAGE_BPS,
+    maximumBookAgeMs: config.RUNTIME_EXIT_BOOK_MAX_AGE_MS,
+    orderTtlMs: config.RUNTIME_EXIT_ORDER_TTL_MS,
+  },
 );
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
@@ -919,6 +927,15 @@ async function restoreRuntimeIndicators(
 async function processRealtimePosition(
   target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
 ) {
+  if (isLiquidityExitPolicy(target.exitPolicy) && target.exitState) {
+    await runtimeRepository.advanceLiquidityPosition({
+      workspaceId: target.workspaceId,
+      executionRunId: target.executionRunId,
+      positionId: target.id,
+      expectedPositionVersion: target.runtimeVersion,
+    });
+    return;
+  }
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
   const signalIntervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
   const events = await priceEventRepository.after(
@@ -2461,6 +2478,8 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  remainingQuantity?: { toNumber(): number } | null;
+  remainingEntryFee?: { toNumber(): number } | null;
   exitPolicy?: unknown;
   entryExecution?: unknown;
   instrumentRules?: unknown;
@@ -2492,12 +2511,12 @@ function deserializeExecutionPosition(position: {
     entrySession: deserializeTradingSession(position.entrySession),
     openedAt: position.openedAt,
     entryPrice: position.entryPrice.toNumber(),
-    quantity: position.quantity.toNumber(),
+    quantity: (position.remainingQuantity ?? position.quantity).toNumber(),
     stopPrice: position.stopPrice.toNumber(),
     takePrice: position.takePrice.toNumber(),
     trailingPrice: position.trailingPrice?.toNumber() ?? null,
     bestPrice: position.bestPrice.toNumber(),
-    entryFee: position.entryFee.toNumber(),
+    entryFee: (position.remainingEntryFee ?? position.entryFee).toNumber(),
     entrySlippage: position.entrySlippage.toNumber(),
   };
 }

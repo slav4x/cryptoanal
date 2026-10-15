@@ -21,6 +21,7 @@ export type ExperimentPosition = {
   entryPrice: number;
   markPrice: number | null;
   unrealizedPnl: number;
+  realizedPnl?: number;
   openedAt: Date;
 };
 
@@ -168,7 +169,8 @@ export function buildExperimentRanking(
       const losses = trades.filter((trade) => trade.netPnl < 0);
       const grossProfit = sum(wins.map((trade) => trade.netPnl));
       const grossLoss = Math.abs(sum(losses.map((trade) => trade.netPnl)));
-      const realizedPnl = sum(trades.map((trade) => trade.netPnl));
+      const closedPnl = sum(trades.map((trade) => trade.netPnl));
+      const realizedPnl = closedPnl + sum(positions.map((position) => position.realizedPnl ?? 0));
       const unrealizedPnl = sum(positions.map((position) => position.unrealizedPnl));
       const grossExposure = sum(positions.map(positionExposure));
       const longExposure = sum(
@@ -203,7 +205,7 @@ export function buildExperimentRanking(
         returnPercent: percent(realizedPnl + unrealizedPnl, initialCapital),
         costs: round(sum(trades.map((trade) => trade.fees + trade.slippage))),
         profitFactor: grossLoss > 0 ? round(grossProfit / grossLoss) : null,
-        expectancy: trades.length > 0 ? round(realizedPnl / trades.length) : 0,
+        expectancy: trades.length > 0 ? round(closedPnl / trades.length) : 0,
         maxDrawdownPercent: calculateMaxDrawdown(trades, initialCapital),
         averageHoldingMinutes:
           trades.length > 0

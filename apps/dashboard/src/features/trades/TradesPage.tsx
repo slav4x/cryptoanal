@@ -194,7 +194,7 @@ function PositionsTable({
           <div className="grid gap-3 border-b border-row-border bg-secondary/30 px-[18px] py-4 lg:grid-cols-[1fr_320px_auto] lg:items-end">
             <div>
               <p className="text-sm font-medium">
-                Закрыть {selectedPosition.symbol} по актуальной dry-run цене?
+                Запросить закрытие {selectedPosition.symbol} по доступной dry-run ликвидности?
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Будут созданы fill, trade, decision и audit event. Команда необратима.
@@ -314,6 +314,11 @@ function PositionsTable({
                     )}
                   >
                     {formatMoney(position.unrealizedPnl)}
+                    {Number(position.realizedPnl) !== 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        Зафиксировано {formatMoney(position.realizedPnl)}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {position.strategy.name} · v{position.strategy.version}
@@ -322,7 +327,7 @@ function PositionsTable({
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={position.environment !== "dry-run"}
+                      disabled={position.environment !== "dry-run" || position.closing}
                       title={
                         position.environment !== "dry-run"
                           ? "Ручное закрытие сейчас доступно только в dry-run"
@@ -335,7 +340,7 @@ function PositionsTable({
                         setSelectedPositionId(position.id);
                       }}
                     >
-                      Закрыть
+                      {position.closing ? "Закрывается" : "Закрыть"}
                     </Button>
                   </td>
                 </tr>

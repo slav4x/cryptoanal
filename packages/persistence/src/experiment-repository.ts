@@ -44,9 +44,11 @@ export class ExperimentRepository {
                 symbol: true,
                 side: true,
                 quantity: true,
+                remainingQuantity: true,
                 entryPrice: true,
                 markPrice: true,
                 unrealizedPnl: true,
+                realizedPnl: true,
                 openedAt: true,
               },
             },
@@ -71,10 +73,11 @@ export class ExperimentRepository {
       positions: deployment.executionRuns.flatMap((run) =>
         run.positions.map((position) => ({
           ...position,
-          quantity: position.quantity.toNumber(),
+          quantity: (position.remainingQuantity ?? position.quantity).toNumber(),
           entryPrice: position.entryPrice.toNumber(),
           markPrice: position.markPrice?.toNumber() ?? null,
           unrealizedPnl: position.unrealizedPnl.toNumber(),
+          realizedPnl: position.realizedPnl.toNumber(),
         })),
       ),
     }));

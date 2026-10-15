@@ -18,7 +18,7 @@ export class PriceArchiveRepository {
         const [lock] = await tx.$queryRaw<Array<{ owned: boolean }>>`
         SELECT pg_try_advisory_xact_lock(hashtext('market-price-archive')) AS owned`;
         if (!lock?.owned) return { count: 0, archived: 0, rawBytes: 0, compressedBytes: 0 };
-        const [positions, pending] = await Promise.all([
+        const [positions, pending, exitOrders] = await Promise.all([
           tx.position.aggregate({
             where: { status: "OPEN", environment: "DRY_RUN" },
             _min: { priceEventId: true },
@@ -27,10 +27,24 @@ export class PriceArchiveRepository {
             where: { pendingSignal: { not: Prisma.DbNull }, executionRun: { status: "RUNNING" } },
             _min: { pendingPriceEventId: true },
           }),
+          tx.order.findMany({
+            where: {
+              status: "OPEN",
+              execution: { path: ["snapshot", "version"], equals: "cryptoanal-exit-liquidity@1" },
+            },
+            select: { execution: true },
+          }),
         ]);
-        const cursors = [positions._min.priceEventId, pending._min.pendingPriceEventId].filter(
-          (id): id is bigint => id !== null,
-        );
+        const cursors = [
+          positions._min.priceEventId,
+          pending._min.pendingPriceEventId,
+          ...exitOrders.map((order) => {
+            const value = (order.execution as { snapshot: { ioc: { submitEventId: string } } })
+              .snapshot.ioc.submitEventId;
+            if (!/^[1-9]\d*$/.test(value)) throw new Error("Invalid active exit archive cursor");
+            return BigInt(value);
+          }),
+        ].filter((id): id is bigint => id !== null);
         const oldest = cursors.reduce<bigint | null>(
           (minimum, id) => (minimum === null || id < minimum ? id : minimum),
           null,

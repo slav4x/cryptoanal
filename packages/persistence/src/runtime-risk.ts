@@ -1,3 +1,4 @@
+import { realizedCashPnl } from "./realized-cash";
 import {
   executionStopRisk,
   remainingExecutionStopBudget,
@@ -109,19 +110,26 @@ export async function assessRuntimeRisk(
     include: { strategyVersion: { select: { config: true } } },
   });
   const realized = await tx.trade.aggregate({ where: scope, _sum: { netPnl: true } });
-  const strategyToday = await tx.trade.aggregate({
-    where: { ...scope, closedAt: { gte: calendar!.startsAt, lte: now } },
-    _sum: { netPnl: true },
-  });
-  const strategyDailyPnl = Number(strategyToday._sum.netPnl ?? 0);
+  const strategyDailyPnl = Number(
+    await realizedCashPnl(tx, {
+      environment: "DRY_RUN",
+      workspaceId: input.workspaceId,
+      exchangeAccountId: input.exchangeAccountId,
+      since: calendar!.startsAt,
+      until: now,
+    }),
+  );
   const strategyLossLimit =
     (input.policy.initialBalance * (configured?.maxDailyLossPercent ?? 0)) / 100;
-  const today = await tx.trade.aggregate({
-    where: { ...scope, closedAt: { gte: new Date(`${day}T00:00:00Z`), lte: now } },
-    _sum: { netPnl: true },
+  const today = await realizedCashPnl(tx, {
+    environment: "DRY_RUN",
+    workspaceId: input.workspaceId,
+    exchangeAccountId: input.exchangeAccountId,
+    since: new Date(`${day}T00:00:00Z`),
+    until: now,
   });
   let equity = input.policy.initialBalance + Number(realized._sum.netPnl ?? 0);
-  let dailyPnl = Number(today._sum.netPnl ?? 0);
+  let dailyPnl = Number(today);
   let exposure = 0;
   let floatingGains = 0;
   let reservedStopRisk = 0;
@@ -152,7 +160,8 @@ export async function assessRuntimeRisk(
       now.getTime() - quote.observedAt.getTime() <= input.policy.maxQuoteAgeMs &&
       quote.observedAt.getTime() <= now.getTime() + 1000;
     const price = Number(fresh ? quote.price : (position.markPrice ?? position.entryPrice));
-    const quantity = Number(position.quantity);
+    const quantity = Number(position.remainingQuantity ?? position.quantity);
+    const entryFee = Number(position.remainingEntryFee ?? position.entryFee);
     const pnl =
       (price - Number(position.entryPrice)) * quantity * (position.side === "BUY" ? 1 : -1);
     const costs = readRiskConfig(position.strategyVersion.config);
@@ -171,7 +180,7 @@ export async function assessRuntimeRisk(
           entryPrice: Number(position.entryPrice),
           stopPrice: protectiveStop,
           quantity,
-          entryFee: Number(position.entryFee),
+          entryFee,
           takerFeeBps: costs.takerFeeBps,
           slippageBps: costs.slippageBps,
           ...(position.instrumentRules
@@ -180,15 +189,11 @@ export async function assessRuntimeRisk(
         })
       : null;
     if (stopRisk === null) stopRiskValid = false;
-    else
-      reservedStopRisk += Math.max(
-        0,
-        stopRisk - (Math.max(0, -pnl) + Number(position.entryFee) + exitCosts),
-      );
+    else reservedStopRisk += Math.max(0, stopRisk - (Math.max(0, -pnl) + entryFee + exitCosts));
     floatingGains += Math.max(0, pnl);
-    equity += pnl - Number(position.entryFee) - exitCosts;
+    equity += Number(position.realizedPnl) + pnl - entryFee - exitCosts;
     // Unrealized winners cannot finance the daily loss budget of losing positions.
-    dailyPnl += Math.min(0, pnl) - Number(position.entryFee) - exitCosts;
+    dailyPnl += Math.min(0, pnl) - entryFee - exitCosts;
     exposure += price * quantity;
     if (
       !fresh ||

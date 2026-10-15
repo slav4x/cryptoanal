@@ -7,6 +7,12 @@ import {
 } from "./runtime-position-indicators";
 import {
   storeExecutionMarketData,
+  entryLiquidityVersion,
+  entryLiquidityBookFailure,
+  evaluateExecutionEntryOrder,
+  openExecutionPositionAtFill,
+  readEntryExecutionMarker,
+  type ExecutionEntryOrder,
   readExecutionProfitProtectionState,
   buildDecisionMarketFrame,
   createDecisionContextSnapshot,
@@ -26,7 +32,6 @@ import {
   fundingPolicy,
   metricProvenanceSchemaVersion,
   minimumExecutionCandleCount,
-  openExecutionPositionAtQuote,
   runValidationEngine,
   validationEngineVersion,
   type ExecutionStrategyConfig,
@@ -75,7 +80,6 @@ import {
   RuntimeRepository,
   runtimeEntryExpiresAt,
   runtimeEntryQuoteWaitReason,
-  runtimeEntryWaitSummary,
   runtimeMarketEntryFailure,
   RuntimeRiskRepository,
   PriceEventRepository,
@@ -142,6 +146,12 @@ const runtimeProfitProtectionPolicy = config.RUNTIME_PROFIT_PROTECTION_ENABLED_A
 const runtimeMarketEntryPolicy = {
   ttlMs: config.RUNTIME_MARKET_ENTRY_TTL_MS,
   maxDeviationBps: config.RUNTIME_MARKET_ENTRY_MAX_DEVIATION_BPS,
+};
+const runtimeEntryLiquidityPolicy = {
+  maximumSpreadBps: config.RUNTIME_ENTRY_MAX_SPREAD_BPS,
+  maximumSlippageBps: config.RUNTIME_ENTRY_MAX_SLIPPAGE_BPS,
+  maximumBookAgeMs: config.RUNTIME_ENTRY_BOOK_MAX_AGE_MS,
+  makerParticipationBps: config.RUNTIME_ENTRY_MAKER_PARTICIPATION_BPS,
 };
 const runtimeRepository = new RuntimeRepository(
   prisma,
@@ -725,6 +735,14 @@ async function runtimeQuoteLoop() {
     const workspaceIds = await listOperationalWorkspaceIds("runtime quote");
     for (const workspaceId of workspaceIds) {
       try {
+        try {
+          await runtimeRepository.cancelInactiveEntryOrders(workspaceId);
+        } catch (error) {
+          logger.error(
+            { err: error, workspaceId },
+            "Entry order cancellation failed; position management continues",
+          );
+        }
         const [positions, pendingEntries] = await Promise.all([
           runtimeRepository.listRealtimePositions(workspaceId),
           runtimeRepository.listRealtimePendingEntries(workspaceId),
@@ -1316,6 +1334,25 @@ async function processRealtimeEntry(
     target.pendingPriceEventId,
     pending.detectedAt,
   );
+  const rawPending = target.pendingSignal as Record<string, unknown>;
+  const storedOrder =
+    typeof rawPending.executionOrderId === "string"
+      ? await runtimeRepository.pendingExecutionOrder({
+          workspaceId: progress.workspaceId,
+          executionRunId: progress.executionRunId,
+          symbol: target.symbol,
+          orderId: rawPending.executionOrderId,
+        })
+      : null;
+  if (rawPending.executionOrderId && (!storedOrder || storedOrder.status !== "OPEN")) {
+    await runtimeRepository.advancePendingEntry({
+      ...progress,
+      throughEventId: target.pendingPriceEventId,
+      rejectionReason: "ENTRY_ORDER_UNAVAILABLE",
+    });
+    return;
+  }
+  const order: ExecutionEntryOrder | null = storedOrder?.snapshot ?? null;
   let entryRisk: Awaited<ReturnType<RuntimeRiskRepository["assess"]>> | null = null;
   const outcome = await replayPendingEntryEvents({
     events: events.map((event) => ({ ...event, price: Number(event.price) })),
@@ -1347,22 +1384,46 @@ async function processRealtimeEntry(
         target.executionRun.strategyVersion.config,
       ));
       if (risk.reason) return { status: "rejected", reason: risk.reason };
-      const candidate = openExecutionPositionAtQuote(
-        pending,
+      const liquidityPolicy = order?.policy ?? runtimeEntryLiquidityPolicy;
+      if (Date.now() - +quote.receivedAt > liquidityPolicy.maximumBookAgeMs)
+        return { status: "no-touch", reason: "ENTRY_BOOK_STALE" };
+      const bookFailure = entryLiquidityBookFailure(quote, liquidityPolicy);
+      if (!order && bookFailure)
+        return { status: "no-touch", reason: bookFailure as RuntimeEntryWaitReason };
+      const execution = order ? evaluateExecutionEntryOrder(order, quote) : null;
+      if (execution?.kind === "cancel") return { status: "rejected", reason: execution.reason };
+      if (execution?.kind === "wait")
+        return { status: "no-touch", reason: execution.reason as RuntimeEntryWaitReason };
+      const book = quote.executionData
+        ? (quote.executionData as ExecutionEntryOrder["placementData"])[5]
+        : null;
+      const fillPrice =
+        execution?.kind === "fill"
+          ? Number(execution.price)
+          : strategyConfig.entry.orderType === "limit"
+            ? executionLimitPrice(pending, strategyConfig, rules.rules!)
+            : Number(pending.side === "long" ? book![2] : book![0]);
+      const candidate = openExecutionPositionAtFill({
+        signal: pending,
         quote,
-        pending.entryRegime,
-        risk.equity,
-        Math.max(0, risk.equity) / strategyConfig.risk.maxOpenPositions,
-        strategyConfig,
-        rules.rules!,
-      );
-      if (!candidate) {
-        const limit = executionLimitPrice(pending, strategyConfig, rules.rules!);
-        return strategyConfig.entry.orderType === "limit" &&
-          (pending.side === "long" ? quote.price > limit : quote.price < limit)
-          ? { status: "no-touch" }
-          : { status: "rejected", reason: "ENTRY_SIZE_BELOW_INSTRUMENT_LIMITS" };
-      }
+        entryRegime: pending.entryRegime,
+        equity: risk.equity,
+        maximumNotional: Math.max(0, risk.equity) / strategyConfig.risk.maxOpenPositions,
+        config: strategyConfig,
+        instrumentRules: order?.instrumentRules ?? rules.rules!,
+        fillPrice,
+        ...(execution?.kind === "fill"
+          ? {
+              maximumQuantity: Number(execution.quantity),
+              entryExecution: {
+                version: entryLiquidityVersion,
+                orderId: storedOrder!.id,
+                requestedQuantity: order!.quantity,
+              },
+            }
+          : {}),
+      });
+      if (!candidate) return { status: "rejected", reason: "ENTRY_SIZE_BELOW_INSTRUMENT_LIMITS" };
       const position = limitExecutionPositionRisk(
         candidate,
         risk.equity,
@@ -1371,6 +1432,23 @@ async function processRealtimeEntry(
         risk.remainingStopRisk,
       );
       if (!position) return { status: "rejected", reason: "INVALID_ENTRY_SIZE" };
+      if (!order) {
+        const submitted = await runtimeRepository.submitRealtimeEntryOrder({
+          ...progress,
+          entryPriceEventId: quote.id,
+          position: serializePosition(position),
+          policy: runtimeEntryLiquidityPolicy,
+        });
+        if (submitted.applied) return { status: "conflict" };
+        if (
+          submitted.riskFailure?.startsWith("ENTRY_BOOK") ||
+          submitted.riskFailure === "ENTRY_SPREAD_LIMIT"
+        )
+          return { status: "no-touch", reason: submitted.riskFailure as RuntimeEntryWaitReason };
+        return submitted.riskFailure
+          ? { status: "rejected", reason: submitted.riskFailure }
+          : { status: "conflict" };
+      }
       if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession) {
         await runtimeRepository.advancePendingEntry({
           ...progress,
@@ -1385,6 +1463,7 @@ async function processRealtimeEntry(
       }
       const result = await runtimeRepository.persistRealtimeEntry({
         ...progress,
+        entryOrderId: storedOrder!.id,
         entryPriceEventId: quote.id,
         signalAvailableAt: pending.availableAt,
         deploymentId: target.executionRun.deployment.id,
@@ -1740,7 +1819,7 @@ async function processRuntimeTarget(
         target.exchangeConnection.revokedAt === null &&
         !riskAssessment.reason;
 
-      let positionAction: Parameters<RuntimeRepository["persistCycle"]>[0]["positionAction"] = {
+      const positionAction: Parameters<RuntimeRepository["persistCycle"]>[0]["positionAction"] = {
         kind: "none",
       };
       let decision: Parameters<RuntimeRepository["persistCycle"]>[0]["decision"] = {
@@ -1759,7 +1838,6 @@ async function processRuntimeTarget(
         ),
       };
       let pendingSignalAfter: RuntimePendingSignal | null = null;
-      let entryPriceEventId: bigint | undefined;
       let signalCandidate: PendingExecutionSignal | null = null;
 
       if (pendingSignal && !realtimePendingSignal) {
@@ -1802,192 +1880,48 @@ async function processRuntimeTarget(
               indicators.checkpoint!,
             ),
           };
-        } else if (signal) {
-          const quote = getFreshQuote(symbol);
-          const entryRules = captureInstrumentRules(state.instrument);
-          const signalExpiresAt = runtimeEntryExpiresAt(
+        } else if (signal && positionAction.kind === "none") {
+          const expiresAt = runtimeEntryExpiresAt(
             strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
             candleClosedAt,
             new Date(+candleClosedAt + intervalMs),
             runtimeMarketEntryPolicy,
           );
-          const marketFailure =
+          const failure =
             strategyConfig.entry.orderType === "market"
               ? runtimeMarketEntryFailure(
                   {
                     detectedAt: candleClosedAt,
-                    expiresAt: signalExpiresAt,
+                    expiresAt,
                     signalPrice: signal.signalPrice,
                     now: new Date(),
-                    ...(quote &&
-                    quote.receivedAt >= signalAvailableAt &&
-                    quote.observedAt >= candleClosedAt
-                      ? { quotePrice: quote.price, quoteAt: quote.observedAt }
-                      : {}),
                   },
                   runtimeMarketEntryPolicy,
                 )
               : null;
-          const candidate =
-            !marketFailure &&
-            !entryRules.reason &&
-            quote &&
-            quote.receivedAt >= signalAvailableAt &&
-            quote.observedAt >= candleClosedAt &&
-            quote.observedAt.getTime() < candleClosedAt.getTime() + intervalMs
-              ? openExecutionPositionAtQuote(
-                  signal,
-                  quote,
-                  getExecutionMarketRegime(candle),
-                  equity,
-                  Math.max(0, equity) / strategyConfig.risk.maxOpenPositions,
-                  strategyConfig,
-                  entryRules.rules!,
-                )
-              : null;
-          const opened =
-            candidate && !riskAssessment.reason
-              ? limitExecutionPositionRisk(
-                  candidate,
-                  riskAssessment.equity,
-                  Math.max(0, riskAssessment.maximumExposure - riskAssessment.exposure),
-                  strategyConfig,
-                  riskAssessment.remainingStopRisk,
-                )
-              : null;
-          const eligibleQuote =
-            quote &&
-            quote.receivedAt >= signalAvailableAt &&
-            quote.observedAt >= candleClosedAt &&
-            +quote.observedAt < +candleClosedAt + intervalMs;
-          const normalizedSizeRejected =
-            !candidate &&
-            !entryRules.reason &&
-            !marketFailure &&
-            eligibleQuote &&
-            (strategyConfig.entry.orderType === "market" ||
-              (signal.side === "long"
-                ? quote.price <= executionLimitPrice(signal, strategyConfig, entryRules.rules!)
-                : quote.price >= executionLimitPrice(signal, strategyConfig, entryRules.rules!)));
-          if (opened && positionAction.kind === "none") {
-            entryPriceEventId = quote!.id;
-            positionAction = {
-              kind: "open",
-              position: serializePosition(opened),
-              markPrice: String(quote!.price),
-              unrealizedPnl: String(executionUnrealizedPnl(opened, quote!.price)),
-              immediateSettlement: null,
-            };
-            decision = {
-              action: "OPEN",
-              reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
-              summary: `Открыта ${opened.side} позиция сразу после закрытия сигнальной свечи`,
-              factors: {
-                ...runtimeFactors(
-                  candle,
-                  dailyPnl,
-                  equity,
-                  signalAvailableAt,
-                  indicators.checkpoint!,
-                ),
-                executionQuote: realtimeQuoteFactors(quote!),
-              },
-            };
-          } else {
-            pendingSignalAfter = createRealtimePendingSignal(
-              signal,
-              candleClosedAt,
-              signalExpiresAt,
-              getExecutionMarketRegime(candle),
+          pendingSignalAfter = failure
+            ? null
+            : createRealtimePendingSignal(
+                signal,
+                candleClosedAt,
+                expiresAt,
+                getExecutionMarketRegime(candle),
+                signalAvailableAt,
+              );
+          decision = {
+            action: failure ? "SKIP" : "HOLD",
+            reasonCode: failure ?? "ENTRY_SIGNAL_PENDING",
+            summary: failure
+              ? `Сигнал отклонён: ${failure}`
+              : "Сигнал сохранён; ожидается подготовка заявки по свежему стакану",
+            factors: runtimeFactors(
+              candle,
+              dailyPnl,
+              equity,
               signalAvailableAt,
-            );
-            if (positionAction.kind === "none") {
-              const reason =
-                entryQuoteWaitReason(symbol) ??
-                (quote &&
-                (quote.receivedAt < signalAvailableAt || quote.observedAt < candleClosedAt)
-                  ? "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY"
-                  : strategyConfig.entry.orderType === "limit"
-                    ? "ENTRY_LIMIT_NOT_TOUCHED"
-                    : "ENTRY_SIGNAL_PENDING");
-              decision = {
-                action: "HOLD",
-                reasonCode: reason,
-                summary:
-                  reason === "ENTRY_SIGNAL_PENDING"
-                    ? `Зафиксирован ${signal.side} сигнал; ожидается событие цены`
-                    : runtimeEntryWaitSummary(reason),
-                factors: runtimeFactors(
-                  candle,
-                  dailyPnl,
-                  equity,
-                  signalAvailableAt,
-                  indicators.checkpoint!,
-                ),
-              };
-            }
-          }
-          if (candidate && !opened && positionAction.kind === "none") {
-            pendingSignalAfter = null;
-            decision = {
-              action: "SKIP",
-              reasonCode: "INVALID_ENTRY_SIZE",
-              summary: "Вход отклонён: размер позиции не укладывается в ограничения риска",
-              factors: runtimeFactors(
-                candle,
-                dailyPnl,
-                equity,
-                signalAvailableAt,
-                indicators.checkpoint!,
-              ),
-            };
-          }
-          if (normalizedSizeRejected && positionAction.kind === "none") {
-            pendingSignalAfter = null;
-            decision = {
-              action: "SKIP",
-              reasonCode: "ENTRY_SIZE_BELOW_INSTRUMENT_LIMITS",
-              summary:
-                "Вход отклонён: после округления размер или защитные уровни не соответствуют ограничениям инструмента",
-              factors: runtimeFactors(
-                candle,
-                dailyPnl,
-                equity,
-                signalAvailableAt,
-                indicators.checkpoint!,
-              ),
-            };
-          }
-          if (entryRules.reason && positionAction.kind === "none") {
-            pendingSignalAfter = null;
-            decision = {
-              action: "SKIP",
-              reasonCode: entryRules.reason,
-              summary: "Вход отклонён: отсутствуют актуальные ограничения инструмента",
-              factors: runtimeFactors(
-                candle,
-                dailyPnl,
-                equity,
-                signalAvailableAt,
-                indicators.checkpoint!,
-              ),
-            };
-          }
-          if (marketFailure && positionAction.kind === "none") {
-            pendingSignalAfter = null;
-            decision = {
-              action: "SKIP",
-              reasonCode: marketFailure,
-              summary: `Рыночный сигнал отклонён: ${marketFailure}`,
-              factors: runtimeFactors(
-                candle,
-                dailyPnl,
-                equity,
-                signalAvailableAt,
-                indicators.checkpoint!,
-              ),
-            };
-          }
+              indicators.checkpoint!,
+            ),
+          };
         }
       }
 
@@ -2089,7 +2023,6 @@ async function processRuntimeTarget(
         expectedDeploymentStatus,
         expectedPositionId: null,
         expectedPositionVersion: null,
-        ...(entryPriceEventId === undefined ? {} : { entryPriceEventId }),
         signalAvailableAt,
         ...(signalCandidate ? { entrySignalPrice: signalCandidate.signalPrice } : {}),
         pendingSignal: pendingSignalAfter,
@@ -2524,6 +2457,7 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  entryExecution?: unknown;
   instrumentRules?: unknown;
   symbol?: string;
   side: "BUY" | "SELL";
@@ -2540,6 +2474,9 @@ function deserializeExecutionPosition(position: {
   entrySlippage: { toNumber(): number };
 }): ExecutionPosition {
   return {
+    ...(position.entryExecution
+      ? { entryExecution: readEntryExecutionMarker(position.entryExecution)! }
+      : {}),
     ...(position.instrumentRules
       ? { instrumentRules: readExecutionInstrumentRules(position.instrumentRules)! }
       : {}),
@@ -2561,6 +2498,7 @@ function deserializeExecutionPosition(position: {
 
 function serializePosition(position: ExecutionPosition) {
   return {
+    ...(position.entryExecution ? { entryExecution: position.entryExecution } : {}),
     ...(position.instrumentRules ? { instrumentRules: position.instrumentRules } : {}),
     symbol: position.symbol,
     side: position.side === "long" ? ("BUY" as const) : ("SELL" as const),

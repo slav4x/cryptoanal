@@ -1,4 +1,5 @@
 import { executionStopRisk } from "./execution-risk";
+import type { EntryExecutionMarker } from "./execution-entry-liquidity";
 import {
   type ExecutionInstrumentRules,
   roundExecutionStep,
@@ -83,6 +84,7 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 };
 
 export type ExecutionPosition = {
+  entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
   side: "long" | "short";
@@ -698,6 +700,70 @@ export function openExecutionPositionAtQuote(
   });
 }
 
+export function openExecutionPositionAtFill(input: {
+  signal: PendingExecutionSignal;
+  quote: ExecutionQuote;
+  entryRegime: ExecutionMarketRegime;
+  equity: number;
+  maximumNotional: number;
+  config: ExecutionStrategyConfig;
+  instrumentRules: ExecutionInstrumentRules;
+  fillPrice: number;
+  maximumQuantity?: number;
+  entryExecution?: EntryExecutionMarker;
+}): ExecutionPosition | null {
+  const position = createExecutionPosition({
+    signal: input.signal,
+    symbol: input.quote.symbol,
+    referencePrice: input.quote.price,
+    entryPrice: input.fillPrice,
+    openedAt: input.quote.observedAt,
+    entryRegime: input.entryRegime,
+    entrySession: getExecutionTradingSession(input.quote.observedAt),
+    equity: input.equity,
+    maximumNotional: input.maximumNotional,
+    feeBps:
+      input.config.entry.orderType === "limit"
+        ? input.config.costs.makerFeeBps
+        : input.config.costs.takerFeeBps,
+    config: input.config,
+    instrumentRules: input.instrumentRules,
+    priceIsFill: true,
+    ...(input.entryExecution ? { entryExecution: input.entryExecution } : {}),
+  });
+  if (!position) return null;
+  const quantity = executionStepNumber(
+    roundExecutionStep(
+      Math.min(position.quantity, input.maximumQuantity ?? position.quantity),
+      input.instrumentRules.qtyStep,
+      "floor",
+    ),
+  );
+  if (quantity <= 0) return null;
+  const feeBps =
+    input.config.entry.orderType === "limit"
+      ? input.config.costs.makerFeeBps
+      : input.config.costs.takerFeeBps;
+  const filled = {
+    ...position,
+    quantity,
+    entryFee: Number(
+      executionDecimalProduct(
+        executionDecimalProduct(position.entryPrice, quantity),
+        executionDecimalProduct(feeBps, "0.0001"),
+      ),
+    ),
+    entrySlippage: Math.abs(position.entryPrice - input.quote.price) * quantity,
+  };
+  if (
+    executionInstrumentSizeFailure(filled, input.instrumentRules, !!input.entryExecution) ||
+    (input.entryExecution &&
+      compareExecutionDecimals(quantity, input.entryExecution.requestedQuantity) > 0)
+  )
+    return null;
+  return filled;
+}
+
 function createExecutionPosition({
   signal,
   symbol,
@@ -711,6 +777,8 @@ function createExecutionPosition({
   feeBps,
   config,
   instrumentRules,
+  priceIsFill = false,
+  entryExecution,
 }: {
   signal: PendingExecutionSignal;
   symbol: string;
@@ -724,29 +792,32 @@ function createExecutionPosition({
   feeBps: number;
   config: ExecutionStrategyConfig;
   instrumentRules?: ExecutionInstrumentRules;
+  priceIsFill?: boolean;
+  entryExecution?: EntryExecutionMarker;
 }): ExecutionPosition | null {
   const side = signal.side;
   if (instrumentRules) {
     if (instrumentRules.symbol !== symbol) return null;
-    entryPrice =
-      config.entry.orderType === "limit"
-        ? referencePrice
-        : executionStepNumber(
-            roundExecutionStep(
-              executionDecimalProduct(
-                referencePrice,
-                executionDecimalSum(
-                  1,
-                  executionDecimalProduct(
-                    config.costs.slippageBps,
-                    side === "long" ? 0.0001 : -0.0001,
+    if (!priceIsFill)
+      entryPrice =
+        config.entry.orderType === "limit"
+          ? referencePrice
+          : executionStepNumber(
+              roundExecutionStep(
+                executionDecimalProduct(
+                  referencePrice,
+                  executionDecimalSum(
+                    1,
+                    executionDecimalProduct(
+                      config.costs.slippageBps,
+                      side === "long" ? 0.0001 : -0.0001,
+                    ),
                   ),
                 ),
+                instrumentRules.tickSize,
+                side === "long" ? "ceil" : "floor",
               ),
-              instrumentRules.tickSize,
-              side === "long" ? "ceil" : "floor",
-            ),
-          );
+            );
   }
   const stopDistance = entryPrice * (config.exit.stopLossPercent / 100);
   const riskAmount = Math.max(0, equity) * (config.risk.riskPerTradePercent / 100);
@@ -790,6 +861,7 @@ function createExecutionPosition({
   }
   return limitExecutionPositionRisk(
     {
+      ...(entryExecution ? { entryExecution } : {}),
       ...(instrumentRules ? { instrumentRules } : {}),
       symbol,
       side,
@@ -882,7 +954,8 @@ export function limitExecutionPositionRisk(
     quantity = executionStepNumber(
       bounds.reduce((a, b) => (compareExecutionDecimals(a, b) <= 0 ? a : b)),
     );
-    if (executionInstrumentSizeFailure({ ...position, quantity }, rules)) return null;
+    if (executionInstrumentSizeFailure({ ...position, quantity }, rules, !!position.entryExecution))
+      return null;
   }
   const scale = quantity / position.quantity;
   return {

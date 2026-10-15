@@ -1,8 +1,16 @@
 import type { RuntimeEntryWaitReason } from "@cryptoanal/persistence";
 import type { RuntimePriceEvent } from "./runtime-price-processor";
 
+type PendingEntryOutcome =
+  | {
+      status: "filled" | "conflict" | "expired" | "pending";
+      throughEventId: bigint | null;
+      waitingReason?: RuntimeEntryWaitReason | undefined;
+    }
+  | { status: "rejected"; reason: string; throughEventId: bigint | null };
+
 export async function replayPendingEntryEvents(input: {
-  events: RuntimePriceEvent[];
+  events: Array<RuntimePriceEvent & { executionData?: unknown }>;
   cursor: bigint | null;
   streamId: string;
   detectedAt: Date;
@@ -11,13 +19,13 @@ export async function replayPendingEntryEvents(input: {
   maximumQuoteAgeMs: number;
   now: () => number;
   tryFill: (
-    event: RuntimePriceEvent,
+    event: RuntimePriceEvent & { executionData?: unknown },
   ) => Promise<
     | { status: "filled" | "conflict" }
     | { status: "no-touch"; reason?: RuntimeEntryWaitReason }
     | { status: "rejected"; reason: string }
   >;
-}) {
+}): Promise<PendingEntryOutcome> {
   let throughEventId = input.cursor;
   let waitingReason: RuntimeEntryWaitReason | undefined;
   for (const event of input.events) {

@@ -14,6 +14,8 @@ import {
   readExecutionInstrumentRules,
   executionInstrumentSizeFailure,
 } from "../packages/application/src/execution-instrument";
+import { readEntryExecutionMarker } from "../packages/application/src/execution-entry-liquidity";
+import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -36,6 +38,9 @@ try {
     try {
       const config = strategyConfigSchema.parse(stored.config);
       const position: ExecutionPosition = {
+        ...(stored.entryExecution
+          ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
+          : {}),
         ...(stored.instrumentRules
           ? { instrumentRules: readExecutionInstrumentRules(stored.instrumentRules)! }
           : {}),
@@ -55,7 +60,13 @@ try {
       };
       if (position.instrumentRules) {
         instrumentCompliance.checked++;
-        if (executionInstrumentSizeFailure(position, position.instrumentRules))
+        if (
+          executionInstrumentSizeFailure(
+            position,
+            position.instrumentRules,
+            !!position.entryExecution,
+          )
+        )
           instrumentCompliance.invalidInstrumentPositions++;
       } else instrumentCompliance.legacyOpenPositions++;
       const quote = {
@@ -94,7 +105,40 @@ try {
       openProtection.invalidOpenProtection++;
     }
   }
+  const entryExecution = {
+    checked: 0,
+    open: 0,
+    full: 0,
+    partial: 0,
+    cancelled: 0,
+    invalidEntryReceipts: 0,
+  };
+  for (const order of await rows(`SELECT o.*,v.config,coalesce(x.fills,'[]'::json) AS fills FROM "Order" o
+    JOIN "ExecutionRun" r ON r.id=o."executionRunId" JOIN "StrategyVersion" v ON v.id=r."strategyVersionId"
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('quantity',f.quantity::text,'price',f.price::text,'fee',f.fee::text,
+      'filledAt',f."filledAt",'execution',f.execution) ORDER BY f."filledAt") AS fills FROM "Fill" f WHERE f."orderId"=o.id) x ON true
+    WHERE o.execution IS NOT NULL`)) {
+    if (order.status === "OPEN") {
+      entryExecution.open++;
+      continue;
+    }
+    entryExecution.checked++;
+    try {
+      const proof = verifyEntryExecutionProof(order, strategyConfigSchema.parse(order.config));
+      entryExecution[proof.outcome]++;
+    } catch {
+      entryExecution.invalidEntryReceipts++;
+    }
+  }
+  const sourceUse = await one(`SELECT count(*)::int AS "invalidEntryLiquidityReuse" FROM (
+    SELECT d."exchangeAccountId", f.execution->'payload'->>'sourceKey',sum(f.quantity) AS consumed,
+      max((f.execution->'payload'->>'sourceCapacity')::numeric) AS capacity
+    FROM "Fill" f JOIN "Order" o ON o.id=f."orderId" JOIN "ExecutionRun" r ON r.id=o."executionRunId"
+    JOIN "Deployment" d ON d.id=r."deploymentId" WHERE f.execution IS NOT NULL
+    GROUP BY d."exchangeAccountId",f."workspaceId",f.execution->'payload'->>'sourceKey'
+    HAVING sum(f.quantity)>max((f.execution->'payload'->>'sourceCapacity')::numeric)) x`);
   const summary = {
+    entryExecution: { ...entryExecution, ...sourceUse },
     instrumentCompliance,
     openProtection,
     snapshot: await one('SELECT now() AS "observedAt", current_database() AS database'),
@@ -195,6 +239,7 @@ try {
     summary.decisions,
     summary.openProtection,
     summary.instrumentCompliance,
+    summary.entryExecution,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)

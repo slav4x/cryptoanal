@@ -1,5 +1,6 @@
 import {
   executionEngineVersion,
+  evaluateExecutionPriceExit,
   readExecutionProfitProtectionState,
   type ExecutionPosition,
   type ExecutionProfitProtectionPolicy,
@@ -7,6 +8,7 @@ import {
   type ExecutionCandle,
   type ExecutionSettlement,
   readExecutionInstrumentRules,
+  readEntryExecutionMarker,
 } from "@cryptoanal/application";
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
@@ -85,6 +87,10 @@ export async function replayRuntimeTrace(input: {
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
       !(
+        snapshot.executionEngineVersion === "cryptoanal-execution@0.5.0" &&
+        !snapshot.position.entryExecution
+      ) &&
+      !(
         snapshot.executionEngineVersion === "cryptoanal-execution@0.4.0" &&
         !snapshot.position.instrumentRules
       )) ||
@@ -107,6 +113,9 @@ export async function replayRuntimeTrace(input: {
     return result;
   };
   let position: ExecutionPosition = {
+    ...(stored.entryExecution
+      ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
+      : {}),
     ...(stored.instrumentRules
       ? { instrumentRules: readExecutionInstrumentRules(stored.instrumentRules)! }
       : {}),
@@ -145,6 +154,17 @@ export async function replayRuntimeTrace(input: {
   const initialEvent = await input.loadEvents(input.startEventId - 1n, input.startEventId);
   if (!initialEvent.some((event) => event.id === input.startEventId))
     gaps.push("Initial price event is missing");
+  const entryQuote = initialEvent.find((event) => event.id === input.startEventId);
+  if (position.entryExecution && entryQuote)
+    settlement = evaluateExecutionPriceExit(
+      position,
+      {
+        symbol: position.symbol,
+        price: Number(entryQuote.price),
+        observedAt: entryQuote.observedAt,
+      },
+      config,
+    );
   for (const record of input.records)
     if (hashTracePayload(record.payload) !== record.payloadHash)
       throw new Error("Trace record checksum mismatch");

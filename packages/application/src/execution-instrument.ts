@@ -189,6 +189,7 @@ export function executionInstrumentSizeFailure(
     trailingPrice: DecimalInput | null;
   },
   rules: ExecutionInstrumentRules,
+  partialFill = false,
 ): string | null {
   if (compareExecutionDecimals(position.quantity, 0) <= 0) return "ENTRY_SIZE_ROUNDED_TO_ZERO";
   if (
@@ -198,9 +199,10 @@ export function executionInstrumentSizeFailure(
     ) !== 0
   )
     return "INVALID_QUANTITY_STEP";
-  if (compareExecutionDecimals(position.quantity, rules.minOrderQty) < 0)
+  if (!partialFill && compareExecutionDecimals(position.quantity, rules.minOrderQty) < 0)
     return "ENTRY_BELOW_MIN_QUANTITY";
   if (
+    !partialFill &&
     compareExecutionDecimals(
       executionDecimalProduct(position.quantity, position.entryPrice),
       rules.minNotional,

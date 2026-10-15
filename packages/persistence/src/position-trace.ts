@@ -32,6 +32,7 @@ export function hashTracePayload(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 type SnapshotPosition = {
+  entryExecution?: unknown;
   instrumentRules?: unknown;
   symbol: string;
   side: "BUY" | "SELL";
@@ -97,6 +98,7 @@ export async function ensurePositionTrace(
     config: version.config,
     configHash: version.configHash,
     position: {
+      ...(input.position.entryExecution ? { entryExecution: input.position.entryExecution } : {}),
       ...(input.position.instrumentRules
         ? { instrumentRules: readExecutionInstrumentRules(input.position.instrumentRules)! }
         : {}),

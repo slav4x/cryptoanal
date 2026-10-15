@@ -1,4 +1,13 @@
 export type RuntimeEntryWaitReason =
+  | "ENTRY_BOOK_AFTER_SUBMISSION_REQUIRED"
+  | "ENTRY_BOOK_UNAVAILABLE"
+  | "ENTRY_BOOK_STALE"
+  | "ENTRY_BOOK_FROM_FUTURE"
+  | "ENTRY_SPREAD_LIMIT"
+  | "ENTRY_BEFORE_SUBMISSION"
+  | "ENTRY_MAKER_TRADE_THROUGH_REQUIRED"
+  | "ENTRY_SPECIAL_TRADE_EXCLUDED"
+  | "ENTRY_LIQUIDITY_UNAVAILABLE"
   | "INSTRUMENT_RULES_MISSING"
   | "INSTRUMENT_RULES_STALE"
   | "INSTRUMENT_RULES_INVALID"
@@ -33,6 +42,17 @@ export function runtimeEntryQuoteWaitReason(input: {
 
 export function runtimeEntryWaitSummary(reason: RuntimeEntryWaitReason): string {
   const messages: Record<RuntimeEntryWaitReason, string> = {
+    ENTRY_BOOK_AFTER_SUBMISSION_REQUIRED:
+      "Рыночная заявка ожидает наблюдения стакана после отправки",
+    ENTRY_BOOK_UNAVAILABLE: "Вход ожидает доступного стакана",
+    ENTRY_BOOK_STALE: "Вход ожидает свежего стакана",
+    ENTRY_BOOK_FROM_FUTURE: "Вход ожидает причинно связанного стакана",
+    ENTRY_SPREAD_LIMIT: "Вход ожидает допустимого спреда",
+    ENTRY_BEFORE_SUBMISSION: "Заявка ожидает нового события после отправки",
+    ENTRY_MAKER_TRADE_THROUGH_REQUIRED:
+      "PostOnly ожидает прохода цены сквозь лимит с подходящим объёмом",
+    ENTRY_SPECIAL_TRADE_EXCLUDED: "Block/RPI сделка не используется для моделирования maker fill",
+    ENTRY_LIQUIDITY_UNAVAILABLE: "Нет доступного объёма для моделирования fill",
     INSTRUMENT_RULES_MISSING: "Вход ожидает загрузки ограничений инструмента",
     INSTRUMENT_RULES_STALE: "Вход ожидает обновления ограничений инструмента",
     INSTRUMENT_RULES_INVALID: "Вход ожидает корректных ограничений инструмента",

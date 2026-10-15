@@ -14,7 +14,11 @@ import {
 } from "@cryptoanal/application";
 import type { RuntimeRecoveryEvidence } from "./runtime-recovery";
 
-export type RuntimePriceEvent = ExecutionQuote & { id: bigint; streamId: string; receivedAt: Date };
+export type RuntimePriceEvent = ExecutionQuote & {
+  id: bigint;
+  streamId: string;
+  receivedAt: Date;
+};
 export type RuntimeSignalEvent = {
   candle: EnrichedExecutionCandle;
   closedAt: Date;

@@ -2,6 +2,23 @@ import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-
 import { instrumentRulesSelect } from "./instrument-rules";
 import type { ExecutionInstrumentRules } from "../../application/src/execution-instrument";
 import {
+  entryLiquidityVersion,
+  entryLiquidityBookFailure,
+  entryPostOnlyCrosses,
+  evaluateExecutionEntryOrder,
+  readExecutionEntryOrder,
+  type ExecutionEntryOrder,
+  type ExecutionEntryLiquidityPolicy,
+  type EntryExecutionMarker,
+} from "../../application/src/execution-entry-liquidity";
+import {
+  executionLimitPrice,
+  evaluateExecutionPriceExit,
+  type ExecutionPosition,
+  type ExecutionStrategyConfig,
+} from "../../application/src/execution-engine";
+import { executionInstrumentSizeFailure } from "../../application/src/execution-instrument";
+import {
   defaultRuntimeMarketEntryPolicy,
   runtimeEntryExpiresAt,
   runtimeMarketEntryFailure,
@@ -31,6 +48,7 @@ import {
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
 export type RuntimeCyclePosition = {
+  entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
   side: "BUY" | "SELL";
@@ -148,6 +166,7 @@ export type PersistRuntimeQuoteInput = {
 };
 
 export type PersistRealtimeEntryInput = {
+  entryOrderId?: string;
   expectedPendingPriceEventId?: bigint | null;
   signalAvailableAt?: Date;
   entryPriceEventId: bigint;
@@ -248,6 +267,7 @@ export class RuntimeRepository {
         select: {
           id: true,
           instrumentRules: true,
+          entryExecution: true,
           runtimeVersion: true,
           priceEventId: true,
           priceStreamId: true,
@@ -363,6 +383,7 @@ export class RuntimeRepository {
         indicatorState: true,
         profitProtection: true,
         instrumentRules: true,
+        entryExecution: true,
         id: true,
         runtimeVersion: true,
         priceEventId: true,
@@ -423,6 +444,7 @@ export class RuntimeRepository {
           id: true,
           profitProtection: true,
           instrumentRules: true,
+          entryExecution: true,
           symbol: true,
           priceEventId: true,
           priceStreamId: true,
@@ -675,6 +697,346 @@ export class RuntimeRepository {
     });
   }
 
+  public async pendingExecutionOrder(input: {
+    workspaceId: string;
+    executionRunId: string;
+    symbol: string;
+    orderId: string;
+  }) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: input.orderId,
+        workspaceId: input.workspaceId,
+        executionRunId: input.executionRunId,
+        symbol: input.symbol,
+      },
+      select: { id: true, status: true, execution: true },
+    });
+    return order ? { ...order, snapshot: storedEntryOrderSnapshot(order.execution) } : null;
+  }
+
+  public async submitRealtimeEntryOrder(input: {
+    workspaceId: string;
+    executionRunId: string;
+    symbol: string;
+    expectedCandleAt: Date;
+    expectedPendingPriceEventId: bigint | null;
+    entryPriceEventId: bigint;
+    position: RuntimeCyclePosition;
+    policy: ExecutionEntryLiquidityPolicy;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await lockRuntimeRisk(tx, input.workspaceId);
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
+      );
+      const cursor = await tx.runtimeCursor.findUnique({
+        where: {
+          executionRunId_symbol: { executionRunId: input.executionRunId, symbol: input.symbol },
+        },
+        include: {
+          executionRun: {
+            include: {
+              strategyVersion: { select: { config: true } },
+              deployment: {
+                include: { exchangeConnection: { select: { status: true, revokedAt: true } } },
+              },
+            },
+          },
+        },
+      });
+      if (
+        !cursor ||
+        cursor.workspaceId !== input.workspaceId ||
+        +cursor.lastEvaluatedAt! !== +input.expectedCandleAt ||
+        cursor.pendingPriceEventId !== input.expectedPendingPriceEventId ||
+        !cursor.pendingSignal ||
+        (cursor.pendingPriceEventId !== null &&
+          input.entryPriceEventId <= cursor.pendingPriceEventId)
+      )
+        return { applied: false };
+      const pending = cursor.pendingSignal as Record<string, unknown>,
+        run = cursor.executionRun,
+        dep = run.deployment;
+      if (
+        pending.executionOrderId ||
+        pending.mode !== "realtime" ||
+        run.status !== "RUNNING" ||
+        dep.status !== "RUNNING" ||
+        dep.environment !== "DRY_RUN" ||
+        dep.exchangeConnection?.status !== "ACTIVE" ||
+        dep.exchangeConnection.revokedAt !== null
+      )
+        return { applied: false };
+      const strategy = run.strategyVersion.config as unknown as ExecutionStrategyConfig;
+      const event = await tx.marketPriceEvent.findUniqueOrThrow({
+        where: { id: input.entryPriceEventId },
+      });
+      const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0]!
+        .now;
+      const expiresAt = runtimeEntryExpiresAt(
+        strategy.entry.orderType === "market" ? "MARKET" : "LIMIT",
+        new Date(String(pending.detectedAt)),
+        new Date(String(pending.expiresAt)),
+        this.marketEntryPolicy,
+      );
+      if (
+        !Number.isFinite(+expiresAt) ||
+        +now >= +expiresAt ||
+        event.symbol !== input.symbol ||
+        pending.side !== (input.position.side === "BUY" ? "long" : "short") ||
+        event.observedAt < new Date(String(pending.detectedAt)) ||
+        event.receivedAt < new Date(String(pending.availableAt))
+      )
+        return { applied: false };
+      if (
+        await tx.position.count({
+          where: { executionRunId: run.id, symbol: input.symbol, status: "OPEN" },
+        })
+      )
+        return { applied: false };
+      const failure = await checkRuntimeEntry(tx, {
+        workspaceId: input.workspaceId,
+        exchangeAccountId: dep.exchangeAccountId,
+        strategyConfig: run.strategyVersion.config,
+        policy: this.riskPolicy,
+        eventId: event.id,
+        signalAvailableAt: new Date(String(pending.availableAt)),
+        position: input.position,
+      });
+      if (failure) return { applied: false, riskFailure: failure };
+      if (strategy.entry.orderType === "market") {
+        const marketFailure = runtimeMarketEntryFailure(
+          {
+            detectedAt: new Date(String(pending.detectedAt)),
+            expiresAt,
+            signalPrice: Number(pending.signalPrice),
+            now,
+            quotePrice: Number(event.price),
+            quoteAt: event.observedAt,
+          },
+          this.marketEntryPolicy,
+        );
+        if (marketFailure) return { applied: false, riskFailure: marketFailure };
+      }
+      const quote = { ...event, price: Number(event.price) };
+      const bookFailure = entryLiquidityBookFailure(quote, input.policy);
+      if (bookFailure) return { applied: false, riskFailure: bookFailure };
+      const data = event.executionData as unknown as ExecutionEntryOrder["placementData"];
+      const book = data[5]!;
+      if (
+        +now - book[4] > input.policy.maximumBookAgeMs ||
+        +now - book[5] > input.policy.maximumBookAgeMs
+      )
+        return { applied: false, riskFailure: "ENTRY_BOOK_STALE" };
+      const snapshot: ExecutionEntryOrder = {
+        version: entryLiquidityVersion,
+        symbol: input.symbol,
+        side: pending.side as "long" | "short",
+        timeInForce: strategy.entry.orderType === "market" ? "IOC" : "PostOnly",
+        quantity: input.position.quantity,
+        limitPrice:
+          strategy.entry.orderType === "limit"
+            ? String(
+                executionLimitPrice(
+                  {
+                    side: pending.side as "long" | "short",
+                    signalPrice: Number(pending.signalPrice),
+                  },
+                  strategy,
+                  input.position.instrumentRules,
+                ),
+              )
+            : null,
+        signalPrice: String(pending.signalPrice),
+        decisionPrice: event.price.toFixed(),
+        submitReferencePrice:
+          strategy.entry.orderType === "limit"
+            ? input.position.entryPrice
+            : input.position.side === "BUY"
+              ? book[2]
+              : book[0],
+        submittedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        submitEventId: String(event.id),
+        streamId: event.streamId,
+        instrumentRules: input.position.instrumentRules!,
+        policy: input.policy,
+        placementData: data,
+      };
+      readExecutionEntryOrder(snapshot);
+      const requested = { ...input.position, entryPrice: snapshot.submitReferencePrice };
+      if (executionInstrumentSizeFailure(requested, snapshot.instrumentRules))
+        return { applied: false, riskFailure: "INVALID_ENTRY_SIZE" };
+      const cancelled = entryPostOnlyCrosses(snapshot);
+      const order = await tx.order.create({
+        data: {
+          workspaceId: input.workspaceId,
+          executionRunId: run.id,
+          symbol: input.symbol,
+          clientOrderId: `runtime-liquidity:${run.id}:${input.symbol}:${input.expectedCandleAt.toISOString()}`,
+          side: input.position.side,
+          type: strategy.entry.orderType === "market" ? "MARKET" : "LIMIT",
+          status: cancelled ? "CANCELLED" : "OPEN",
+          quantity: snapshot.quantity,
+          expiresAt,
+          price: snapshot.limitPrice,
+          execution: {
+            snapshot,
+            hash: hashTracePayload(snapshot),
+            ...(cancelled
+              ? {
+                  terminal: {
+                    reason: "ENTRY_POST_ONLY_WOULD_TAKE",
+                    cancelledAt: now.toISOString(),
+                    cancelledQuantity: snapshot.quantity,
+                  },
+                }
+              : {}),
+          },
+        },
+      });
+      const reason = cancelled ? "ENTRY_POST_ONLY_WOULD_TAKE" : "ENTRY_ORDER_SUBMITTED";
+      const decision = await tx.decision.create({
+        data: {
+          workspaceId: input.workspaceId,
+          executionRunId: run.id,
+          strategyVersionId: run.strategyVersionId,
+          symbol: input.symbol,
+          action: cancelled ? "SKIP" : "HOLD",
+          reasonCode: reason,
+          summary: cancelled
+            ? "PostOnly заявка отменена: немедленно забрала бы ликвидность"
+            : "Заявка подготовлена; ожидается новое событие после отправки",
+          factors: withRuntimeSignal(
+            { orderId: order.id, entryExecution: snapshot },
+            runtimeSignalState({
+              executionRunId: run.id,
+              symbol: input.symbol,
+              candleAt: input.expectedCandleAt,
+              status: cancelled ? "REJECTED" : "PENDING",
+              observedAt: now,
+              reasonCode: reason,
+              pending: cursor.pendingSignal,
+            }),
+          ),
+          correlationId: `runtime-order:${order.id}:submitted`,
+          decidedAt: now,
+        },
+        select: { id: true },
+      });
+      await tx.runtimeCursor.update({
+        where: { executionRunId_symbol: { executionRunId: run.id, symbol: input.symbol } },
+        data: {
+          pendingPriceEventId: event.id,
+          pendingSignal: cancelled
+            ? Prisma.DbNull
+            : { ...(cursor.pendingSignal as Prisma.InputJsonObject), executionOrderId: order.id },
+          lastDecisionId: decision.id,
+        },
+      });
+      return { applied: true, orderId: order.id, cancelled };
+    });
+  }
+
+  public async cancelInactiveEntryOrders(workspaceId: string) {
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        workspaceId,
+        status: "OPEN",
+        execution: { not: Prisma.DbNull },
+        executionRun: { environment: "DRY_RUN" },
+        OR: [
+          { expiresAt: { lte: new Date() } },
+          { executionRun: { status: { not: "RUNNING" } } },
+          { executionRun: { deployment: { status: { not: "RUNNING" } } } },
+        ],
+      },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+      select: { id: true, executionRunId: true, symbol: true },
+    });
+    for (const candidate of candidates)
+      await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${candidate.executionRunId}`}))`,
+        );
+        const order = await tx.order.findFirst({
+          where: { id: candidate.id, status: "OPEN", positionId: null },
+          include: {
+            executionRun: {
+              select: {
+                status: true,
+                strategyVersionId: true,
+                deployment: { select: { status: true } },
+              },
+            },
+          },
+        });
+        if (!order) return;
+        const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0]!
+          .now;
+        const expired = order.expiresAt && order.expiresAt <= now;
+        if (
+          !expired &&
+          order.executionRun.status === "RUNNING" &&
+          order.executionRun.deployment.status === "RUNNING"
+        )
+          return;
+        const reason = expired ? "ENTRY_SIGNAL_EXPIRED" : "ENTRY_DEPLOYMENT_NOT_RUNNING";
+        await cancelPendingEntryOrder(
+          tx,
+          { executionOrderId: order.id },
+          workspaceId,
+          order.executionRunId,
+          reason,
+          now,
+        );
+        const cursor = await tx.runtimeCursor.findUnique({
+          where: {
+            executionRunId_symbol: { executionRunId: order.executionRunId, symbol: order.symbol },
+          },
+        });
+        if (
+          cursor?.pendingSignal &&
+          (cursor.pendingSignal as { executionOrderId?: unknown }).executionOrderId === order.id
+        ) {
+          const decision = await tx.decision.create({
+            data: {
+              workspaceId,
+              executionRunId: order.executionRunId,
+              strategyVersionId: order.executionRun.strategyVersionId,
+              symbol: order.symbol,
+              action: "SKIP",
+              reasonCode: reason,
+              summary: `Заявка отменена: ${reason}`,
+              factors: withRuntimeSignal(
+                { orderId: order.id },
+                runtimeSignalState({
+                  executionRunId: order.executionRunId,
+                  symbol: order.symbol,
+                  candleAt: cursor.lastEvaluatedAt!,
+                  status: expired ? "EXPIRED" : "REJECTED",
+                  observedAt: now,
+                  reasonCode: reason,
+                  pending: cursor.pendingSignal,
+                }),
+              ),
+              correlationId: `runtime-order:${order.id}:cancel`,
+              decidedAt: now,
+            },
+            select: { id: true },
+          });
+          await tx.runtimeCursor.update({
+            where: {
+              executionRunId_symbol: { executionRunId: order.executionRunId, symbol: order.symbol },
+            },
+            data: { pendingSignal: Prisma.DbNull, lastDecisionId: decision.id },
+          });
+        }
+      });
+  }
+
   public async persistRealtimeEntry(input: PersistRealtimeEntryInput) {
     return this.prisma.$transaction(async (transaction) => {
       await lockRuntimeRisk(transaction, input.workspaceId);
@@ -758,6 +1120,15 @@ export class RuntimeRepository {
           waitingReason: "INSTRUMENT_UNAVAILABLE" as const,
         };
       const pending = cursor.pendingSignal as Record<string, unknown>;
+      if (
+        !!input.position.entryExecution !== !!input.entryOrderId ||
+        (!!pending.executionOrderId && pending.executionOrderId !== input.entryOrderId)
+      )
+        return {
+          applied: false,
+          capacityReached: false,
+          riskFailure: "INVALID_ENTRY_EXECUTION_PROOF",
+        };
       const configuredOrderType = (
         executionRun.strategyVersion.config as { entry?: { orderType?: string } }
       ).entry?.orderType;
@@ -811,12 +1182,152 @@ export class RuntimeRepository {
           capacityReached: false,
           riskFailure: "ENTRY_QUOTE_BEFORE_SIGNAL_FINALITY",
         };
+      let entryProof: {
+        orderId: string;
+        snapshot: ExecutionEntryOrder;
+        result: Extract<ReturnType<typeof evaluateExecutionEntryOrder>, { kind: "fill" }>;
+        consumedQuantity: string;
+        publicConsumedQuantity: string;
+      } | null = null;
+      if (input.entryOrderId) {
+        const order = await transaction.order.findFirst({
+          where: {
+            id: input.entryOrderId,
+            workspaceId: input.workspaceId,
+            executionRunId: input.executionRunId,
+            symbol: input.symbol,
+            status: "OPEN",
+            positionId: null,
+          },
+        });
+        if (!order || pending.executionOrderId !== order.id)
+          return { applied: false, capacityReached: false, riskFailure: "ENTRY_ORDER_UNAVAILABLE" };
+        const snapshot = storedEntryOrderSnapshot(order.execution);
+        if (
+          +now >= Date.parse(snapshot.expiresAt) ||
+          +now - +entryEvent.receivedAt > snapshot.policy.maximumBookAgeMs
+        )
+          return {
+            applied: false,
+            capacityReached: false,
+            riskFailure: "ENTRY_ORDER_EXPIRED_OR_STALE",
+          };
+        const quote = { ...entryEvent, price: Number(entryEvent.price) };
+        const offered = evaluateExecutionEntryOrder(snapshot, quote);
+        if (offered.kind !== "fill")
+          return { applied: false, capacityReached: false, riskFailure: offered.reason };
+        const latest = await transaction.marketPriceEvent.findFirst({
+          where: { symbol: input.symbol },
+          orderBy: { id: "desc" },
+          select: { streamId: true },
+        });
+        if (latest?.streamId !== entryEvent.streamId)
+          return {
+            applied: false,
+            capacityReached: false,
+            riskFailure: "ENTRY_ORDER_STREAM_CHANGED",
+          };
+        const sources = await transaction.fill.findMany({
+          where: {
+            workspaceId: input.workspaceId,
+            order: {
+              executionRun: {
+                environment: "DRY_RUN",
+                deployment: { exchangeAccountId: deployment.exchangeAccountId },
+              },
+            },
+            execution: { path: ["payload", "sourceKey"], equals: offered.sourceKey },
+          },
+          select: { quantity: true },
+        });
+        const consumed = sources.reduce(
+          (sum, fill) => sum.add(fill.quantity),
+          new Prisma.Decimal(0),
+        );
+        let publicConsumed = new Prisma.Decimal(0);
+        if (snapshot.timeInForce === "IOC") {
+          const book = (
+            entryEvent.executionData as unknown as ExecutionEntryOrder["placementData"]
+          )[5]!;
+          const [history] = await transaction.$queryRaw<Array<{ quantity: string }>>(Prisma.sql`
+            SELECT coalesce(sum(("executionData"->>1)::numeric),0)::text AS quantity FROM "MarketPriceEvent"
+            WHERE symbol=${input.symbol} AND "streamId"=${entryEvent.streamId}
+            AND id>${BigInt(snapshot.submitEventId)} AND id<${entryEvent.id}
+            AND "observedAt">=${new Date(book[4])} AND "receivedAt"<=${entryEvent.receivedAt}
+            AND "executionData"->5->>6=${book[6]}
+            AND "executionData"->>2=${snapshot.side === "long" ? "Buy" : "Sell"}
+            AND coalesce("executionData"->>3,'false')<>'true' AND coalesce("executionData"->>4,'false')<>'true'
+            AND ${snapshot.side === "long" ? Prisma.sql`price>=${book[2]}::numeric` : Prisma.sql`price<=${book[0]}::numeric`}
+          `);
+          publicConsumed = new Prisma.Decimal(history!.quantity);
+        }
+        const result = evaluateExecutionEntryOrder(
+          snapshot,
+          quote,
+          consumed.add(publicConsumed).toFixed(),
+        );
+        const marker = input.position.entryExecution;
+        if (
+          result.kind !== "fill" ||
+          !marker ||
+          marker.version !== entryLiquidityVersion ||
+          marker.orderId !== order.id ||
+          marker.requestedQuantity !== snapshot.quantity ||
+          !order.quantity.eq(snapshot.quantity) ||
+          order.side !== input.position.side ||
+          order.type !== input.entryOrderType ||
+          (snapshot.timeInForce === "IOC") !== (input.entryOrderType === "MARKET") ||
+          !new Prisma.Decimal(input.position.quantity).gt(0) ||
+          new Prisma.Decimal(input.position.quantity).gt(
+            result.kind === "fill" ? result.quantity : 0,
+          ) ||
+          !new Prisma.Decimal(input.position.entryPrice).eq(
+            result.kind === "fill" ? result.price : 0,
+          ) ||
+          hashTracePayload(input.position.instrumentRules) !==
+            hashTracePayload(snapshot.instrumentRules) ||
+          +input.position.openedAt !== +entryEvent.observedAt ||
+          !entryEvent.price.eq(input.quotePrice)
+        )
+          return {
+            applied: false,
+            capacityReached: false,
+            riskFailure: result.kind === "fill" ? "INVALID_ENTRY_EXECUTION_PROOF" : result.reason,
+          };
+        const costs = (executionRun.strategyVersion.config as unknown as ExecutionStrategyConfig)
+          .costs;
+        const fee = new Prisma.Decimal(result.price)
+          .mul(input.position.quantity)
+          .mul(result.role === "maker" ? costs.makerFeeBps : costs.takerFeeBps)
+          .div(10000)
+          .toDecimalPlaces(18);
+        if (!fee.eq(new Prisma.Decimal(input.position.entryFee).toDecimalPlaces(18)))
+          return { applied: false, capacityReached: false, riskFailure: "INVALID_ENTRY_FILL_FEE" };
+        input.position = {
+          ...input.position,
+          entryFee: fee.toFixed(),
+          entrySlippage: new Prisma.Decimal(result.price)
+            .minus(entryEvent.price)
+            .abs()
+            .mul(input.position.quantity)
+            .toDecimalPlaces(18)
+            .toFixed(),
+        };
+        entryProof = {
+          orderId: order.id,
+          snapshot,
+          result,
+          consumedQuantity: consumed.toFixed(),
+          publicConsumedQuantity: publicConsumed.toFixed(),
+        };
+      }
       const riskFailure = await checkRuntimeEntry(transaction, {
         workspaceId: input.workspaceId,
         exchangeAccountId: deployment.exchangeAccountId,
         strategyConfig: executionRun.strategyVersion.config,
         policy: this.riskPolicy,
         eventId: input.entryPriceEventId,
+        ...(entryProof ? { partialFill: true } : {}),
         ...(input.signalAvailableAt ? { signalAvailableAt: input.signalAvailableAt } : {}),
         position: input.position,
       });
@@ -854,6 +1365,9 @@ export class RuntimeRepository {
           symbol: input.symbol,
           environment: "DRY_RUN",
           side: input.position.side,
+          ...(input.position.entryExecution
+            ? { entryExecution: input.position.entryExecution }
+            : {}),
           entryRegime: input.position.entryRegime,
           entrySession: input.position.entrySession,
           status: "OPEN",
@@ -874,19 +1388,83 @@ export class RuntimeRepository {
         },
         select: { id: true },
       });
-      await createFilledOrder(transaction, {
-        workspaceId: input.workspaceId,
-        executionRunId: input.executionRunId,
-        positionId: position.id,
-        symbol: input.symbol,
-        clientOrderId: `${correlationId}:entry`,
-        side: input.position.side,
-        type: input.entryOrderType,
-        quantity: input.position.quantity,
-        price: input.position.entryPrice,
-        fee: input.position.entryFee,
-        filledAt: input.position.openedAt,
-      });
+      if (entryProof) {
+        const cancelled = new Prisma.Decimal(entryProof.snapshot.quantity).minus(
+          input.position.quantity,
+        );
+        const terminal = {
+          reason: cancelled.gt(0) ? "ENTRY_REMAINDER_CANCELLED_AFTER_FILL" : "ENTRY_ORDER_FILLED",
+          filledQuantity: input.position.quantity,
+          cancelledQuantity: cancelled.toFixed(),
+          filledAt: fillAt.toISOString(),
+          fillEventId: String(entryEvent.id),
+        };
+        await transaction.order.update({
+          where: { id: entryProof.orderId },
+          data: {
+            positionId: position.id,
+            status: cancelled.gt(0) ? "CANCELLED" : "FILLED",
+            execution: {
+              snapshot: entryProof.snapshot,
+              hash: hashTracePayload(entryProof.snapshot),
+              terminal,
+            },
+          },
+        });
+        const payload = {
+          version: entryLiquidityVersion,
+          source: "dry-run-public-liquidity-model",
+          role: entryProof.result.role,
+          sourceKey: entryProof.result.sourceKey,
+          sourceCapacity: entryProof.result.sourceCapacity,
+          consumedQuantity: entryProof.consumedQuantity,
+          publicConsumedQuantity: entryProof.publicConsumedQuantity,
+          orderId: entryProof.orderId,
+          event: {
+            id: String(entryEvent.id),
+            symbol: entryEvent.symbol,
+            price: entryEvent.price.toFixed(),
+            streamId: entryEvent.streamId,
+            observedAt: entryEvent.observedAt.toISOString(),
+            receivedAt: entryEvent.receivedAt.toISOString(),
+            executionData: entryEvent.executionData,
+          },
+          signalPrice: entryProof.snapshot.signalPrice,
+          decisionPrice: entryProof.snapshot.decisionPrice,
+          submitReferencePrice: entryProof.snapshot.submitReferencePrice,
+          decisionToFillBps: new Prisma.Decimal(input.position.entryPrice)
+            .minus(entryProof.snapshot.decisionPrice)
+            .mul(input.position.side === "BUY" ? 10000 : -10000)
+            .div(entryProof.snapshot.decisionPrice)
+            .toDecimalPlaces(18)
+            .toFixed(),
+        };
+        await transaction.fill.create({
+          data: {
+            workspaceId: input.workspaceId,
+            orderId: entryProof.orderId,
+            quantity: input.position.quantity,
+            price: input.position.entryPrice,
+            fee: input.position.entryFee,
+            feeAsset: "USDT",
+            filledAt: input.position.openedAt,
+            execution: { payload, hash: hashTracePayload(payload) },
+          },
+        });
+      } else
+        await createFilledOrder(transaction, {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          positionId: position.id,
+          symbol: input.symbol,
+          clientOrderId: `${correlationId}:entry`,
+          side: input.position.side,
+          type: input.entryOrderType,
+          quantity: input.position.quantity,
+          price: input.position.entryPrice,
+          fee: input.position.entryFee,
+          filledAt: input.position.openedAt,
+        });
       await ensurePositionTrace(transaction, {
         positionId: position.id,
         workspaceId: input.workspaceId,
@@ -904,6 +1482,26 @@ export class RuntimeRepository {
         marketEntryPolicy: this.marketEntryPolicy,
         options: this.traceOptions,
       });
+      const entryFactors: Prisma.InputJsonValue = entryProof
+        ? {
+            ...(input.factors && typeof input.factors === "object" && !Array.isArray(input.factors)
+              ? input.factors
+              : { details: input.factors }),
+            entryExecution: {
+              model: entryLiquidityVersion,
+              orderId: entryProof.orderId,
+              role: entryProof.result.role,
+              requestedQuantity: entryProof.snapshot.quantity,
+              filledQuantity: input.position.quantity,
+              cancelledQuantity: new Prisma.Decimal(entryProof.snapshot.quantity)
+                .minus(input.position.quantity)
+                .toFixed(),
+              fillPrice: input.position.entryPrice,
+              decisionPrice: entryProof.snapshot.decisionPrice,
+              submittedAt: entryProof.snapshot.submittedAt,
+            },
+          }
+        : input.factors;
       const decision = await transaction.decision.create({
         data: {
           workspaceId: input.workspaceId,
@@ -913,18 +1511,20 @@ export class RuntimeRepository {
           symbol: input.symbol,
           action: "OPEN",
           reasonCode: "ENTRY_SIGNAL_FILLED_REALTIME",
-          summary: `Сигнал исполнен по realtime quote: ${input.position.side === "BUY" ? "long" : "short"}`,
+          summary: entryProof
+            ? `Исполнено ${input.position.quantity} из ${entryProof.snapshot.quantity}; неисполненный остаток отменён`
+            : `Сигнал исполнен по realtime quote: ${input.position.side === "BUY" ? "long" : "short"}`,
           factors: withRuntimeSignal(
             input.entryOrderType === "MARKET"
               ? {
-                  ...(input.factors &&
-                  typeof input.factors === "object" &&
-                  !Array.isArray(input.factors)
-                    ? (input.factors as Prisma.InputJsonObject)
-                    : { details: input.factors }),
+                  ...(entryFactors &&
+                  typeof entryFactors === "object" &&
+                  !Array.isArray(entryFactors)
+                    ? entryFactors
+                    : { details: entryFactors }),
                   marketEntryPolicy: this.marketEntryPolicy,
                 }
-              : input.factors,
+              : entryFactors,
             runtimeSignalState({
               executionRunId: input.executionRunId,
               symbol: input.symbol,
@@ -954,6 +1554,73 @@ export class RuntimeRepository {
           lastDecisionId: decision.id,
         },
       });
+      if (entryProof) {
+        const p = input.position;
+        const executionPosition: ExecutionPosition = {
+          ...p,
+          side: p.side === "BUY" ? "long" : "short",
+          entryRegime: p.entryRegime.toLowerCase() as ExecutionPosition["entryRegime"],
+          entrySession: p.entrySession
+            .toLowerCase()
+            .replaceAll("_", "-") as ExecutionPosition["entrySession"],
+          entryPrice: Number(p.entryPrice),
+          quantity: Number(p.quantity),
+          stopPrice: Number(p.stopPrice),
+          takePrice: Number(p.takePrice),
+          trailingPrice: p.trailingPrice === null ? null : Number(p.trailingPrice),
+          bestPrice: Number(p.bestPrice),
+          entryFee: Number(p.entryFee),
+          entrySlippage: Number(p.entrySlippage),
+        };
+        const immediate = evaluateExecutionPriceExit(
+          executionPosition,
+          {
+            symbol: input.symbol,
+            price: Number(entryEvent.price),
+            observedAt: entryEvent.observedAt,
+          },
+          executionRun.strategyVersion.config as unknown as ExecutionStrategyConfig,
+        );
+        if (immediate) {
+          const settlement = {
+            exitPrice: String(immediate.exitPrice),
+            grossPnl: String(immediate.grossPnl),
+            netPnl: String(immediate.netPnl),
+            fees: String(immediate.fees),
+            slippage: String(immediate.slippage),
+            exitReason: immediate.exitReason,
+            closedAt: new Date(immediate.closedAt),
+          };
+          const trade = await persistClosedPosition(
+            transaction,
+            {
+              ...p,
+              workspaceId: input.workspaceId,
+              executionRunId: input.executionRunId,
+              strategyVersionId: input.strategyVersionId,
+              positionId: position.id,
+              correlationId,
+            },
+            settlement,
+          );
+          await transaction.decision.create({
+            data: {
+              workspaceId: input.workspaceId,
+              executionRunId: input.executionRunId,
+              strategyVersionId: input.strategyVersionId,
+              positionId: position.id,
+              tradeId: trade.id,
+              symbol: input.symbol,
+              action: "CLOSE",
+              reasonCode: immediate.exitReason,
+              summary: "Защита сработала на событии частичного/полного входа",
+              factors: { source: "entry-fill-protection", entryEventId: String(entryEvent.id) },
+              correlationId: `${correlationId}:immediate-exit`,
+              decidedAt: fillAt,
+            },
+          });
+        }
+      }
       return { applied: true, capacityReached: false };
     });
   }
@@ -1058,6 +1725,14 @@ export class RuntimeRepository {
       const waitingReason = gateReason ?? input.waitingReason;
       let decisionId: string | undefined;
       if (reason) {
+        await cancelPendingEntryOrder(
+          tx,
+          cursor.pendingSignal,
+          input.workspaceId,
+          run.id,
+          reason,
+          now,
+        );
         const decision = await tx.decision.create({
           data: {
             workspaceId: input.workspaceId,
@@ -1621,6 +2296,14 @@ export class RuntimeRepository {
           : +now >= +expiresAt
             ? "ENTRY_SIGNAL_EXPIRED"
             : "ENTRY_SIGNAL_SUPERSEDED";
+        await cancelPendingEntryOrder(
+          transaction,
+          previousPending,
+          input.workspaceId,
+          input.executionRunId,
+          reason,
+          now,
+        );
         const previousDecision = cursor.lastDecisionId
           ? await transaction.decision.findUnique({
               where: { id: cursor.lastDecisionId },
@@ -1805,6 +2488,7 @@ export class RuntimeRepository {
       where: { id: positionId, workspaceId },
       select: {
         instrumentRules: true,
+        entryExecution: true,
         id: true,
         symbol: true,
         side: true,
@@ -2057,6 +2741,49 @@ async function clearRecoveredCursor(
       lastFailureCode: "RUNTIME_RECOVERY_REQUIRED",
     },
     data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
+  });
+}
+
+function storedEntryOrderSnapshot(value: unknown): ExecutionEntryOrder {
+  const stored = value as { snapshot?: unknown; hash?: unknown };
+  if (!stored?.snapshot || stored.hash !== hashTracePayload(stored.snapshot))
+    throw new Error("Entry order snapshot checksum mismatch");
+  return readExecutionEntryOrder(stored.snapshot);
+}
+
+async function cancelPendingEntryOrder(
+  tx: Prisma.TransactionClient,
+  pending: unknown,
+  workspaceId: string,
+  executionRunId: string,
+  reason: string,
+  now: Date,
+) {
+  const id =
+    pending && typeof pending === "object" && !Array.isArray(pending)
+      ? (pending as { executionOrderId?: unknown }).executionOrderId
+      : null;
+  if (typeof id !== "string") return;
+  const order = await tx.order.findFirst({
+    where: { id, workspaceId, executionRunId, status: "OPEN", positionId: null },
+  });
+  if (!order) return;
+  const snapshot = storedEntryOrderSnapshot(order.execution);
+  await tx.order.update({
+    where: { id },
+    data: {
+      status: "CANCELLED",
+      execution: {
+        snapshot,
+        hash: hashTracePayload(snapshot),
+        terminal: {
+          reason,
+          cancelledAt: now.toISOString(),
+          cancelledQuantity: snapshot.quantity,
+          filledQuantity: "0",
+        },
+      },
+    },
   });
 }
 

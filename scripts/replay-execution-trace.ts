@@ -2,6 +2,8 @@ import "dotenv/config";
 import { createPrismaClient, PriceArchiveRepository } from "../packages/persistence/src/index";
 import { replayRuntimeTrace } from "../apps/worker/src/runtime-trace-replay";
 import { Prisma } from "../packages/persistence/src/generated/prisma/client";
+import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
+import { strategyConfigSchema } from "../packages/contracts/src/index";
 
 const [workspaceId, positionId] = process.argv.slice(2).filter((argument) => argument !== "--");
 if (!workspaceId || !positionId || !process.env.DATABASE_URL)
@@ -16,7 +18,12 @@ try {
         where: { positionId, workspaceId },
         include: {
           records: { orderBy: { id: "asc" } },
-          position: { include: { trade: true } },
+          position: {
+            include: {
+              trade: true,
+              orders: { where: { execution: { not: Prisma.DbNull } }, include: { fills: true } },
+            },
+          },
         },
       }),
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
@@ -47,7 +54,15 @@ try {
         }
       : null,
   });
-  process.stdout.write(`${JSON.stringify({ positionId, ...result }, null, 2)}\n`);
+  const entryExecution = trace.position.orders.map((order) =>
+    verifyEntryExecutionProof(
+      order,
+      strategyConfigSchema.parse((trace.snapshot as { config: unknown }).config),
+    ),
+  );
+  process.stdout.write(
+    `${JSON.stringify({ positionId, ...result, ...(entryExecution.length ? { entryExecution } : {}) }, null, 2)}\n`,
+  );
   if (result.status !== "matched") process.exitCode = 1;
 } finally {
   await prisma.$disconnect();

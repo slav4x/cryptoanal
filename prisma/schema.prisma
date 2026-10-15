@@ -662,6 +662,7 @@ model ExecutionRun {
 }
 
 model Position {
+  entryExecution   Json?
   instrumentRules  Json?
   profitProtection Json?
   indicatorState   Json?
@@ -709,6 +710,8 @@ model Position {
 }
 
 model Order {
+  execution       Json?
+  expiresAt       DateTime?        @db.Timestamptz(3)
   id              String           @id @default(uuid())
   workspaceId     String
   executionRunId  String
@@ -730,10 +733,12 @@ model Order {
   fills           Fill[]
 
   @@unique([workspaceId, clientOrderId])
+  @@index([status, expiresAt])
   @@index([workspaceId, status, createdAt])
 }
 
 model Fill {
+  execution      Json?
   id             String    @id @default(uuid())
   workspaceId    String
   orderId        String

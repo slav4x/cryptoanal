@@ -274,6 +274,7 @@ export async function checkRuntimeEntry(
     policy: RuntimeRiskPolicy;
     eventId: bigint | undefined;
     signalAvailableAt?: Date;
+    partialFill?: boolean;
     position: {
       instrumentRules?: unknown;
       symbol: string;
@@ -329,7 +330,11 @@ export async function checkRuntimeEntry(
     )
   )
     return "INSTRUMENT_RULES_CHANGED";
-  const instrumentFailure = executionInstrumentSizeFailure(input.position, rules);
+  const instrumentFailure = executionInstrumentSizeFailure(
+    input.position,
+    rules,
+    input.partialFill,
+  );
   if (instrumentFailure) return instrumentFailure;
   if (
     input.position.side === "BUY"

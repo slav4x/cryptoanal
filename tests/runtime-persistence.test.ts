@@ -40,6 +40,13 @@ import {
 } from "../packages/persistence/src/runtime-risk";
 import { PriceEventRepository } from "../packages/persistence/src/price-event-repository";
 import { PriceArchiveRepository } from "../packages/persistence/src/price-archive-repository";
+import {
+  defaultEntryLiquidityPolicy,
+  entryLiquidityVersion,
+  readExecutionEntryOrder,
+} from "../packages/application/src/execution-entry-liquidity";
+import { openExecutionPositionAtFill } from "../packages/application/src/execution-engine";
+import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
 import { encodePriceArchive } from "../packages/persistence/src/price-archive-codec";
 import { type StoredExecutionMarketData } from "../packages/application/src/execution-market-data";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
@@ -3622,6 +3629,482 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         await app.close();
       }
     });
+    async function liquiditySetup(limit = false, passive = false, minimumNotional = "0") {
+      const context = await setup();
+      if (limit)
+        await prisma.strategyVersion.update({
+          where: { id: context.entry.strategyVersionId },
+          data: { config: { ...fixture.config, entry: { orderType: "limit", limitOffsetBps: 0 } } },
+        });
+      if (minimumNotional !== "0") {
+        await prisma.marketInstrument.update({
+          where: { symbol: context.symbol },
+          data: { minNotional: minimumNotional },
+        });
+        context.entry.position.instrumentRules = {
+          ...context.entry.position.instrumentRules!,
+          minNotional: minimumNotional,
+        };
+      }
+      const source = await prisma.marketPriceEvent.findUniqueOrThrow({
+        where: { id: context.entry.entryPriceEventId },
+      });
+      const data: StoredExecutionMarketData = [
+        1,
+        "0.01",
+        "Sell",
+        false,
+        false,
+        ["99.9", "5", passive ? "100.1" : "100", "0.4", +quoteAt, +quoteAt, "100", "200"],
+      ];
+      await prisma.marketPriceEvent.update({
+        where: { id: source.id },
+        data: { receivedAt: quoteAt, executionData: data },
+      });
+      const submitted = await runtime.submitRealtimeEntryOrder({
+        workspaceId: context.workspace.id,
+        executionRunId: context.run.id,
+        symbol: context.symbol,
+        expectedCandleAt: candleAt,
+        expectedPendingPriceEventId: null,
+        entryPriceEventId: source.id,
+        position: context.entry.position,
+        policy: defaultEntryLiquidityPolicy,
+      });
+      assert.equal(submitted.applied, true);
+      assert.ok(submitted.orderId);
+      const stored = await prisma.order.findUniqueOrThrow({ where: { id: submitted.orderId } });
+      const snapshot = readExecutionEntryOrder(
+        (stored.execution as { snapshot: unknown }).snapshot,
+      );
+      return { ...context, source, stored, snapshot };
+    }
+    async function liquidityFill(
+      context: Awaited<ReturnType<typeof liquiditySetup>>,
+      price = "100",
+      quantity = "0.4",
+    ) {
+      const time = new Date(Math.max(Date.now(), Date.parse(context.snapshot.submittedAt) + 1));
+      const data: StoredExecutionMarketData = [
+        1,
+        "4",
+        "Sell",
+        false,
+        false,
+        ["99.9", "5", "100", "0.4", +time, +time, "101", "201"],
+      ];
+      const event = await prisma.marketPriceEvent.create({
+        data: {
+          eventKey: randomUUID(),
+          symbol: context.symbol,
+          price,
+          observedAt: time,
+          receivedAt: time,
+          streamId: context.source.streamId,
+          executionData: data,
+        },
+      });
+      const config = strategyConfigSchema.parse(
+        (
+          await prisma.strategyVersion.findUniqueOrThrow({
+            where: { id: context.entry.strategyVersionId },
+          })
+        ).config,
+      );
+      const p = openExecutionPositionAtFill({
+        signal: { side: "long", signalPrice: 100 },
+        quote: { symbol: context.symbol, price: Number(price), observedAt: time },
+        entryRegime: "neutral",
+        equity: 10000,
+        maximumNotional: 10000,
+        config,
+        instrumentRules: context.snapshot.instrumentRules,
+        fillPrice: 100,
+        maximumQuantity: Number(quantity),
+        entryExecution: {
+          version: entryLiquidityVersion,
+          orderId: context.stored.id,
+          requestedQuantity: "1",
+        },
+      })!;
+      assert.ok(p);
+      const input: PersistRealtimeEntryInput = {
+        ...context.entry,
+        entryOrderId: context.stored.id,
+        entryPriceEventId: event.id,
+        expectedPendingPriceEventId: context.source.id,
+        quoteAt: time,
+        quotePrice: price,
+        position: {
+          ...context.entry.position,
+          entryExecution: p.entryExecution!,
+          openedAt: time,
+          quantity: String(p.quantity),
+          entryFee: String(p.entryFee),
+          entrySlippage: String(p.entrySlippage),
+        },
+      };
+      return { event, input };
+    }
+    await t.test(
+      "liquidity IOC atomically persists a partial fill, cancels remainder and deduplicates concurrent writers",
+      async () => {
+        const context = await liquiditySetup();
+        const { input } = await liquidityFill(context);
+        const outcomes = await Promise.all([
+          runtime.persistRealtimeEntry(input),
+          runtime.persistRealtimeEntry(input),
+        ]);
+        assert.equal(outcomes.filter((x) => x.applied).length, 1);
+        const order = await prisma.order.findUniqueOrThrow({
+          where: { id: context.stored.id },
+          include: { fills: true, position: true },
+        });
+        assert.equal(order.status, "CANCELLED");
+        assert.equal(order.quantity.toFixed(), "1");
+        assert.equal(order.fills.length, 1);
+        assert.equal(order.fills[0]!.quantity.toFixed(), "0.4");
+        assert.equal(order.fills[0]!.fee.toFixed(), "0.024");
+        assert.equal(order.position!.quantity.toFixed(), "0.4");
+        assert.equal(order.position!.stopPrice.toFixed(), "98");
+        assert.equal(order.position!.status, "OPEN");
+        assert.ok(order.fills[0]!.execution);
+      },
+    );
+    await t.test(
+      "IOC with sufficient liquidity finishes the entire requested quantity",
+      async () => {
+        const context = await liquiditySetup();
+        const { input, event } = await liquidityFill(context, "100", "1");
+        const data = structuredClone(event.executionData) as StoredExecutionMarketData;
+        data[5]![3] = "2";
+        await prisma.marketPriceEvent.update({
+          where: { id: event.id },
+          data: { executionData: data },
+        });
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, true);
+        const stored = await prisma.order.findUniqueOrThrow({
+          where: { id: context.stored.id },
+          include: { fills: true, position: true },
+        });
+        assert.equal(stored.status, "FILLED");
+        assert.equal(stored.position!.quantity.toFixed(), "1");
+        assert.equal(stored.fills[0]!.fee.toFixed(), "0.06");
+        assert.equal(
+          verifyEntryExecutionProof(stored, strategyConfigSchema.parse(fixture.config)).outcome,
+          "full",
+        );
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, false);
+      },
+    );
+    await t.test(
+      "passive partial fill protects immediately on the same price event and replays from entry",
+      async () => {
+        const context = await liquiditySetup(true, true);
+        assert.equal(context.stored.status, "OPEN");
+        const { input } = await liquidityFill(context, "97");
+        input.entryOrderType = "LIMIT";
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, true);
+        const stored = await prisma.order.findUniqueOrThrow({
+          where: { id: context.stored.id },
+          include: {
+            fills: true,
+            position: { include: { trade: true, executionTrace: { include: { records: true } } } },
+          },
+        });
+        const config = strategyConfigSchema.parse({
+          ...fixture.config,
+          entry: { orderType: "limit", limitOffsetBps: 0 },
+        });
+        assert.equal(verifyEntryExecutionProof(stored, config).outcome, "partial");
+        assert.equal(stored.fills[0]!.fee.toFixed(), "0.008");
+        assert.equal(stored.position!.status, "CLOSED");
+        assert.equal(stored.position!.trade!.exitReason, "stop-loss");
+        const trace = stored.position!.executionTrace!,
+          trade = stored.position!.trade!;
+        const replay = await replayRuntimeTrace({
+          snapshot: trace.snapshot,
+          snapshotHash: trace.snapshotHash,
+          fullFromEntry: true,
+          startEventId: trace.startEventId,
+          endEventId: trace.endEventId!,
+          expectedEventCount: trace.eventCount,
+          records: trace.records,
+          loadEvents: (cursor, through) =>
+            new PriceArchiveRepository(prisma).after(context.symbol, cursor, through),
+          trade: {
+            exitReason: trade.exitReason,
+            closedAt: trade.closedAt,
+            averageExitPrice: trade.averageExitPrice.toFixed(),
+            grossPnl: trade.grossPnl.toFixed(),
+            netPnl: trade.netPnl.toFixed(),
+            fees: trade.fees.toFixed(),
+            slippage: trade.slippage.toFixed(),
+          },
+        });
+        assert.equal(replay.status, "matched");
+        assert.equal(replay.events, 0);
+        const corrupted = structuredClone(stored.fills[0]!.execution) as {
+          payload: Record<string, unknown>;
+          hash: string;
+        };
+        corrupted.payload.role = "taker";
+        assert.throws(
+          () =>
+            verifyEntryExecutionProof(
+              { ...stored, fills: [{ ...stored.fills[0]!, execution: corrupted }] },
+              config,
+            ),
+          /checksum/,
+        );
+      },
+    );
+    await t.test(
+      "liquidity admission rejects fabricated price, fee and volume before a valid fill",
+      async () => {
+        const context = await liquiditySetup();
+        const { input } = await liquidityFill(context);
+        for (const change of [{ entryPrice: "99" }, { entryFee: "0" }, { quantity: "0.5" }]) {
+          assert.equal(
+            (
+              await runtime.persistRealtimeEntry({
+                ...input,
+                position: { ...input.position, ...change },
+              })
+            ).applied,
+            false,
+          );
+        }
+        assert.equal(await prisma.fill.count({ where: { orderId: context.stored.id } }), 0);
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, true);
+      },
+    );
+    await t.test(
+      "PostOnly that would take liquidity cancels without charging or creating a position",
+      async () => {
+        const context = await liquiditySetup(true);
+        assert.equal(context.stored.status, "CANCELLED");
+        assert.equal(await prisma.fill.count({ where: { orderId: context.stored.id } }), 0);
+        assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
+      },
+    );
+    await t.test(
+      "inactive and expired entry orders cancel without needing another market event",
+      async () => {
+        for (const mode of ["pause", "expire"]) {
+          const context = await liquiditySetup();
+          if (mode === "pause")
+            await prisma.deployment.update({
+              where: { id: context.deployment.id },
+              data: { status: "PAUSED" },
+            });
+          else
+            await prisma.order.update({
+              where: { id: context.stored.id },
+              data: { expiresAt: new Date(0) },
+            });
+          await runtime.cancelInactiveEntryOrders(context.workspace.id);
+          assert.equal(
+            (await prisma.order.findUniqueOrThrow({ where: { id: context.stored.id } })).status,
+            "CANCELLED",
+          );
+          assert.equal(
+            (
+              await prisma.runtimeCursor.findUniqueOrThrow({
+                where: {
+                  executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+                },
+              })
+            ).pendingSignal,
+            null,
+          );
+        }
+      },
+    );
+    await t.test(
+      "fill transaction rollback preserves the order and can retry without duplicate quantity",
+      async () => {
+        const context = await liquiditySetup();
+        const { input } = await liquidityFill(context);
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION reject_liquidity_fill() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.execution IS NOT NULL THEN RAISE EXCEPTION 'fill write unavailable'; END IF; RETURN NEW; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER reject_liquidity_fill BEFORE INSERT ON "Fill" FOR EACH ROW EXECUTE FUNCTION reject_liquidity_fill()`,
+        );
+        try {
+          await assert.rejects(runtime.persistRealtimeEntry(input), /fill write unavailable/);
+          assert.equal(
+            (await prisma.order.findUniqueOrThrow({ where: { id: context.stored.id } })).status,
+            "OPEN",
+          );
+          assert.equal(
+            await prisma.position.count({ where: { executionRunId: context.run.id } }),
+            0,
+          );
+        } finally {
+          await prisma.$executeRawUnsafe(`DROP TRIGGER reject_liquidity_fill ON "Fill"`);
+          await prisma.$executeRawUnsafe(`DROP FUNCTION reject_liquidity_fill()`);
+        }
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, true);
+        assert.equal(await prisma.fill.count({ where: { orderId: context.stored.id } }), 1);
+      },
+    );
+    await t.test(
+      "partial fill below request minimum is admitted only with verified order provenance",
+      async () => {
+        const context = await liquiditySetup(false, false, "5");
+        const { input, event } = await liquidityFill(context, "100", "0.01");
+        const data = structuredClone(event.executionData) as StoredExecutionMarketData;
+        data[5]![3] = "0.01";
+        await prisma.marketPriceEvent.update({
+          where: { id: event.id },
+          data: { executionData: data },
+        });
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...input,
+              entryOrderId: undefined,
+              position: { ...input.position, entryExecution: undefined },
+            } as unknown as PersistRealtimeEntryInput)
+          ).applied,
+          false,
+        );
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, true);
+        const position = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.equal(position.quantity.toFixed(), "0.01");
+        assert.equal(position.stopPrice.toFixed(), "98");
+      },
+    );
+    await t.test(
+      "earlier public trades reduce the same book snapshot's remaining liquidity",
+      async () => {
+        const context = await liquiditySetup();
+        const firstAt = new Date(
+          Math.max(Date.now(), Date.parse(context.snapshot.submittedAt) + 1),
+        );
+        await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: context.symbol,
+            price: "100",
+            observedAt: firstAt,
+            receivedAt: firstAt,
+            streamId: context.source.streamId,
+            executionData: [
+              1,
+              "0.3",
+              "Buy",
+              false,
+              false,
+              ["99.9", "5", "100", "0.4", +firstAt, +firstAt, "101", "201"],
+            ],
+          },
+        });
+        const { input, event } = await liquidityFill(context);
+        const data = structuredClone(event.executionData) as StoredExecutionMarketData;
+        data[5]![4] = +firstAt;
+        data[5]![5] = +firstAt;
+        await prisma.marketPriceEvent.update({
+          where: { id: event.id },
+          data: { executionData: data },
+        });
+        assert.equal((await runtime.persistRealtimeEntry(input)).applied, false);
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...input,
+              position: { ...input.position, quantity: "0.1", entryFee: "0.006" },
+            })
+          ).applied,
+          true,
+        );
+        const stored = await prisma.order.findUniqueOrThrow({
+          where: { id: context.stored.id },
+          include: { fills: true },
+        });
+        assert.equal(
+          verifyEntryExecutionProof(stored, strategyConfigSchema.parse(fixture.config)).outcome,
+          "partial",
+        );
+      },
+    );
+    await t.test(
+      "shared account cannot allocate the same opposing book volume to two entries",
+      async () => {
+        const first = await liquiditySetup();
+        const one = await liquidityFill(first, "100", "0.3");
+        assert.equal((await runtime.persistRealtimeEntry(one.input)).applied, true);
+        const second = await setup({
+          workspace: first.workspace,
+          account: first.deployment.exchangeAccountId,
+        });
+        await prisma.strategyVersion.update({
+          where: { id: second.entry.strategyVersionId },
+          data: {
+            config: { ...fixture.config, risk: { ...fixture.config.risk, maxOpenPositions: 10 } },
+          },
+        });
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: second.run.id, symbol: second.symbol },
+          },
+          data: { symbol: first.symbol },
+        });
+        const entry = {
+          ...second.entry,
+          symbol: first.symbol,
+          entryPriceEventId: first.source.id,
+          position: {
+            ...second.entry.position,
+            symbol: first.symbol,
+            instrumentRules: first.snapshot.instrumentRules,
+          },
+        };
+        const submitted = await runtime.submitRealtimeEntryOrder({
+          workspaceId: first.workspace.id,
+          executionRunId: second.run.id,
+          symbol: first.symbol,
+          expectedCandleAt: candleAt,
+          expectedPendingPriceEventId: null,
+          entryPriceEventId: first.source.id,
+          position: entry.position,
+          policy: defaultEntryLiquidityPolicy,
+        });
+        assert.equal(submitted.applied, true);
+        const stored = await prisma.order.findUniqueOrThrow({ where: { id: submitted.orderId! } });
+        const snapshot = readExecutionEntryOrder(
+          (stored.execution as { snapshot: unknown }).snapshot,
+        );
+        const context = {
+          ...second,
+          entry,
+          symbol: first.symbol,
+          source: first.source,
+          stored,
+          snapshot,
+        };
+        const two = await liquidityFill(context, "100", "0.3");
+        assert.equal((await runtime.persistRealtimeEntry(two.input)).applied, false);
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...two.input,
+              position: { ...two.input.position, quantity: "0.1", entryFee: "0.006" },
+            })
+          ).applied,
+          true,
+        );
+        const total = await prisma.fill.aggregate({
+          where: { orderId: { in: [first.stored.id, stored.id] } },
+          _sum: { quantity: true },
+        });
+        assert.equal(total._sum.quantity!.toFixed(), "0.4");
+      },
+    );
   } finally {
     await prisma.$disconnect();
   }

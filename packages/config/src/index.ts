@@ -63,6 +63,7 @@ const serverConfigSchema = z
     RUNTIME_QUOTE_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),
     RUNTIME_QUOTE_MAX_AGE_MS: z.coerce.number().int().min(1_000).default(10_000),
     RUNTIME_ENTRY_MAX_SPREAD_BPS: z.coerce.number().min(0).max(10_000).default(20),
+    RUNTIME_EXIT_TRIGGER_SOURCE: z.literal("LastPrice").default("LastPrice"),
     RUNTIME_ENTRY_MAX_SLIPPAGE_BPS: z.coerce.number().min(0).max(9999).default(50),
     RUNTIME_ENTRY_BOOK_MAX_AGE_MS: z.coerce.number().int().min(100).max(10_000).default(1000),
     RUNTIME_ENTRY_MAKER_PARTICIPATION_BPS: z.coerce.number().int().min(1).max(10_000).default(1000),

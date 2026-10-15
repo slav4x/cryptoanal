@@ -47,6 +47,12 @@ import {
 } from "../packages/application/src/execution-entry-liquidity";
 import { openExecutionPositionAtFill } from "../packages/application/src/execution-engine";
 import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
+import { verifyExitTriggerProof } from "../packages/persistence/src/exit-trigger-proof";
+import {
+  evaluateExecutionPriceExit,
+  type ExecutionPosition,
+} from "../packages/application/src/execution-engine";
+import { defaultExecutionExitPolicy } from "../packages/application/src/execution-exit-policy";
 import { encodePriceArchive } from "../packages/persistence/src/price-archive-codec";
 import { type StoredExecutionMarketData } from "../packages/application/src/execution-market-data";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
@@ -3737,6 +3743,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         quotePrice: price,
         position: {
           ...context.entry.position,
+          ...(context.snapshot.exitPolicy ? { exitPolicy: context.snapshot.exitPolicy } : {}),
           entryExecution: p.entryExecution!,
           openedAt: time,
           quantity: String(p.quantity),
@@ -3820,6 +3827,13 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(stored.fills[0]!.fee.toFixed(), "0.008");
         assert.equal(stored.position!.status, "CLOSED");
         assert.equal(stored.position!.trade!.exitReason, "stop-loss");
+        const exitFill = await prisma.fill.findFirstOrThrow({
+          where: { order: { positionId: stored.position!.id, side: "SELL" } },
+        });
+        assert.equal(
+          verifyExitTriggerProof(exitFill, config, stored.position!.exitPolicy).reason,
+          "stop-loss",
+        );
         const trace = stored.position!.executionTrace!,
           trade = stored.position!.trade!;
         const replay = await replayRuntimeTrace({
@@ -3864,6 +3878,15 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       async () => {
         const context = await liquiditySetup();
         const { input } = await liquidityFill(context);
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...input,
+              position: { ...input.position, exitPolicy: undefined },
+            } as unknown as PersistRealtimeEntryInput)
+          ).applied,
+          false,
+        );
         for (const change of [{ entryPrice: "99" }, { entryFee: "0" }, { quantity: "0.5" }]) {
           assert.equal(
             (
@@ -4030,6 +4053,164 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           verifyEntryExecutionProof(stored, strategyConfigSchema.parse(fixture.config)).outcome,
           "partial",
         );
+      },
+    );
+    await t.test(
+      "retained pre-policy entry order keeps legacy exits after the worker update",
+      async () => {
+        const context = await liquiditySetup();
+        const { input } = await liquidityFill(context);
+        const legacySnapshot = { ...context.snapshot };
+        delete legacySnapshot.exitPolicy;
+        await prisma.order.update({
+          where: { id: context.stored.id },
+          data: { execution: { snapshot: legacySnapshot, hash: hashTracePayload(legacySnapshot) } },
+        });
+        const legacyInput = {
+          ...input,
+          position: { ...input.position, exitPolicy: undefined },
+        } as unknown as PersistRealtimeEntryInput;
+        assert.equal((await runtime.persistRealtimeEntry(legacyInput)).applied, true);
+        const position = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.equal(position.exitPolicy, null);
+      },
+    );
+    await t.test(
+      "pinned market TP validates the durable quote atomically and replays with a receipt",
+      async () => {
+        const context = await liquiditySetup();
+        const { input: entry } = await liquidityFill(context);
+        assert.equal((await runtime.persistRealtimeEntry(entry)).applied, true);
+        const stored = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        assert.deepEqual(stored.exitPolicy, defaultExecutionExitPolicy);
+        const quoteAt = new Date(Math.max(Date.now(), +stored.openedAt + 1));
+        const price = stored.takePrice.add(5);
+        const event = await prisma.marketPriceEvent.create({
+          data: {
+            eventKey: randomUUID(),
+            symbol: stored.symbol,
+            price,
+            observedAt: quoteAt,
+            receivedAt: quoteAt,
+            streamId: stored.priceStreamId!,
+          },
+        });
+        const p: ExecutionPosition = {
+          exitPolicy: defaultExecutionExitPolicy,
+          instrumentRules: context.snapshot.instrumentRules,
+          symbol: stored.symbol,
+          side: "long",
+          openedAt: stored.openedAt,
+          entryPrice: Number(stored.entryPrice),
+          quantity: Number(stored.quantity),
+          stopPrice: Number(stored.stopPrice),
+          takePrice: Number(stored.takePrice),
+          trailingPrice: null,
+          bestPrice: Number(stored.bestPrice),
+          entryFee: Number(stored.entryFee),
+          entrySlippage: Number(stored.entrySlippage),
+          entryRegime: "neutral",
+          entrySession: "europe",
+        };
+        const config = strategyConfigSchema.parse(fixture.config);
+        const settlement = evaluateExecutionPriceExit(
+          p,
+          { symbol: stored.symbol, price: Number(price), observedAt: quoteAt, source: "LastPrice" },
+          config,
+        )!;
+        const close = {
+          workspaceId: context.workspace.id,
+          deploymentId: context.deployment.id,
+          executionRunId: context.run.id,
+          strategyVersionId: stored.strategyVersionId,
+          positionId: stored.id,
+          expectedPositionVersion: stored.runtimeVersion,
+          symbol: stored.symbol,
+          quotePrice: price.toFixed(),
+          quoteAt,
+          processedPrice: { eventId: event.id, streamId: event.streamId, throughAt: quoteAt },
+          processedEventCount: 1,
+          traceInputs: runtimeTraceInputs({
+            firstEventId: event.id,
+            policy: null,
+            signals: [],
+            recoveries: [],
+          }),
+          factors: { source: "durable-price-events" },
+          action: {
+            kind: "close" as const,
+            settlement: {
+              exitPrice: String(settlement.exitPrice),
+              grossPnl: String(settlement.grossPnl),
+              netPnl: String(settlement.netPnl),
+              fees: String(settlement.fees),
+              slippage: String(settlement.slippage),
+              exitReason: settlement.exitReason,
+              closedAt: quoteAt,
+            },
+          },
+        };
+        await assert.rejects(
+          runtime.persistRealtimeQuote({ ...close, quotePrice: "999" }),
+          /durable price event/,
+        );
+        await assert.rejects(
+          runtime.persistRealtimeQuote({
+            ...close,
+            action: {
+              ...close.action,
+              settlement: { ...close.action.settlement, exitPrice: stored.takePrice.toFixed() },
+            },
+          }),
+          /settlement exitPrice mismatch/,
+        );
+        assert.equal(
+          (await prisma.position.findUniqueOrThrow({ where: { id: stored.id } })).status,
+          "OPEN",
+        );
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: stored.id, side: "SELL" } } }),
+          0,
+        );
+        assert.equal((await runtime.persistRealtimeQuote(close)).closed, true);
+        assert.equal((await runtime.persistRealtimeQuote(close)).applied, false);
+        const fill = await prisma.fill.findFirstOrThrow({
+          where: { order: { positionId: stored.id, side: "SELL" } },
+        });
+        assert.equal(
+          verifyExitTriggerProof(fill, config, stored.exitPolicy).triggerPrice,
+          price.toFixed(),
+        );
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: stored.id },
+          include: { records: true },
+        });
+        const trade = await prisma.trade.findUniqueOrThrow({ where: { positionId: stored.id } });
+        const replay = await replayRuntimeTrace({
+          snapshot: trace.snapshot,
+          snapshotHash: trace.snapshotHash,
+          fullFromEntry: true,
+          startEventId: trace.startEventId,
+          endEventId: trace.endEventId!,
+          expectedEventCount: trace.eventCount,
+          records: trace.records,
+          loadEvents: (cursor, through) =>
+            new PriceArchiveRepository(prisma).after(stored.symbol, cursor, through),
+          trade: {
+            exitReason: trade.exitReason,
+            closedAt: trade.closedAt,
+            averageExitPrice: trade.averageExitPrice.toFixed(),
+            grossPnl: trade.grossPnl.toFixed(),
+            netPnl: trade.netPnl.toFixed(),
+            fees: trade.fees.toFixed(),
+            slippage: trade.slippage.toFixed(),
+          },
+        });
+        assert.equal(replay.status, "matched");
       },
     );
     await t.test(

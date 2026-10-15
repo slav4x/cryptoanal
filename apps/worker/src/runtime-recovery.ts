@@ -1,4 +1,5 @@
 import {
+  assertExecutionExitQuote,
   evaluateExecutionExit,
   evaluateExecutionPriceExit,
   settleExecutionPosition,
@@ -39,6 +40,32 @@ export function recoverRuntimeGap(input: {
   settlement: ExecutionSettlement | null;
   evidence: RuntimeRecoveryEvidence;
 } {
+  if (input.position.exitPolicy) {
+    assertExecutionExitQuote(input.position, input.quote);
+    const { exitPolicy, ...legacyPosition } = input.position;
+    const recovered = recoverRuntimeGap({ ...input, position: legacyPosition });
+    const position = { ...recovered.position, exitPolicy };
+    return {
+      ...recovered,
+      position,
+      ...(recovered.settlement
+        ? {
+            settlement: settleExecutionPosition(
+              position,
+              input.quote.price,
+              input.quote.observedAt,
+              "recovery-exit",
+              input.config,
+            ),
+            evidence: {
+              ...recovered.evidence,
+              quality: "ambiguous" as const,
+              ambiguity: "intrabar-order" as const,
+            },
+          }
+        : {}),
+    };
+  }
   if (+input.quote.observedAt < +input.since)
     throw new RuntimeRecoveryIncompleteError("Recovery quote precedes the managed interval");
   const range = runtimeRecoveryMinuteRange(input.since, input.quote.observedAt);

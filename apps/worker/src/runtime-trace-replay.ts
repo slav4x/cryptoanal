@@ -9,6 +9,7 @@ import {
   type ExecutionSettlement,
   readExecutionInstrumentRules,
   readEntryExecutionMarker,
+  readExecutionExitPolicy,
 } from "@cryptoanal/application";
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
@@ -87,12 +88,18 @@ export async function replayRuntimeTrace(input: {
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
       !(
+        snapshot.executionEngineVersion === "cryptoanal-execution@0.6.0" &&
+        !snapshot.position.exitPolicy
+      ) &&
+      !(
         snapshot.executionEngineVersion === "cryptoanal-execution@0.5.0" &&
-        !snapshot.position.entryExecution
+        !snapshot.position.entryExecution &&
+        !snapshot.position.exitPolicy
       ) &&
       !(
         snapshot.executionEngineVersion === "cryptoanal-execution@0.4.0" &&
-        !snapshot.position.instrumentRules
+        !snapshot.position.instrumentRules &&
+        !snapshot.position.exitPolicy
       )) ||
     snapshot.funding?.status !== "disabled"
   )
@@ -113,6 +120,7 @@ export async function replayRuntimeTrace(input: {
     return result;
   };
   let position: ExecutionPosition = {
+    ...(stored.exitPolicy ? { exitPolicy: readExecutionExitPolicy(stored.exitPolicy)! } : {}),
     ...(stored.entryExecution
       ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
       : {}),
@@ -162,6 +170,7 @@ export async function replayRuntimeTrace(input: {
         symbol: position.symbol,
         price: Number(entryQuote.price),
         observedAt: entryQuote.observedAt,
+        source: "LastPrice",
       },
       config,
     );

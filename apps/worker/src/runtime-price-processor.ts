@@ -93,7 +93,8 @@ export async function processRuntimePriceEvents(input: {
   let signalCandleAt = input.signalCandleAt ?? null;
   let signalExit: RuntimePriceCheckpoint["signalExit"] = null;
   let signals: RuntimeSignalEvent[] | null = null;
-  for (const event of input.events) {
+  for (const rawEvent of input.events) {
+    const event = { ...rawEvent, source: rawEvent.source ?? ("LastPrice" as const) };
     if (event.observedAt < position.openedAt) {
       pending = {
         ...(input.profitProtection ? { profitProtectionState } : {}),

@@ -11,6 +11,7 @@ import {
   readExecutionInstrumentRules,
   type ExecutionInstrumentRules,
 } from "./execution-instrument";
+import { readExecutionExitPolicy, type ExecutionExitPolicy } from "./execution-exit-policy";
 
 export const entryLiquidityVersion = "cryptoanal-entry-liquidity@1";
 export type ExecutionEntryLiquidityPolicy = {
@@ -31,6 +32,7 @@ export type EntryExecutionMarker = {
   requestedQuantity: string;
 };
 export type ExecutionEntryOrder = {
+  exitPolicy?: ExecutionExitPolicy;
   version: typeof entryLiquidityVersion;
   symbol: string;
   side: "long" | "short";
@@ -123,6 +125,7 @@ export function readExecutionEntryOrder(value: unknown): ExecutionEntryOrder {
   if (readExecutionInstrumentRules(order.instrumentRules)?.symbol !== order.symbol)
     throw new Error("Invalid entry instrument snapshot");
   readExecutionMarketData(order.placementData);
+  readExecutionExitPolicy(order.exitPolicy);
   return order;
 }
 export function entryLiquidityBookFailure(

@@ -13,6 +13,7 @@ import {
   normalizeExecutionTrailingPrice,
   instrumentPriceValid,
 } from "./execution-instrument";
+import { assertExecutionExitQuote } from "./execution-exit-policy";
 
 export type ExecutionProfitProtectionPolicy = {
   enabledAt: string;
@@ -53,6 +54,7 @@ export function applyExecutionProfitProtection(
   policy: ExecutionProfitProtectionPolicy | null,
   previous: ExecutionProfitProtectionState | null,
 ) {
+  assertExecutionExitQuote(position, quote);
   if (!policy) return { position, state: previous };
   if (
     !Number.isFinite(Date.parse(policy.enabledAt)) ||

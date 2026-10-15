@@ -16,6 +16,11 @@ import {
 } from "../packages/application/src/execution-instrument";
 import { readEntryExecutionMarker } from "../packages/application/src/execution-entry-liquidity";
 import { verifyEntryExecutionProof } from "../packages/persistence/src/entry-execution-proof";
+import { verifyExitTriggerProof } from "../packages/persistence/src/exit-trigger-proof";
+import {
+  executionExitPolicyVersion,
+  readExecutionExitPolicy,
+} from "../packages/application/src/execution-exit-policy";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -38,6 +43,7 @@ try {
     try {
       const config = strategyConfigSchema.parse(stored.config);
       const position: ExecutionPosition = {
+        ...(stored.exitPolicy ? { exitPolicy: readExecutionExitPolicy(stored.exitPolicy)! } : {}),
         ...(stored.entryExecution
           ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
           : {}),
@@ -70,6 +76,7 @@ try {
           instrumentCompliance.invalidInstrumentPositions++;
       } else instrumentCompliance.legacyOpenPositions++;
       const quote = {
+        source: "LastPrice" as const,
         symbol: position.symbol,
         price: Number(stored.markPrice ?? stored.entryPrice),
         observedAt: stored.managedThroughAt ?? stored.openedAt,
@@ -137,7 +144,23 @@ try {
     JOIN "Deployment" d ON d.id=r."deploymentId" WHERE f.execution IS NOT NULL
     GROUP BY d."exchangeAccountId",f."workspaceId",f.execution->'payload'->>'sourceKey'
     HAVING sum(f.quantity)>max((f.execution->'payload'->>'sourceCapacity')::numeric)) x`);
+  const exitExecution = { checked: 0, invalidExitReceipts: 0 };
+  for (const fill of await rows(`SELECT f.quantity::text,f.price::text,f.fee::text,f."filledAt",f.execution,p."exitPolicy",v.config
+    FROM "Fill" f JOIN "Order" o ON o.id=f."orderId" JOIN "Position" p ON p.id=o."positionId"
+    JOIN "StrategyVersion" v ON v.id=p."strategyVersionId" WHERE f.execution->'payload'->>'version'='${executionExitPolicyVersion}'`)) {
+    exitExecution.checked++;
+    try {
+      verifyExitTriggerProof(fill, strategyConfigSchema.parse(fill.config), fill.exitPolicy);
+    } catch {
+      exitExecution.invalidExitReceipts++;
+    }
+  }
+  const missingExitReceipts = await one(`SELECT count(*)::int AS "missingExitReceipts" FROM "Fill" f
+    JOIN "Order" o ON o.id=f."orderId" JOIN "Position" p ON p.id=o."positionId" JOIN "Trade" t ON t."positionId"=p.id
+    WHERE p."exitPolicy" IS NOT NULL AND o.side<>p.side AND t."exitReason" IN ('stop-loss','take-profit','trailing-stop')
+    AND (f.execution->'payload'->>'version' IS DISTINCT FROM '${executionExitPolicyVersion}')`);
   const summary = {
+    exitExecution: { ...exitExecution, ...missingExitReceipts },
     entryExecution: { ...entryExecution, ...sourceUse },
     instrumentCompliance,
     openProtection,
@@ -240,10 +263,14 @@ try {
     summary.openProtection,
     summary.instrumentCompliance,
     summary.entryExecution,
+    summary.exitExecution,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)
-      .filter(([key, value]) => /Mismatch|invalid|BeyondLegacy/.test(key) && Number(value) !== 0)
+      .filter(
+        ([key, value]) =>
+          /Mismatch|invalid|BeyondLegacy|missingExit/.test(key) && Number(value) !== 0,
+      )
       .map(([key, value]) => `${key}: ${value}`),
   );
   const report = {

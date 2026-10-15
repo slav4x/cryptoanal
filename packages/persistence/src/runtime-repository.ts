@@ -1,4 +1,5 @@
 import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-entry-wait";
+import { buildExitTriggerProof } from "./exit-trigger-proof";
 import { instrumentRulesSelect } from "./instrument-rules";
 import type { ExecutionInstrumentRules } from "../../application/src/execution-instrument";
 import {
@@ -17,6 +18,11 @@ import {
   type ExecutionPosition,
   type ExecutionStrategyConfig,
 } from "../../application/src/execution-engine";
+import {
+  defaultExecutionExitPolicy,
+  readExecutionExitPolicy,
+  type ExecutionExitPolicy,
+} from "../../application/src/execution-exit-policy";
 import { executionInstrumentSizeFailure } from "../../application/src/execution-instrument";
 import {
   defaultRuntimeMarketEntryPolicy,
@@ -48,6 +54,7 @@ import {
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
 export type RuntimeCyclePosition = {
+  exitPolicy?: ExecutionExitPolicy;
   entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
@@ -198,6 +205,7 @@ export class RuntimeRepository {
     private readonly riskPolicy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
     private readonly marketEntryPolicy: RuntimeMarketEntryPolicy = defaultRuntimeMarketEntryPolicy,
     private readonly traceOptions: PositionTraceOptions = defaultPositionTraceOptions,
+    private readonly exitPolicy: ExecutionExitPolicy = defaultExecutionExitPolicy,
   ) {}
 
   public listActiveTargets(workspaceId: string) {
@@ -267,6 +275,7 @@ export class RuntimeRepository {
         select: {
           id: true,
           instrumentRules: true,
+          exitPolicy: true,
           entryExecution: true,
           runtimeVersion: true,
           priceEventId: true,
@@ -383,6 +392,7 @@ export class RuntimeRepository {
         indicatorState: true,
         profitProtection: true,
         instrumentRules: true,
+        exitPolicy: true,
         entryExecution: true,
         id: true,
         runtimeVersion: true,
@@ -444,6 +454,7 @@ export class RuntimeRepository {
           id: true,
           profitProtection: true,
           instrumentRules: true,
+          exitPolicy: true,
           entryExecution: true,
           symbol: true,
           priceEventId: true,
@@ -470,6 +481,7 @@ export class RuntimeRepository {
               deployment: { select: { id: true, status: true } },
             },
           },
+          strategyVersion: { select: { config: true } },
         },
       });
       if (!position) return { applied: false, closed: false };
@@ -480,6 +492,60 @@ export class RuntimeRepository {
           position.executionRun.deployment.status !== "PAUSED")
       ) {
         return { applied: false, closed: false };
+      }
+
+      let exitProof: ReturnType<typeof buildExitTriggerProof> | undefined;
+      if (
+        position.exitPolicy &&
+        input.action.kind === "close" &&
+        ["stop-loss", "trailing-stop", "take-profit"].includes(input.action.settlement.exitReason)
+      ) {
+        const event = await transaction.marketPriceEvent.findUniqueOrThrow({
+          where: { id: input.processedPrice.eventId },
+        });
+        if (
+          (position.priceEventId !== null && event.id < position.priceEventId) ||
+          event.symbol !== input.symbol ||
+          event.streamId !== input.processedPrice.streamId ||
+          !event.price.eq(input.quotePrice) ||
+          +input.quoteAt !==
+            Math.max(+event.observedAt, +(position.managedThroughAt ?? position.openedAt)) ||
+          +input.quoteAt !== +input.processedPrice.throughAt ||
+          +input.action.settlement.closedAt !== +input.quoteAt
+        )
+          throw new Error("Exit trigger does not match its durable price event");
+        const protection = input.action.protection;
+        const p: ExecutionPosition = {
+          exitPolicy: readExecutionExitPolicy(position.exitPolicy)!,
+          ...(position.instrumentRules
+            ? { instrumentRules: position.instrumentRules as unknown as ExecutionInstrumentRules }
+            : {}),
+          symbol: position.symbol,
+          side: position.side === "BUY" ? "long" : "short",
+          entryRegime: position.entryRegime.toLowerCase() as ExecutionPosition["entryRegime"],
+          entrySession: position.entrySession
+            .toLowerCase()
+            .replaceAll("_", "-") as ExecutionPosition["entrySession"],
+          openedAt: position.openedAt,
+          entryPrice: Number(position.entryPrice),
+          quantity: Number(position.quantity),
+          entryFee: Number(position.entryFee),
+          entrySlippage: Number(position.entrySlippage),
+          stopPrice: Number(protection?.stopPrice ?? position.stopPrice),
+          takePrice: Number(position.takePrice),
+          bestPrice: Number(protection?.bestPrice ?? position.bestPrice),
+          trailingPrice: protection
+            ? protection.trailingPrice === null
+              ? null
+              : Number(protection.trailingPrice)
+            : (position.trailingPrice?.toNumber() ?? null),
+        };
+        exitProof = buildExitTriggerProof({
+          position: p,
+          event,
+          settlement: input.action.settlement,
+          config: position.strategyVersion.config as unknown as ExecutionStrategyConfig,
+        });
       }
 
       const protection = input.profitProtection as { policyKey?: string } | undefined;
@@ -655,6 +721,7 @@ export class RuntimeRepository {
           correlationId,
         },
         input.action.settlement,
+        exitProof,
       );
       await transaction.decision.create({
         data: {
@@ -667,7 +734,16 @@ export class RuntimeRepository {
           action: "CLOSE",
           reasonCode: input.action.settlement.exitReason.toUpperCase().replaceAll("-", "_"),
           summary: `Позиция закрыта по realtime quote: ${input.action.settlement.exitReason}`,
-          factors: input.factors,
+          factors: exitProof
+            ? {
+                ...(input.factors &&
+                typeof input.factors === "object" &&
+                !Array.isArray(input.factors)
+                  ? input.factors
+                  : { details: input.factors }),
+                exitTrigger: exitProof.payload,
+              }
+            : input.factors,
           marketSnapshotRef: `market-ticker:${input.symbol}:${input.quoteAt.toISOString()}`,
           correlationId,
           decidedAt: input.decidedAt ?? input.quoteAt,
@@ -831,6 +907,7 @@ export class RuntimeRepository {
         return { applied: false, riskFailure: "ENTRY_BOOK_STALE" };
       const snapshot: ExecutionEntryOrder = {
         version: entryLiquidityVersion,
+        exitPolicy: readExecutionExitPolicy(this.exitPolicy)!,
         symbol: input.symbol,
         side: pending.side as "long" | "short",
         timeInForce: strategy.entry.orderType === "market" ? "IOC" : "PostOnly",
@@ -1122,6 +1199,7 @@ export class RuntimeRepository {
       const pending = cursor.pendingSignal as Record<string, unknown>;
       if (
         !!input.position.entryExecution !== !!input.entryOrderId ||
+        (!input.entryOrderId && !!input.position.exitPolicy) ||
         (!!pending.executionOrderId && pending.executionOrderId !== input.entryOrderId)
       )
         return {
@@ -1284,6 +1362,8 @@ export class RuntimeRepository {
           !new Prisma.Decimal(input.position.entryPrice).eq(
             result.kind === "fill" ? result.price : 0,
           ) ||
+          hashTracePayload(input.position.exitPolicy ?? null) !==
+            hashTracePayload(snapshot.exitPolicy ?? null) ||
           hashTracePayload(input.position.instrumentRules) !==
             hashTracePayload(snapshot.instrumentRules) ||
           +input.position.openedAt !== +entryEvent.observedAt ||
@@ -1365,6 +1445,7 @@ export class RuntimeRepository {
           symbol: input.symbol,
           environment: "DRY_RUN",
           side: input.position.side,
+          ...(input.position.exitPolicy ? { exitPolicy: input.position.exitPolicy } : {}),
           ...(input.position.entryExecution
             ? { entryExecution: input.position.entryExecution }
             : {}),
@@ -1578,6 +1659,7 @@ export class RuntimeRepository {
             symbol: input.symbol,
             price: Number(entryEvent.price),
             observedAt: entryEvent.observedAt,
+            source: "LastPrice",
           },
           executionRun.strategyVersion.config as unknown as ExecutionStrategyConfig,
         );
@@ -1602,6 +1684,14 @@ export class RuntimeRepository {
               correlationId,
             },
             settlement,
+            executionPosition.exitPolicy
+              ? buildExitTriggerProof({
+                  position: executionPosition,
+                  event: entryEvent,
+                  settlement,
+                  config: executionRun.strategyVersion.config as unknown as ExecutionStrategyConfig,
+                })
+              : undefined,
           );
           await transaction.decision.create({
             data: {
@@ -2488,6 +2578,7 @@ export class RuntimeRepository {
       where: { id: positionId, workspaceId },
       select: {
         instrumentRules: true,
+        exitPolicy: true,
         entryExecution: true,
         id: true,
         symbol: true,
@@ -2801,6 +2892,7 @@ async function createFilledOrder(
     price: string;
     fee: string;
     filledAt: Date;
+    execution?: ReturnType<typeof buildExitTriggerProof>;
   },
 ) {
   const order = await transaction.order.create({
@@ -2827,6 +2919,9 @@ async function createFilledOrder(
       fee: input.fee,
       feeAsset: "USDT",
       filledAt: input.filledAt,
+      ...(input.execution
+        ? { execution: input.execution as unknown as Prisma.InputJsonValue }
+        : {}),
     },
   });
 }
@@ -2849,6 +2944,7 @@ async function persistClosedPosition(
     correlationId: string;
   },
   settlement: RuntimeCycleSettlement,
+  exitProof?: ReturnType<typeof buildExitTriggerProof>,
 ) {
   const exitFee = Prisma.Decimal.max(
     new Prisma.Decimal(settlement.fees).sub(position.entryFee),
@@ -2866,6 +2962,7 @@ async function persistClosedPosition(
     price: settlement.exitPrice,
     fee: exitFee,
     filledAt: settlement.closedAt,
+    ...(exitProof ? { execution: exitProof } : {}),
   });
   await transaction.position.update({
     where: { id: position.positionId },

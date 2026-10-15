@@ -12,6 +12,8 @@ import {
   evaluateExecutionEntryOrder,
   openExecutionPositionAtFill,
   readEntryExecutionMarker,
+  readExecutionExitPolicy,
+  defaultExecutionExitPolicy,
   type ExecutionEntryOrder,
   readExecutionProfitProtectionState,
   buildDecisionMarketFrame,
@@ -161,6 +163,7 @@ const runtimeRepository = new RuntimeRepository(
     retentionDays: config.RUNTIME_TRACE_RETENTION_DAYS,
     profitProtectionPolicy: runtimeProfitProtectionPolicy,
   },
+  { ...defaultExecutionExitPolicy, triggerSource: config.RUNTIME_EXIT_TRIGGER_SOURCE },
 );
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
@@ -1412,6 +1415,7 @@ async function processRealtimeEntry(
         config: strategyConfig,
         instrumentRules: order?.instrumentRules ?? rules.rules!,
         fillPrice,
+        ...(order?.exitPolicy ? { exitPolicy: order.exitPolicy } : {}),
         ...(execution?.kind === "fill"
           ? {
               maximumQuantity: Number(execution.quantity),
@@ -2457,6 +2461,7 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  exitPolicy?: unknown;
   entryExecution?: unknown;
   instrumentRules?: unknown;
   symbol?: string;
@@ -2474,6 +2479,7 @@ function deserializeExecutionPosition(position: {
   entrySlippage: { toNumber(): number };
 }): ExecutionPosition {
   return {
+    ...(position.exitPolicy ? { exitPolicy: readExecutionExitPolicy(position.exitPolicy)! } : {}),
     ...(position.entryExecution
       ? { entryExecution: readEntryExecutionMarker(position.entryExecution)! }
       : {}),
@@ -2498,6 +2504,7 @@ function deserializeExecutionPosition(position: {
 
 function serializePosition(position: ExecutionPosition) {
   return {
+    ...(position.exitPolicy ? { exitPolicy: position.exitPolicy } : {}),
     ...(position.entryExecution ? { entryExecution: position.entryExecution } : {}),
     ...(position.instrumentRules ? { instrumentRules: position.instrumentRules } : {}),
     symbol: position.symbol,

@@ -1,5 +1,6 @@
 import { executionStopRisk } from "./execution-risk";
 import type { EntryExecutionMarker } from "./execution-entry-liquidity";
+import { assertExecutionExitQuote, type ExecutionExitPolicy } from "./execution-exit-policy";
 import {
   type ExecutionInstrumentRules,
   roundExecutionStep,
@@ -84,6 +85,7 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 };
 
 export type ExecutionPosition = {
+  exitPolicy?: ExecutionExitPolicy;
   entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
   symbol: string;
@@ -107,6 +109,7 @@ export type PendingExecutionSignal = {
 };
 
 export type ExecutionQuote = {
+  source?: "LastPrice" | "MarkPrice" | "IndexPrice";
   symbol: string;
   price: number;
   observedAt: Date;
@@ -701,6 +704,7 @@ export function openExecutionPositionAtQuote(
 }
 
 export function openExecutionPositionAtFill(input: {
+  exitPolicy?: ExecutionExitPolicy;
   signal: PendingExecutionSignal;
   quote: ExecutionQuote;
   entryRegime: ExecutionMarketRegime;
@@ -746,6 +750,7 @@ export function openExecutionPositionAtFill(input: {
       : input.config.costs.takerFeeBps;
   const filled = {
     ...position,
+    ...(input.exitPolicy ? { exitPolicy: input.exitPolicy } : {}),
     quantity,
     entryFee: Number(
       executionDecimalProduct(
@@ -989,7 +994,7 @@ export function executionEntryCandleRange(
   };
 }
 
-function executionProtectionLevel(position: ExecutionPosition): {
+export function executionProtectionLevel(position: ExecutionPosition): {
   price: number;
   reason: "stop-loss" | "trailing-stop";
 } {
@@ -1012,7 +1017,7 @@ export function evaluateExecutionExit(
   // An exit already reached at open precedes all unknown intrabar extrema.
   const openingExit = evaluateExecutionPriceExit(
     position,
-    { symbol: candle.symbol, price: candle.open, observedAt: candle.openTime },
+    { symbol: candle.symbol, price: candle.open, observedAt: candle.openTime, source: "LastPrice" },
     config,
   );
   if (openingExit) return openingExit;
@@ -1045,6 +1050,7 @@ export function evaluateExecutionPriceExit(
   quote: ExecutionQuote,
   config: ExecutionStrategyConfig,
 ): ExecutionSettlement<Exclude<AutomaticExitReason, "signal-exit">> | null {
+  assertExecutionExitQuote(position, quote);
   const protection = executionProtectionLevel(position);
   const stopTouched =
     position.side === "long" ? quote.price <= protection.price : quote.price >= protection.price;
@@ -1063,7 +1069,7 @@ export function evaluateExecutionPriceExit(
   if (takeTouched)
     return settleExecutionPosition(
       position,
-      position.takePrice,
+      position.exitPolicy ? quote.price : position.takePrice,
       quote.observedAt,
       "take-profit",
       config,

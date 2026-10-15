@@ -22,3 +22,4 @@ export * from "./execution-profit-protection";
 export * from "./execution-instrument";
 export * from "./execution-market-data";
 export * from "./execution-entry-liquidity";
+export * from "./execution-exit-policy";

@@ -662,6 +662,7 @@ model ExecutionRun {
 }
 
 model Position {
+  exitPolicy       Json?
   entryExecution   Json?
   instrumentRules  Json?
   profitProtection Json?

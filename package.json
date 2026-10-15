@@ -21,6 +21,7 @@
     "validations:queue-annual": "tsx scripts/queue-annual-validations.ts",
     "runtime:verify": "tsc --project tests/tsconfig.json && tsx --test tests/runtime*.test.ts",
     "runtime:recalculate-funding": "tsx scripts/recalculate-funding.ts",
+    "runtime:revalidate-policy": "tsx scripts/revalidate-execution-policy.ts",
     "runtime:ledger": "tsx scripts/verify-execution-ledger.ts",
     "runtime:market-data": "tsx scripts/inspect-execution-market-data.ts",
     "runtime:replay-trace": "tsx scripts/replay-execution-trace.ts",

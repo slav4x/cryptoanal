@@ -901,7 +901,15 @@ export const validationTradeResultSchema = z.object({
   netPnl: z.number(),
   fees: z.number().nonnegative(),
   funding: z.number().optional(),
-  exitReason: z.enum(["stop-loss", "take-profit", "trailing-stop", "signal-exit", "end-of-data"]),
+  exitReason: z.enum([
+    "stop-loss",
+    "take-profit",
+    "trailing-stop",
+    "signal-exit",
+    "end-of-data",
+    "daily-loss-limit",
+    "kill-switch",
+  ]),
 });
 
 export const validationMetricsSchema = z.object({
@@ -934,6 +942,21 @@ export const validationMetricsSchema = z.object({
   equitySeries: z.array(z.object({ observedAt: z.iso.datetime(), equity: z.number() })),
   gateReasons: z.array(z.string()),
   provenance: metricsProvenanceSchema.extend({
+    executionPolicy: z
+      .object({
+        version: z.string(),
+        hash: z.string(),
+        profileHash: z.string(),
+        capturedAt: z.iso.datetime(),
+        dataModel: z.string(),
+        instrumentModel: z.string(),
+        calendar: z.object({
+          strategyTimezone: z.string(),
+          accountSafetyTimezone: z.literal("UTC"),
+          latch: z.string(),
+        }),
+      })
+      .optional(),
     instrumentRules: z
       .object({
         mode: z.literal("fixed-snapshot-scenario"),
@@ -1301,7 +1324,13 @@ export const healthDashboardSchema = z.object({
       strategyVersion: z.number().int().positive(),
       environment: analyticsEnvironmentSchema,
       validationRunId: z.string(),
-      status: z.enum(["insufficient-data", "within-range", "warning", "critical"]),
+      status: z.enum(["insufficient-data", "within-range", "warning", "critical", "incomparable"]),
+      comparison: z
+        .object({
+          status: z.enum(["equivalent", "scenario-only", "incompatible", "unavailable"]),
+          reasons: z.array(z.string()),
+        })
+        .optional(),
       minimumSampleSize: z.number().int().positive(),
       baseline: driftMetricsSchema,
       runtime: driftMetricsSchema,

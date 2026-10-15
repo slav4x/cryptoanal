@@ -1,3 +1,4 @@
+import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import { Prisma } from "./generated/prisma/client";
 import { hashTracePayload } from "./position-trace";
 import {
@@ -34,6 +35,7 @@ export function verifyEntryExecutionProof(
   if (!envelope?.snapshot || envelope.hash !== hashTracePayload(envelope.snapshot))
     throw new Error("Entry order snapshot checksum mismatch");
   const snapshot = readExecutionEntryOrder(envelope.snapshot);
+  readPinnedExecutionPolicy(snapshot.executionPolicy);
   if (!decimal(order.quantity).eq(snapshot.quantity))
     throw new Error("Entry order quantity mismatch");
   let filled = new Prisma.Decimal(0);

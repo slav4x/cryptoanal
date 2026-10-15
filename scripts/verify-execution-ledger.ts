@@ -8,6 +8,7 @@ import "dotenv/config";
 import { Client } from "pg";
 import { writeFile } from "node:fs/promises";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
+import { readPinnedExecutionPolicy } from "../packages/persistence/src/execution-policy-repository";
 import {
   verifyLiquidityExitFill,
   verifyLiquidityExitStep,
@@ -56,6 +57,66 @@ try {
   await client.query("SET LOCAL statement_timeout = '60s'");
   const one = async (sql: string) => (await client.query(sql)).rows[0];
   const rows = async (sql: string) => (await client.query(sql)).rows;
+  const executionPolicies = {
+    runs: 0,
+    positions: 0,
+    validations: 0,
+    orders: 0,
+    baselines: 0,
+    invalidExecutionPolicies: 0,
+    errors: [] as string[],
+  };
+  for (const [table, countKey] of [
+    ["ExecutionRun", "runs"],
+    ["Position", "positions"],
+    ["ValidationRun", "validations"],
+  ] as const) {
+    for (const row of await rows(
+      `SELECT id,"executionPolicy" FROM "${table}" WHERE "executionPolicy" IS NOT NULL`,
+    )) {
+      executionPolicies[countKey]++;
+      try {
+        readPinnedExecutionPolicy(row.executionPolicy);
+      } catch {
+        executionPolicies.invalidExecutionPolicies++;
+        executionPolicies.errors.push(`${table}:${row.id}:invalid snapshot`);
+      }
+    }
+  }
+  for (const row of await rows(`SELECT o.id,o.execution->'snapshot'->'executionPolicy' AS policy,r."executionPolicy" AS run,p."executionPolicy" AS position
+    FROM "Order" o JOIN "ExecutionRun" r ON r.id=o."executionRunId" LEFT JOIN "Position" p ON p.id=o."positionId"
+    WHERE o.execution->'snapshot'->'executionPolicy' IS NOT NULL`)) {
+    executionPolicies.orders++;
+    try {
+      const order = readPinnedExecutionPolicy(row.policy),
+        run = readPinnedExecutionPolicy(row.run),
+        position = readPinnedExecutionPolicy(row.position);
+      if (!order || order.hash !== run?.hash || (position && position.hash !== order.hash))
+        throw new Error("binding mismatch");
+    } catch {
+      executionPolicies.invalidExecutionPolicies++;
+      executionPolicies.errors.push(`Order:${row.id}:policy binding`);
+    }
+  }
+  for (const row of await rows(`SELECT b."executionRunId",r."executionPolicy" AS run,v."executionPolicy" AS validation,v.status,
+    r."workspaceId"=v."workspaceId" AND r."strategyVersionId"=v."strategyVersionId" AND r."configHash"=v."configHash" AS compatible
+    FROM "ExecutionPolicyBaseline" b JOIN "ExecutionRun" r ON r.id=b."executionRunId" JOIN "ValidationRun" v ON v.id=b."validationRunId"`)) {
+    executionPolicies.baselines++;
+    try {
+      const run = readPinnedExecutionPolicy(row.run),
+        validation = readPinnedExecutionPolicy(row.validation);
+      if (
+        !run ||
+        run.profileHash !== validation?.profileHash ||
+        row.status !== "COMPLETED" ||
+        !row.compatible
+      )
+        throw new Error("baseline mismatch");
+    } catch {
+      executionPolicies.invalidExecutionPolicies++;
+      executionPolicies.errors.push(`Baseline:${row.executionRunId}:policy binding`);
+    }
+  }
   const openProtection = { checked: 0, invalidOpenProtection: 0, protectionMismatch: 0 };
   const instrumentCompliance = {
     checked: 0,
@@ -433,6 +494,7 @@ try {
     }
   }
   const summary = {
+    executionPolicies,
     liquidityExits,
     funding:
       await one(`SELECT count(*)::int AS positions,count(*) FILTER(WHERE "fundingState"->>'status'='pending')::int AS pending,
@@ -545,6 +607,7 @@ try {
     summary.entryExecution,
     summary.exitExecution,
     summary.liquidityExits,
+    summary.executionPolicies,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)

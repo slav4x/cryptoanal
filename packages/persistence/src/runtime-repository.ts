@@ -1,3 +1,4 @@
+import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import {
   readExecutionFundingPolicy,
   type ExecutionFundingPolicy,
@@ -239,7 +240,13 @@ export class RuntimeRepository {
           where: { status: "RUNNING" },
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { id: true, context: true, contextHash: true, engineVersion: true },
+          select: {
+            id: true,
+            context: true,
+            contextHash: true,
+            engineVersion: true,
+            executionPolicy: true,
+          },
         },
       },
     });
@@ -288,6 +295,7 @@ export class RuntimeRepository {
           id: true,
           instrumentRules: true,
           exitPolicy: true,
+          executionPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -421,6 +429,7 @@ export class RuntimeRepository {
         profitProtection: true,
         instrumentRules: true,
         exitPolicy: true,
+        executionPolicy: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -490,6 +499,7 @@ export class RuntimeRepository {
           profitProtection: true,
           instrumentRules: true,
           exitPolicy: true,
+          executionPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -896,6 +906,11 @@ export class RuntimeRepository {
       )
         return { applied: false };
       const strategy = run.strategyVersion.config as unknown as ExecutionStrategyConfig;
+      const pinned = readPinnedExecutionPolicy(run.executionPolicy);
+      const marketEntryPolicy = pinned?.payload.settings.marketEntry ?? this.marketEntryPolicy;
+      const fundingPolicy = pinned ? pinned.payload.settings.funding : this.fundingPolicy;
+      const exitPolicy = pinned?.payload.settings.exit ?? this.exitPolicy;
+      const liquidityPolicy = pinned?.payload.settings.entryLiquidity ?? input.policy;
       const event = await tx.marketPriceEvent.findUniqueOrThrow({
         where: { id: input.entryPriceEventId },
       });
@@ -905,7 +920,7 @@ export class RuntimeRepository {
         strategy.entry.orderType === "market" ? "MARKET" : "LIMIT",
         new Date(String(pending.detectedAt)),
         new Date(String(pending.expiresAt)),
-        this.marketEntryPolicy,
+        marketEntryPolicy,
       );
       if (
         !Number.isFinite(+expiresAt) ||
@@ -942,21 +957,21 @@ export class RuntimeRepository {
             quotePrice: Number(event.price),
             quoteAt: event.observedAt,
           },
-          this.marketEntryPolicy,
+          marketEntryPolicy,
         );
         if (marketFailure) return { applied: false, riskFailure: marketFailure };
       }
       const quote = { ...event, price: Number(event.price) };
-      const bookFailure = entryLiquidityBookFailure(quote, input.policy);
+      const bookFailure = entryLiquidityBookFailure(quote, liquidityPolicy);
       if (bookFailure) return { applied: false, riskFailure: bookFailure };
       const data = event.executionData as unknown as ExecutionEntryOrder["placementData"];
       const book = data[5]!;
       if (
-        +now - book[4] > input.policy.maximumBookAgeMs ||
-        +now - book[5] > input.policy.maximumBookAgeMs
+        +now - book[4] > liquidityPolicy.maximumBookAgeMs ||
+        +now - book[5] > liquidityPolicy.maximumBookAgeMs
       )
         return { applied: false, riskFailure: "ENTRY_BOOK_STALE" };
-      if (this.fundingPolicy) {
+      if (fundingPolicy) {
         const market = await tx.fundingMarketState.findUnique({ where: { symbol: input.symbol } });
         if (
           !market ||
@@ -968,15 +983,16 @@ export class RuntimeRepository {
       }
       const snapshot: ExecutionEntryOrder = {
         version: entryLiquidityVersion,
-        ...(this.fundingPolicy
+        ...(pinned ? { executionPolicy: pinned } : {}),
+        ...(fundingPolicy
           ? {
-              fundingPolicy: readExecutionFundingPolicy(this.fundingPolicy)!,
+              fundingPolicy: readExecutionFundingPolicy(fundingPolicy)!,
               fundingNextAt: (
                 await tx.fundingMarketState.findUniqueOrThrow({ where: { symbol: input.symbol } })
               ).nextFundingAt.toISOString(),
             }
           : {}),
-        exitPolicy: readExecutionExitPolicy(this.exitPolicy)!,
+        exitPolicy: readExecutionExitPolicy(exitPolicy)!,
         symbol: input.symbol,
         side: pending.side as "long" | "short",
         timeInForce: strategy.entry.orderType === "market" ? "IOC" : "PostOnly",
@@ -1007,7 +1023,7 @@ export class RuntimeRepository {
         submitEventId: String(event.id),
         streamId: event.streamId,
         instrumentRules: input.position.instrumentRules!,
-        policy: input.policy,
+        policy: liquidityPolicy,
         placementData: data,
       };
       readExecutionEntryOrder(snapshot);
@@ -1553,6 +1569,12 @@ export class RuntimeRepository {
       const position = await transaction.position.create({
         data: {
           workspaceId: input.workspaceId,
+          ...(entryProof?.snapshot.executionPolicy
+            ? {
+                executionPolicy: entryProof.snapshot
+                  .executionPolicy as unknown as Prisma.InputJsonValue,
+              }
+            : {}),
           ...(input.position.fundingPolicy
             ? {
                 fundingPolicy: input.position.fundingPolicy,
@@ -2122,6 +2144,7 @@ export class RuntimeRepository {
         executionRun: {
           select: {
             id: true,
+            executionPolicy: true,
             strategyVersionId: true,
             strategyVersion: { select: { config: true } },
             deployment: {
@@ -2470,6 +2493,7 @@ export class RuntimeRepository {
             id: true,
             side: true,
             exitPolicy: true,
+            executionPolicy: true,
             fundingPolicy: true,
             fundingState: true,
             fundingAccrued: true,
@@ -2761,6 +2785,7 @@ export class RuntimeRepository {
       select: {
         instrumentRules: true,
         exitPolicy: true,
+        executionPolicy: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -2979,6 +3004,7 @@ export class RuntimeRepository {
         select: {
           id: true,
           exitPolicy: true,
+          executionPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,

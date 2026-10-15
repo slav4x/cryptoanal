@@ -165,3 +165,5 @@ export * from "./liquidity-exit-proof";
 export * from "./funding-repository";
 
 export * from "./funding-proof";
+
+export * from "./execution-policy-repository";

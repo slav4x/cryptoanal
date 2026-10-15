@@ -1,3 +1,9 @@
+import { runExecutionPolicySimulation } from "./execution-policy-simulation";
+import {
+  canonicalExecutionValue,
+  readExecutionPolicy,
+  type ExecutionPolicySnapshot,
+} from "./execution-policy";
 import {
   advanceFundedCandle,
   validateFundingDataset,
@@ -24,12 +30,13 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.14.0";
+export const validationEngineVersion = "cryptoanal-validation@0.15.1";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
 
 export type ValidationEngineInput = {
+  executionPolicy?: ExecutionPolicySnapshot;
   funding?: ExecutionFundingDataset;
   instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ValidationStrategyConfig;
@@ -51,7 +58,14 @@ export type ValidationTrade = {
   netPnl: number;
   fees: number;
   funding?: number;
-  exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data";
+  exitReason:
+    | "stop-loss"
+    | "take-profit"
+    | "trailing-stop"
+    | "signal-exit"
+    | "end-of-data"
+    | "daily-loss-limit"
+    | "kill-switch";
 };
 
 export type ValidationMetrics = {
@@ -87,6 +101,12 @@ export type ValidationEngineResult = {
 };
 
 export function runValidationEngine(input: ValidationEngineInput): ValidationEngineResult {
+  if (
+    input.executionPolicy &&
+    canonicalExecutionValue(readExecutionPolicy(input.executionPolicy).strategy) !==
+      canonicalExecutionValue(input.config)
+  )
+    throw new Error("Validation policy/config mismatch");
   if (input.funding && input.candles.length) {
     const interval =
       { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 }[
@@ -229,6 +249,7 @@ function runWalkForward(
   let windowStart = datasetStart;
   let windowCount = 0;
   let windowCapital = input.initialCapital;
+  let windowDrawdown = 0;
   const evaluatedRanges: Array<{ startsAt: number; endsAt: number }> = [];
 
   while (windowStart + (windows.trainingDays + windows.testDays) * dayMs <= datasetEnd + 1) {
@@ -245,6 +266,7 @@ function runWalkForward(
       testEnd,
       indicatorHistory,
     );
+    windowDrawdown = Math.max(windowDrawdown, result.maxDrawdownPercent ?? 0);
     trades.push(...result.trades);
     equitySeries.push(...result.equitySeries);
     windowCapital += result.trades.reduce((sum, trade) => sum + trade.netPnl, 0);
@@ -262,7 +284,11 @@ function runWalkForward(
   }
 
   return buildResult(
-    { trades, equitySeries: deduplicateEquity(equitySeries) },
+    {
+      trades,
+      equitySeries: deduplicateEquity(equitySeries),
+      ...(input.executionPolicy ? { maxDrawdownPercent: windowDrawdown } : {}),
+    },
     input.initialCapital,
     describeEvaluation(input, evaluatedRanges),
     windowCount,
@@ -274,7 +300,19 @@ function runBacktest(
   entryFrom: number | null,
   entryTo: number | null,
   indicatorHistory?: Map<string, EnrichedExecutionCandle[]>,
-): { trades: ValidationTrade[]; equitySeries: Array<{ observedAt: string; equity: number }> } {
+): {
+  maxDrawdownPercent?: number;
+  trades: ValidationTrade[];
+  equitySeries: Array<{ observedAt: string; equity: number }>;
+} {
+  if (input.executionPolicy)
+    return runExecutionPolicySimulation({
+      ...input,
+      executionPolicy: input.executionPolicy,
+      entryFrom,
+      entryTo,
+      ...(indicatorHistory ? { indicatorHistory } : {}),
+    });
   const bySymbol = new Map<string, EnrichedExecutionCandle[]>();
   for (const candle of input.candles) {
     const candles = bySymbol.get(candle.symbol) ?? [];
@@ -440,6 +478,7 @@ function runBacktest(
 
 function buildResult(
   simulation: {
+    maxDrawdownPercent?: number;
     trades: ValidationTrade[];
     equitySeries: Array<{ observedAt: string; equity: number }>;
   },
@@ -461,7 +500,10 @@ function buildResult(
     perSymbol[trade.symbol] = aggregate;
   }
   const profitFactor = grossLoss === 0 ? (grossProfit > 0 ? null : 0) : grossProfit / grossLoss;
-  const maxDrawdownPercent = calculateMaxDrawdown(simulation.equitySeries, initialCapital);
+  const maxDrawdownPercent = Math.max(
+    simulation.maxDrawdownPercent ?? 0,
+    calculateMaxDrawdown(simulation.equitySeries, initialCapital),
+  );
   const metrics: ValidationMetrics = {
     trades: simulation.trades.length,
     wins: wins.length,

@@ -1,3 +1,9 @@
+import { runExecutionPolicySimulation } from "./execution-policy-simulation";
+import {
+  readExecutionPolicy,
+  canonicalExecutionValue,
+  type ExecutionPolicySnapshot,
+} from "./execution-policy";
 import {
   advanceFundedCandle,
   validateFundingDataset,
@@ -6,6 +12,7 @@ import {
 import {
   executionEntryCandleRange,
   enrichExecutionCandles,
+  minimumExecutionCandleCount,
   getExecutionSignal,
   getTradingDateKey,
   openExecutionPosition,
@@ -22,7 +29,7 @@ import {
 } from "./execution-instrument";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.8.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.9.1";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -53,12 +60,39 @@ export type RuntimeReplayTrade = {
 };
 
 export function runRuntimeReplay(input: {
+  executionPolicy?: ExecutionPolicySnapshot;
   funding?: ExecutionFundingDataset;
   instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ExecutionStrategyConfig;
   candles: ExecutionCandle[];
   initialCapital: number;
 }) {
+  if (input.executionPolicy) {
+    const policy = readExecutionPolicy(input.executionPolicy);
+    if (canonicalExecutionValue(policy.strategy) !== canonicalExecutionValue(input.config))
+      throw new Error("Replay policy/config mismatch");
+    const interval =
+      { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 }[input.config.universe.timeframe] *
+      60000;
+    const entryFrom =
+      input.candles.reduce((m, c) => Math.min(m, +c.openTime), Infinity) +
+      minimumExecutionCandleCount(input.config) * interval;
+    const result = runExecutionPolicySimulation({ ...input, executionPolicy: policy, entryFrom });
+    const sum = (field: "netPnl" | "fees" | "funding") =>
+      round(result.trades.reduce((n, t) => n + (t[field] ?? 0), 0));
+    return {
+      ...result,
+      engineVersion: runtimeReplayEngineVersion,
+      fundingPolicy: input.funding?.policy ?? fundingPolicy,
+      metrics: {
+        trades: result.trades.length,
+        netPnl: sum("netPnl"),
+        totalFees: sum("fees"),
+        totalFunding: sum("funding"),
+        endingEquity: round(input.initialCapital + sum("netPnl")),
+      },
+    };
+  }
   if (input.funding && input.candles.length) {
     const interval =
       { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 }[

@@ -204,6 +204,14 @@ function CompletedRun({
                   отличаться.
                 </p>
               )}
+              {metrics.provenance.executionPolicy && (
+                <p className="text-muted-foreground">
+                  Политика исполнения зафиксирована. Торговые сутки:{" "}
+                  {metrics.provenance.executionPolicy.calendar.strategyTimezone}; общий дневной
+                  лимит: UTC. Свечная модель использует консервативный порядок цен; ликвидность
+                  стакана историей свечей не подтверждается.
+                </p>
+              )}
               <DetailRow label="Окон" value={String(metrics.windows)} />
               <DetailRow label="Доходность" value={formatSignedPercent(metrics.returnPercent)} />
               <DetailRow label="Verdict" value={verdictLabels[run.verdict]} />
@@ -569,6 +577,8 @@ const exitReasonLabels: Record<ValidationTradeResultDto["exitReason"], string> =
   "trailing-stop": "Trailing stop",
   "signal-exit": "Выход по сигналу",
   "end-of-data": "Конец данных",
+  "daily-loss-limit": "Дневной лимит риска",
+  "kill-switch": "Остановка риска",
 };
 
 function formatMoney(value: number): string {

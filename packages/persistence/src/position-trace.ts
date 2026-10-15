@@ -1,3 +1,4 @@
+import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import { createHash } from "node:crypto";
 import {
   executionEngineVersion,
@@ -91,6 +92,7 @@ export async function ensurePositionTrace(
       bestPrice: true,
       entryFee: true,
       entrySlippage: true,
+      executionPolicy: true,
       fundingPolicy: true,
       fundingState: true,
       fundingAccrued: true,
@@ -100,7 +102,12 @@ export async function ensurePositionTrace(
       remainingEntryFee: true,
     },
   });
+  const executionPolicy = readPinnedExecutionPolicy(persisted.executionPolicy);
+  const profitPolicy = executionPolicy
+    ? executionPolicy.payload.settings.profitProtection
+    : input.options.profitProtectionPolicy;
   const snapshot = {
+    ...(executionPolicy ? { executionPolicy } : {}),
     version: 1,
     positionId: input.positionId,
     executionEngineVersion,
@@ -141,9 +148,9 @@ export async function ensurePositionTrace(
     signalCandleAt: input.signalCandleAt?.toISOString() ?? null,
     indicatorState: input.indicatorState,
     profitProtectionState: input.profitProtectionState,
-    riskPolicy: input.riskPolicy,
-    marketEntryPolicy: input.marketEntryPolicy,
-    profitProtectionPolicy: input.options.profitProtectionPolicy,
+    riskPolicy: executionPolicy?.payload.settings.accountSafety ?? input.riskPolicy,
+    marketEntryPolicy: executionPolicy?.payload.settings.marketEntry ?? input.marketEntryPolicy,
+    profitProtectionPolicy: profitPolicy,
     retentionDays: input.options.retentionDays,
     funding: persisted.fundingPolicy
       ? {
@@ -164,7 +171,7 @@ export async function ensurePositionTrace(
       fullFromEntry: input.fullFromEntry,
       snapshot,
       snapshotHash: hashTracePayload(snapshot),
-      policyHash: hashTracePayload(input.options.profitProtectionPolicy),
+      policyHash: hashTracePayload(profitPolicy),
       startedAt: input.throughAt,
     },
   });

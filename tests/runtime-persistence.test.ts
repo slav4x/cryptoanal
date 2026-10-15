@@ -1,4 +1,18 @@
 import {
+  ExecutionPolicyRepository,
+  readPinnedExecutionPolicy,
+  pinExecutionPolicy,
+} from "../packages/persistence/src/execution-policy-repository";
+import {
+  assessExecutionAccount,
+  defaultExecutionAccountSafety,
+  readExecutionRiskConfig,
+} from "../packages/application/src/execution-account";
+import {
+  makeExecutionPolicy,
+  type ExecutionPolicySettings,
+} from "../packages/application/src/execution-policy";
+import {
   enabledFundingPolicy,
   type ExecutionFundingDataset,
 } from "../packages/application/src/execution-funding";
@@ -3681,8 +3695,11 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       passive = false,
       minimumNotional = "0",
       repository = runtime,
+      policySettings?: ExecutionPolicySettings,
     ) {
       const context = await setup();
+      if (policySettings)
+        await new ExecutionPolicyRepository(prisma).pinRun(context.run.id, policySettings);
       if (limit)
         await prisma.strategyVersion.update({
           where: { id: context.entry.strategyVersionId },
@@ -3818,6 +3835,174 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       };
       return { event, input };
     }
+    await t.test(
+      "execution run and entry pin immutable settings independently of later worker defaults",
+      async () => {
+        const settings: ExecutionPolicySettings = {
+          accountSafety: defaultExecutionAccountSafety,
+          profitProtection: null,
+          marketEntry: { ttlMs: 60000, maxDeviationBps: 50 },
+          entryLiquidity: defaultEntryLiquidityPolicy,
+          exit: defaultLiquidityExitPolicy,
+          funding: null,
+        };
+        const repo = new RuntimeRepository(
+          prisma,
+          { ...defaultExecutionAccountSafety, initialBalance: 30000 },
+          { ttlMs: 120000, maxDeviationBps: 100 },
+          undefined,
+          defaultLiquidityExitPolicy,
+        );
+        const c = await liquiditySetup(false, false, "0", repo, settings);
+        const run = await prisma.executionRun.findUniqueOrThrow({ where: { id: c.run.id } }),
+          pinned = readPinnedExecutionPolicy(run.executionPolicy)!;
+        assert.equal(c.snapshot.executionPolicy!.hash, pinned.hash);
+        assert.deepEqual(
+          await new ExecutionPolicyRepository(prisma).pinRun(c.run.id, {
+            ...settings,
+            accountSafety: { ...settings.accountSafety, initialBalance: 30000 },
+          }),
+          pinned,
+        );
+        const { input } = await liquidityFill(c);
+        assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
+        const p = await prisma.position.findFirstOrThrow({ where: { executionRunId: c.run.id } });
+        assert.deepEqual(readPinnedExecutionPolicy(p.executionPolicy), pinned);
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: p.id },
+        });
+        assert.deepEqual(
+          (trace.snapshot as { executionPolicy: unknown }).executionPolicy,
+          JSON.parse(JSON.stringify(pinned)),
+        );
+        assert.deepEqual(
+          (trace.snapshot as { riskPolicy: unknown }).riskPolicy,
+          settings.accountSafety,
+        );
+        assert.deepEqual(
+          (trace.snapshot as { marketEntryPolicy: unknown }).marketEntryPolicy,
+          settings.marketEntry,
+        );
+        assert.equal(
+          (
+            await new RuntimeRiskRepository(prisma, {
+              ...defaultExecutionAccountSafety,
+              initialBalance: 30000,
+            }).assess(
+              c.workspace.id,
+              c.deployment.exchangeAccountId,
+              fixture.config as Prisma.JsonValue,
+            )
+          ).dailyLimit,
+          (10000 *
+            Math.min(
+              settings.accountSafety.maxDailyLossPercent,
+              fixture.config.risk.maxDailyLossPercent,
+            )) /
+            100,
+        );
+        const version = await prisma.strategyVersion.findUniqueOrThrow({
+          where: { id: c.run.strategyVersionId },
+        });
+        const reference = await prisma.validationRun.create({
+          data: {
+            workspaceId: c.workspace.id,
+            strategyId: version.strategyId,
+            strategyVersionId: version.id,
+            kind: "BACKTEST",
+            status: "COMPLETED",
+            verdict: "FAILED",
+            datasetId: "policy-test",
+            datasetAsOf: quoteAt,
+            engineVersion: "policy-test",
+            configHash: version.configHash,
+            input: {},
+            createdByActorId: "test",
+            executionPolicy: pinExecutionPolicy(
+              makeExecutionPolicy(
+                strategyConfigSchema.parse(fixture.config),
+                settings,
+                "ohlc-adverse-first@1",
+              ),
+            ) as unknown as Prisma.InputJsonValue,
+          },
+        });
+        const contextBefore = await prisma.executionRun.findUniqueOrThrow({
+            where: { id: c.run.id },
+          }),
+          strategyBefore = await prisma.strategy.findUniqueOrThrow({
+            where: { id: version.strategyId },
+          });
+        await new ExecutionPolicyRepository(prisma).linkBaseline(c.run.id, reference.id);
+        assert.equal(
+          (
+            await prisma.executionPolicyBaseline.findUniqueOrThrow({
+              where: { executionRunId: c.run.id },
+            })
+          ).validationRunId,
+          reference.id,
+        );
+        assert.deepEqual(
+          (await prisma.executionRun.findUniqueOrThrow({ where: { id: c.run.id } })).context,
+          contextBefore.context,
+        );
+        assert.deepEqual(
+          await prisma.strategy.findUniqueOrThrow({ where: { id: version.strategyId } }),
+          strategyBefore,
+        );
+        const corrupt = structuredClone(reference.executionPolicy) as { hash: string };
+        corrupt.hash = "invalid";
+        await prisma.validationRun.update({
+          where: { id: reference.id },
+          data: { executionPolicy: corrupt },
+        });
+        await assert.rejects(
+          new ExecutionPolicyRepository(prisma).linkBaseline(c.run.id, reference.id),
+          /checksum/,
+        );
+      },
+    );
+    await t.test(
+      "persistence risk adapter agrees with the pure account calculation on the same held position",
+      async () => {
+        const c = await setup();
+        assert.equal((await runtime.persistRealtimeEntry(c.entry)).applied, true);
+        const p = await prisma.position.findFirstOrThrow({ where: { executionRunId: c.run.id } });
+        const actual = await prisma.$transaction((tx) =>
+          assessRuntimeRisk(tx, {
+            workspaceId: c.workspace.id,
+            exchangeAccountId: c.deployment.exchangeAccountId,
+            strategyConfig: fixture.config as Prisma.JsonValue,
+            policy: defaultExecutionAccountSafety,
+            now: quoteAt,
+          }),
+        );
+        const expected = assessExecutionAccount({
+          policy: defaultExecutionAccountSafety,
+          config: fixture.config,
+          now: quoteAt,
+          realizedNetPnl: 0,
+          utcCashPnl: 0,
+          strategyCashPnl: 0,
+          positions: [
+            {
+              symbol: p.symbol,
+              side: "long",
+              entryPrice: Number(p.entryPrice),
+              stopPrice: Number(p.stopPrice),
+              trailingPrice: null,
+              quantity: Number(p.quantity),
+              entryFee: Number(p.entryFee),
+              markPrice: 100,
+              realizedPnl: 0,
+              costs: readExecutionRiskConfig(fixture.config),
+              tickSize: c.entry.position.instrumentRules!.tickSize,
+            },
+          ],
+        });
+        assert.deepEqual(actual, expected);
+      },
+    );
     await t.test(
       "liquidity IOC atomically persists a partial fill, cancels remainder and deduplicates concurrent writers",
       async () => {

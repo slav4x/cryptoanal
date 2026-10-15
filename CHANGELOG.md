@@ -4,6 +4,14 @@
 
 ### Added
 
+- Execution 0.10.0: полный immutable execution policy запуска, заявки и позиции,
+  SHA-256, профиль правил и отдельные baseline-ссылки без изменения исходного context.
+- Validation 0.15.1 / candle replay 1.9.1: общий account risk и календарь с runtime,
+  UTC latch, размер/допуск входа, funding и дополнительная защита прибыли.
+  Явный OHLC adverse-first сценарий; результаты свечи не финансируют входы в её начале.
+- `runtime:revalidate-policy`: новые reference-only проверки на сохранённых datasets;
+  ledger проверяет policy hashes/связи. Health отделяет несравнимые модели от drift.
+
 - Execution 0.9.0: funding новых DRY_RUN заявок и позиций, immutable public history,
   mark-open scenario и отдельные идемпотентные денежные события. Частичные/поздние
   начисления, cash/equity/дневной риск/безубыток, ожидание данных без задержки стопа.

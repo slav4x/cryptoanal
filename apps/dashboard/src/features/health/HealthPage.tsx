@@ -246,6 +246,11 @@ export default function HealthPage() {
                       </td>
                       <td className="px-3 py-3">
                         <DriftBadge status={item.status} />
+                        {item.status === "incomparable" && (
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            Различаются правила или исходные данные
+                          </p>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-right font-mono">
                         {item.runtime.trades} / {item.minimumSampleSize}
@@ -253,22 +258,38 @@ export default function HealthPage() {
                       <MetricComparison
                         current={`${formatNumber(item.runtime.winRatePercent)}%`}
                         baseline={`${formatNumber(item.baseline.winRatePercent)}%`}
-                        delta={formatDelta(item.delta.winRatePercentagePoints, " п.п.")}
+                        delta={
+                          item.status === "incomparable"
+                            ? "—"
+                            : formatDelta(item.delta.winRatePercentagePoints, " п.п.")
+                        }
                       />
                       <MetricComparison
                         current={formatNumber(item.runtime.expectancy)}
                         baseline={formatNumber(item.baseline.expectancy)}
-                        delta={formatNullablePercent(item.delta.expectancyPercent)}
+                        delta={
+                          item.status === "incomparable"
+                            ? "—"
+                            : formatNullablePercent(item.delta.expectancyPercent)
+                        }
                       />
                       <MetricComparison
                         current={formatNullable(item.runtime.profitFactor)}
                         baseline={formatNullable(item.baseline.profitFactor)}
-                        delta={formatNullablePercent(item.delta.profitFactorPercent)}
+                        delta={
+                          item.status === "incomparable"
+                            ? "—"
+                            : formatNullablePercent(item.delta.profitFactorPercent)
+                        }
                       />
                       <MetricComparison
                         current={`${formatNumber(item.runtime.maxDrawdownPercent)}%`}
                         baseline={`${formatNumber(item.baseline.maxDrawdownPercent)}%`}
-                        delta={formatDelta(item.delta.maxDrawdownPercentagePoints, " п.п.")}
+                        delta={
+                          item.status === "incomparable"
+                            ? "—"
+                            : formatDelta(item.delta.maxDrawdownPercentagePoints, " п.п.")
+                        }
                         last
                       />
                     </tr>
@@ -388,12 +409,14 @@ function DriftBadge({ status }: { status: HealthDashboardDto["drift"][number]["s
   const variants = {
     "insufficient-data": "outline",
     "within-range": "profit",
+    incomparable: "outline",
     warning: "warning",
     critical: "loss",
   } as const;
   const labels = {
     "insufficient-data": "мало данных",
     "within-range": "в диапазоне",
+    incomparable: "разные модели",
     warning: "warning",
     critical: "critical",
   };

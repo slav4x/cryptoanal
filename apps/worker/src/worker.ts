@@ -1,3 +1,5 @@
+import { executionPolicySettingsFromConfig } from "./execution-policy-settings";
+import { ExecutionPolicyRepository, readPinnedExecutionPolicy } from "@cryptoanal/persistence";
 import { enabledFundingPolicy, type ExecutionFundingDataset } from "@cryptoanal/application";
 import { FundingRepository, hashTracePayload } from "@cryptoanal/persistence";
 import { runtimeErrorMessage } from "./runtime-error";
@@ -132,6 +134,8 @@ const marketDataRepository = new MarketDataRepository(prisma);
 const marketUniverseRepository = new MarketUniverseRepository(prisma);
 const accountSnapshotRepository = new AccountSnapshotRepository(prisma);
 const validationRepository = new ValidationRepository(prisma);
+const executionPolicyRepository = new ExecutionPolicyRepository(prisma);
+const executionPolicySettings = executionPolicySettingsFromConfig(config);
 const runtimeRiskPolicy = {
   initialBalance: config.DRY_RUN_INITIAL_BALANCE,
   maxDailyLossPercent: config.RUNTIME_MAX_DAILY_LOSS_PERCENT,
@@ -1005,6 +1009,10 @@ async function processRealtimePosition(
     });
     return;
   }
+  const pinnedPolicy = readPinnedExecutionPolicy(target.executionPolicy);
+  const protectionPolicy = pinnedPolicy
+    ? pinnedPolicy.payload.settings.profitProtection
+    : runtimeProfitProtectionPolicy;
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
   const signalIntervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
   const events = await priceEventRepository.after(
@@ -1097,7 +1105,7 @@ async function processRealtimePosition(
   await processRuntimePriceEvents({
     position: deserializeExecutionPosition(target),
     profitProtection: {
-      policy: runtimeProfitProtectionPolicy,
+      policy: protectionPolicy,
       state: readExecutionProfitProtectionState(target.profitProtection),
     },
     through: target.managedThroughAt ?? target.openedAt,
@@ -1190,7 +1198,7 @@ async function processRealtimePosition(
         ).length,
         traceInputs: runtimeTraceInputs({
           firstEventId: events[0]!.id,
-          policy: runtimeProfitProtectionPolicy,
+          policy: protectionPolicy,
           signals: traceSignals,
           recoveries: traceRecoveries,
         }),
@@ -1217,7 +1225,7 @@ async function processRealtimePosition(
             ? {
                 profitProtection: {
                   ...profitProtectionState,
-                  policy: runtimeProfitProtectionPolicy,
+                  policy: protectionPolicy,
                 },
               }
             : {}),
@@ -1380,11 +1388,15 @@ async function processRealtimeEntry(
     return;
   }
   const strategyConfig = strategyConfigSchema.parse(target.executionRun.strategyVersion.config);
+  const pendingPolicy = readPinnedExecutionPolicy(target.executionRun.executionPolicy);
+  const entryMarketPolicy = pendingPolicy?.payload.settings.marketEntry ?? runtimeMarketEntryPolicy;
+  const maximumQuoteAgeMs =
+    pendingPolicy?.payload.settings.accountSafety.maxQuoteAgeMs ?? config.RUNTIME_QUOTE_MAX_AGE_MS;
   pending.expiresAt = runtimeEntryExpiresAt(
     strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
     pending.detectedAt,
     pending.expiresAt,
-    runtimeMarketEntryPolicy,
+    entryMarketPolicy,
   );
   if (Date.now() >= +pending.expiresAt) {
     await runtimeRepository.advancePendingEntry({
@@ -1409,7 +1421,7 @@ async function processRealtimeEntry(
       ? "ENTRY_CONNECTION_UNAVAILABLE"
       : !target.instrument.enabled || target.instrument.status !== "Trading"
         ? "INSTRUMENT_UNAVAILABLE"
-        : entryQuoteWaitReason(target.symbol);
+        : entryQuoteWaitReason(target.symbol, maximumQuoteAgeMs);
   if (waitingReason) {
     await runtimeRepository.advancePendingEntry({
       ...progress,
@@ -1450,7 +1462,7 @@ async function processRealtimeEntry(
     detectedAt: pending.detectedAt,
     availableAt: pending.availableAt,
     expiresAt: pending.expiresAt,
-    maximumQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
+    maximumQuoteAgeMs,
     now: Date.now,
     tryFill: async (quote) => {
       if (strategyConfig.entry.orderType === "market") {
@@ -1463,7 +1475,7 @@ async function processRealtimeEntry(
             quoteAt: quote.observedAt,
             now: new Date(),
           },
-          runtimeMarketEntryPolicy,
+          entryMarketPolicy,
         );
         if (failure) return { status: "rejected", reason: failure };
       }
@@ -1473,7 +1485,10 @@ async function processRealtimeEntry(
         target.executionRun.strategyVersion.config,
       ));
       if (risk.reason) return { status: "rejected", reason: risk.reason };
-      const liquidityPolicy = order?.policy ?? runtimeEntryLiquidityPolicy;
+      const liquidityPolicy =
+        order?.policy ??
+        pendingPolicy?.payload.settings.entryLiquidity ??
+        runtimeEntryLiquidityPolicy;
       if (Date.now() - +quote.receivedAt > liquidityPolicy.maximumBookAgeMs)
         return { status: "no-touch", reason: "ENTRY_BOOK_STALE" };
       const bookFailure = entryLiquidityBookFailure(quote, liquidityPolicy);
@@ -1527,7 +1542,7 @@ async function processRealtimeEntry(
           ...progress,
           entryPriceEventId: quote.id,
           position: serializePosition(position),
-          policy: runtimeEntryLiquidityPolicy,
+          policy: liquidityPolicy,
         });
         if (submitted.applied) return { status: "conflict" };
         if (
@@ -1612,14 +1627,14 @@ async function processRealtimeEntry(
   }
 }
 
-function entryQuoteWaitReason(symbol: string) {
+function entryQuoteWaitReason(symbol: string, maximumQuoteAgeMs = config.RUNTIME_QUOTE_MAX_AGE_MS) {
   return runtimeEntryQuoteWaitReason({
     streamConnected,
     journalHealthy: priceJournal.healthy,
     quote: latestQuotes.get(symbol),
     streamId: streamSession,
     now: Date.now(),
-    maximumQuoteAgeMs: config.RUNTIME_QUOTE_MAX_AGE_MS,
+    maximumQuoteAgeMs,
   });
 }
 
@@ -1690,6 +1705,11 @@ async function processRuntimeTarget(
   const expectedDeploymentStatus = target.status;
   const executionRun = target.executionRuns[0];
   if (!executionRun) return;
+  const activeRunPolicy = await executionPolicyRepository.pinRun(
+    executionRun.id,
+    executionPolicySettings,
+  );
+  const runMarketEntryPolicy = activeRunPolicy.payload.settings.marketEntry;
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
   const interval = bybitIntervals[strategyConfig.universe.timeframe];
   const intervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
@@ -1896,16 +1916,12 @@ async function processRuntimeTarget(
       indicators.checkpoint!.availableAt = signalAvailableAt.toISOString();
       const pendingSignal = parsePendingSignal(state.cursor?.pendingSignal ?? null);
       const realtimePendingSignal = parseRealtimePendingSignal(state.cursor?.pendingSignal ?? null);
-      const equity = await runtimeRepository.getDryRunEquity(
-        target.workspaceId,
-        target.exchangeAccountId,
-        String(config.DRY_RUN_INITIAL_BALANCE),
-      );
       const riskAssessment = await runtimeRiskRepository.assess(
         target.workspaceId,
         target.exchangeAccountId,
         target.strategyVersion.config,
       );
+      const equity = riskAssessment.equity;
       const dailyPnl = riskAssessment.strategyDay.realizedPnl;
       const entriesAllowed =
         target.status === "RUNNING" &&
@@ -1979,7 +1995,7 @@ async function processRuntimeTarget(
             strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
             candleClosedAt,
             new Date(+candleClosedAt + intervalMs),
-            runtimeMarketEntryPolicy,
+            runMarketEntryPolicy,
           );
           const failure =
             strategyConfig.entry.orderType === "market"
@@ -1990,7 +2006,7 @@ async function processRuntimeTarget(
                     signalPrice: signal.signalPrice,
                     now: new Date(),
                   },
-                  runtimeMarketEntryPolicy,
+                  runMarketEntryPolicy,
                 )
               : null;
           pendingSignalAfter = failure
@@ -2245,7 +2261,16 @@ async function processValidationJob(job: ClaimedValidationJob) {
         },
       });
     }
+    const policyScenario = await executionPolicyRepository.pinValidation({
+      runId: job.runId,
+      jobId: job.jobId,
+      workspaceId: job.workspaceId,
+      workerId,
+      settings: executionPolicySettings,
+      initialCapital: Number(executionInput.initialCapital),
+    });
     const result = runValidationEngine({
+      executionPolicy: policyScenario.payload,
       funding: fundingScenario.payload,
       instrumentRules: instrumentScenario.instruments,
       config: strategyConfig,
@@ -2281,6 +2306,11 @@ async function processValidationJob(job: ClaimedValidationJob) {
         asOf: dataset.endsAt.toISOString(),
         freshness: "immutable",
         fundingPolicy: { ...enabledFundingPolicy, snapshotHash: fundingScenario.hash },
+        executionPolicy: {
+          hash: policyScenario.hash,
+          profileHash: policyScenario.profileHash,
+          ...policyScenario.payload,
+        },
         instrumentRules: {
           mode: "fixed-snapshot-scenario",
           observedAt: instrumentScenario.capturedAt,

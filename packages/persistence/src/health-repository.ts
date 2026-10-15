@@ -1,3 +1,5 @@
+import { compareExecutionPolicies } from "../../application/src/execution-policy";
+import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 
@@ -130,6 +132,8 @@ export class HealthRepository {
             select: {
               id: true,
               context: true,
+              executionPolicy: true,
+              policyBaseline: { select: { validationRunId: true } },
               trades: {
                 orderBy: [{ closedAt: "asc" }, { id: "asc" }],
                 select: { netPnl: true, closedAt: true },
@@ -142,12 +146,14 @@ export class HealthRepository {
     ]);
 
     const validationIds = activeDeployments.flatMap((deployment) => {
-      const validationRunId = readValidationRunId(deployment.executionRuns[0]?.context);
+      const validationRunId =
+        deployment.executionRuns[0]?.policyBaseline?.validationRunId ??
+        readValidationRunId(deployment.executionRuns[0]?.context);
       return validationRunId ? [validationRunId] : [];
     });
     const validations = await this.prisma.validationRun.findMany({
       where: { workspaceId, id: { in: validationIds }, status: "COMPLETED" },
-      select: { id: true, metrics: true },
+      select: { id: true, metrics: true, executionPolicy: true },
     });
     const validationById = new Map(validations.map((validation) => [validation.id, validation]));
 
@@ -188,7 +194,8 @@ export class HealthRepository {
       driftCandidates: activeDeployments.flatMap((deployment) => {
         const executionRun = deployment.executionRuns[0];
         if (!executionRun) return [];
-        const validationRunId = readValidationRunId(executionRun.context);
+        const validationRunId =
+          executionRun.policyBaseline?.validationRunId ?? readValidationRunId(executionRun.context);
         const validation = validationRunId ? validationById.get(validationRunId) : null;
         const baseline = readBaselineMetrics(validation?.metrics);
         if (!validationRunId || !baseline) return [];
@@ -202,6 +209,10 @@ export class HealthRepository {
             environment: deployment.environment,
             validationRunId,
             baseline,
+            comparison: compareExecutionPolicies(
+              readPinnedExecutionPolicy(executionRun.executionPolicy)?.payload ?? null,
+              readPinnedExecutionPolicy(validation?.executionPolicy)?.payload ?? null,
+            ),
             runtimeTrades: executionRun.trades.map((trade) => ({
               netPnl: trade.netPnl.toNumber(),
               closedAt: trade.closedAt,

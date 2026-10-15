@@ -1,11 +1,10 @@
+import { advanceExecutionQuoteProtection } from "@cryptoanal/application";
 import {
-  applyExecutionProfitProtection,
   type ExecutionProfitProtectionState,
   type ExecutionProfitProtectionPolicy,
   evaluateExecutionPriceExit,
   evaluateExecutionSignalExit,
   settleExecutionPosition,
-  updateExecutionTrailingAtPrice,
   type ExecutionPosition,
   type ExecutionQuote,
   type ExecutionSettlement,
@@ -167,8 +166,7 @@ export async function processRuntimePriceEvents(input: {
       }
     }
     if (!settlement) {
-      position = updateExecutionTrailingAtPrice(position, quote.price, input.config);
-      const protection = applyExecutionProfitProtection(
+      const protection = advanceExecutionQuoteProtection(
         position,
         event,
         input.config,

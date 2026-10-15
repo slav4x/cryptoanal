@@ -340,6 +340,46 @@ function healthInput(): HealthMonitorInput {
   };
 }
 
+test("incomparable OHLC baselines do not create drift incidents or hide comparable failures", () => {
+  const input = healthInput();
+  input.runtimeProgress = [];
+  const candidate: HealthMonitorInput["driftCandidates"][number] = {
+    deploymentId: "deployment",
+    executionRunId: "run",
+    strategyId: "strategy",
+    strategyName: "Test",
+    strategyVersion: 1,
+    environment: "dry-run",
+    validationRunId: "validation",
+    comparison: { status: "scenario-only", reasons: ["DATA_MODEL_DIFFERS"] },
+    baseline: {
+      trades: 30,
+      winRatePercent: 70,
+      expectancy: 20,
+      profitFactor: 2,
+      maxDrawdownPercent: 1,
+    },
+    runtimeTrades: Array.from({ length: 20 }, () => ({ netPnl: -10, closedAt: at })),
+  };
+  input.driftCandidates = [candidate];
+  const scenario = evaluateHealth(input);
+  assert.equal(scenario.drift[0]!.status, "incomparable");
+  assert.ok(!scenario.conditions.some((c) => c.code === "RUNTIME_VALIDATION_DRIFT"));
+  assert.equal(scenario.domains.find((d) => d.id === "drift")!.status, "unknown");
+  input.driftCandidates.push({
+    ...candidate,
+    executionRunId: "comparable",
+    comparison: { status: "equivalent", reasons: [] },
+  });
+  const mixed = evaluateHealth(input);
+  assert.equal(mixed.domains.find((d) => d.id === "drift")!.status, "critical");
+  assert.equal(
+    mixed.domains.find((d) => d.id === "drift")!.summary,
+    "Обнаружено отклонение от validated baseline",
+  );
+  assert.equal(mixed.conditions.filter((c) => c.code === "RUNTIME_VALIDATION_DRIFT").length, 1);
+});
+
 test("fresh heartbeat and price source cannot hide an overdue position backlog", () => {
   const input = healthInput();
   const result = evaluateHealth(input);

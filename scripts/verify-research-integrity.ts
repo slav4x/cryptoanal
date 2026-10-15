@@ -1,8 +1,14 @@
 import {
+  readExecutionPolicy,
+  type ExecutionPolicySnapshot,
+} from "../packages/application/src/execution-policy";
+import {
   runRuntimeReplay,
   runValidationEngine,
   runtimeReplayEngineVersion,
   validationEngineVersion,
+  readExecutionInstrumentRules,
+  type ExecutionInstrumentRules,
 } from "../packages/application/src/index";
 import { strategyConfigSchema } from "../packages/contracts/src/index";
 import { createHash } from "node:crypto";
@@ -12,6 +18,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 type GoldenFixture = {
   schemaVersion: 1;
+  executionPolicy?: ExecutionPolicySnapshot;
+  instrumentRules?: Record<string, ExecutionInstrumentRules>;
   id: string;
   datasetVersion: string;
   datasetHash: string;
@@ -53,6 +61,8 @@ for (const fixturePath of fixturePaths) {
   );
 
   const validation = runValidationEngine({
+    ...(fixture.instrumentRules ? { instrumentRules: fixture.instrumentRules } : {}),
+    ...(fixture.executionPolicy ? { executionPolicy: fixture.executionPolicy } : {}),
     config: fixture.config,
     candles,
     initialCapital: fixture.initialCapital,
@@ -60,6 +70,8 @@ for (const fixturePath of fixturePaths) {
     walkForward: null,
   });
   const runtime = runRuntimeReplay({
+    ...(fixture.instrumentRules ? { instrumentRules: fixture.instrumentRules } : {}),
+    ...(fixture.executionPolicy ? { executionPolicy: fixture.executionPolicy } : {}),
     config: fixture.config,
     candles,
     initialCapital: fixture.initialCapital,
@@ -170,6 +182,21 @@ function parseFixture(value: unknown): GoldenFixture {
   }
   return {
     schemaVersion: 1,
+    ...(fixture.instrumentRules
+      ? {
+          instrumentRules: Object.fromEntries(
+            Object.entries(fixture.instrumentRules).map(([symbol, value]) => {
+              const rules = readExecutionInstrumentRules(value);
+              if (!rules || rules.symbol !== symbol)
+                throw new Error(`${fixture.id}: invalid instrument snapshot`);
+              return [symbol, rules];
+            }),
+          ),
+        }
+      : {}),
+    ...(fixture.executionPolicy
+      ? { executionPolicy: readExecutionPolicy(fixture.executionPolicy) }
+      : {}),
     id: fixture.id,
     datasetVersion: fixture.datasetVersion,
     datasetHash: fixture.datasetHash,

@@ -1,3 +1,4 @@
+import { readPinnedExecutionPolicy } from "@cryptoanal/persistence";
 import {
   executionEngineVersion,
   evaluateExecutionPriceExit,
@@ -113,9 +114,11 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   if (hashTracePayload(input.snapshot) !== input.snapshotHash)
     throw new Error("Trace snapshot checksum mismatch");
   const snapshot = input.snapshot as Snapshot;
+  readPinnedExecutionPolicy((input.snapshot as { executionPolicy?: unknown }).executionPolicy);
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.9.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.8.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.7.0" &&
       !(

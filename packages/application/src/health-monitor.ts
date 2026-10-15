@@ -1,3 +1,4 @@
+import type { compareExecutionPolicies } from "./execution-policy";
 export type HealthLevel = "healthy" | "degraded" | "critical" | "unknown";
 export type IncidentSeverity = "warning" | "critical";
 
@@ -94,6 +95,7 @@ export type HealthMonitorInput = {
     strategyVersion: number;
     environment: "dry-run" | "demo" | "live";
     validationRunId: string;
+    comparison?: ReturnType<typeof compareExecutionPolicies>;
     baseline: {
       trades: number;
       winRatePercent: number;
@@ -474,7 +476,7 @@ function evaluateDrift(
   );
   const drawdownDelta = round(runtime.maxDrawdownPercent - candidate.baseline.maxDrawdownPercent);
 
-  let status: "insufficient-data" | "within-range" | "warning" | "critical" =
+  let status: "insufficient-data" | "within-range" | "warning" | "critical" | "incomparable" =
     runtime.trades < 20 ? "insufficient-data" : "within-range";
   if (runtime.trades >= 20) {
     if (
@@ -494,7 +496,9 @@ function evaluateDrift(
     }
   }
 
+  if (candidate.comparison && candidate.comparison.status !== "equivalent") status = "incomparable";
   return {
+    ...(candidate.comparison ? { comparison: candidate.comparison } : {}),
     deploymentId: candidate.deploymentId,
     executionRunId: candidate.executionRunId,
     strategyId: candidate.strategyId,
@@ -570,24 +574,35 @@ function domainFromConditions(
 }
 
 function driftDomain(
-  drift: Array<{ status: "insufficient-data" | "within-range" | "warning" | "critical" }>,
+  drift: Array<{
+    status: "insufficient-data" | "within-range" | "warning" | "critical" | "incomparable";
+  }>,
   now: Date,
 ) {
   const status: HealthLevel = drift.some((item) => item.status === "critical")
     ? "critical"
     : drift.some((item) => item.status === "warning")
       ? "degraded"
-      : drift.length === 0 || drift.every((item) => item.status === "insufficient-data")
+      : drift.length === 0 ||
+          drift.every(
+            (item) => item.status === "insufficient-data" || item.status === "incomparable",
+          )
         ? "unknown"
         : "healthy";
   const summary =
     drift.length === 0
       ? "Нет активного runtime с validated baseline"
-      : drift.every((item) => item.status === "insufficient-data")
-        ? "Недостаточно runtime-сделок для вывода"
-        : status === "healthy"
-          ? "Runtime находится в допустимом диапазоне"
-          : "Обнаружено отклонение от validated baseline";
+      : status === "critical" || status === "degraded"
+        ? "Обнаружено отклонение от validated baseline"
+        : drift.some((item) => item.status === "incomparable")
+          ? "Baseline и runtime используют разные события или политики; прямой drift не рассчитывается"
+          : drift.every(
+                (item) => item.status === "insufficient-data" || item.status === "incomparable",
+              )
+            ? "Недостаточно runtime-сделок для вывода"
+            : status === "healthy"
+              ? "Runtime находится в допустимом диапазоне"
+              : "Обнаружено отклонение от validated baseline";
   return domain("drift", "Validation drift", status, summary, now);
 }
 

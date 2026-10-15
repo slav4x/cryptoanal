@@ -513,18 +513,20 @@ model StrategyVersion {
 }
 
 model ValidationRun {
+  policyBaselines   ExecutionPolicyBaseline[]
+  executionPolicy   Json?
   fundingSnapshot   Json?
   executionRules    Json?
-  id                String            @id @default(uuid())
+  id                String                    @id @default(uuid())
   workspaceId       String
   strategyId        String
   strategyVersionId String
   kind              ValidationKind
-  status            RunStatus         @default(QUEUED)
-  verdict           ValidationVerdict @default(PENDING)
+  status            RunStatus                 @default(QUEUED)
+  verdict           ValidationVerdict         @default(PENDING)
   datasetId         String
   datasetSnapshotId String?
-  datasetAsOf       DateTime          @db.Timestamptz(3)
+  datasetAsOf       DateTime                  @db.Timestamptz(3)
   engineVersion     String
   configHash        String
   input             Json
@@ -532,13 +534,13 @@ model ValidationRun {
   failureCode       String?
   failureMessage    String?
   createdByActorId  String
-  queuedAt          DateTime          @default(now()) @db.Timestamptz(3)
-  startedAt         DateTime?         @db.Timestamptz(3)
-  completedAt       DateTime?         @db.Timestamptz(3)
-  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  strategy          Strategy          @relation(fields: [strategyId], references: [id], onDelete: Cascade)
-  strategyVersion   StrategyVersion   @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
-  datasetSnapshot   DatasetSnapshot?  @relation(fields: [datasetSnapshotId], references: [id], onDelete: Restrict)
+  queuedAt          DateTime                  @default(now()) @db.Timestamptz(3)
+  startedAt         DateTime?                 @db.Timestamptz(3)
+  completedAt       DateTime?                 @db.Timestamptz(3)
+  workspace         Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  strategy          Strategy                  @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  strategyVersion   StrategyVersion           @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  datasetSnapshot   DatasetSnapshot?          @relation(fields: [datasetSnapshotId], references: [id], onDelete: Restrict)
   trades            ValidationTrade[]
   journalLinks      JournalLink[]
 
@@ -634,6 +636,8 @@ model Deployment {
 }
 
 model ExecutionRun {
+  policyBaseline    ExecutionPolicyBaseline?
+  executionPolicy   Json?
   id                String                    @id @default(uuid())
   workspaceId       String
   deploymentId      String
@@ -664,6 +668,7 @@ model ExecutionRun {
 }
 
 model Position {
+  executionPolicy   Json?
   fundingPolicy     Json?
   fundingState      Json?
   fundingAccrued    Decimal?                 @db.Decimal(38, 18)
@@ -1269,4 +1274,14 @@ model PositionFundingPayment {
 
   @@unique([positionId, settledAt])
   @@index([workspaceId, settledAt])
+}
+
+model ExecutionPolicyBaseline {
+  executionRunId  String        @id
+  validationRunId String
+  capturedAt      DateTime      @default(now()) @db.Timestamptz(3)
+  executionRun    ExecutionRun  @relation(fields: [executionRunId], references: [id], onDelete: Cascade)
+  validationRun   ValidationRun @relation(fields: [validationRunId], references: [id], onDelete: Restrict)
+
+  @@index([validationRunId])
 }

@@ -24,13 +24,26 @@ export class ExperimentRepository {
             engineVersion: true,
             configHash: true,
             trades: {
-              where: { funding: 0 },
+              where: {
+                OR: [
+                  { funding: 0 },
+                  {
+                    position: {
+                      fundingPolicy: {
+                        path: ["version"],
+                        equals: "cryptoanal-funding@mark-open-v1",
+                      },
+                    },
+                  },
+                ],
+              },
               orderBy: [{ closedAt: "asc" }, { id: "asc" }],
               select: {
                 symbol: true,
                 grossPnl: true,
                 fees: true,
                 funding: true,
+                position: { select: { fundingPolicy: true } },
                 slippage: true,
                 netPnl: true,
                 openedAt: true,

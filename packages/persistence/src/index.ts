@@ -161,3 +161,7 @@ export { ValidationInstrumentRulesError } from "./validation-repository";
 
 export * from "./liquidity-exit-model";
 export * from "./liquidity-exit-proof";
+
+export * from "./funding-repository";
+
+export * from "./funding-proof";

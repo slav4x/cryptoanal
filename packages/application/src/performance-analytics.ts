@@ -155,7 +155,7 @@ export function buildPerformanceAnalytics(
       grossPnl: round(sum(trades.map((trade) => trade.grossPnl))),
       netPnl: round(sum(trades.map((trade) => trade.netPnl))),
       totalFees: round(sum(trades.map((trade) => trade.fees))),
-      totalFunding: 0,
+      totalFunding: round(trades.reduce((sum, trade) => sum + trade.funding, 0)),
       totalSlippage: round(sum(trades.map((trade) => trade.slippage))),
       profitFactor: grossLoss > 0 ? round(grossProfit / grossLoss) : null,
       expectancy:

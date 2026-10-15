@@ -345,6 +345,14 @@ export const watchlistStateSchema = z.object({
 });
 
 export const positionSchema = z.object({
+  funding: z
+    .object({
+      status: z.enum(["disabled", "ready", "pending"]),
+      amount: z.string().nullable(),
+      remaining: z.string().nullable(),
+      reason: z.string().nullable(),
+    })
+    .optional(),
   closing: z.boolean().default(false),
   realizedPnl: z.string().default("0"),
   id: z.string(),
@@ -375,6 +383,10 @@ export const fundingPolicySchema = z.object({
   version: z.string(),
   status: z.enum(["disabled", "enabled"]),
   reason: z.string(),
+  priceModel: z.string().optional(),
+  boundary: z.string().optional(),
+  rounding: z.string().optional(),
+  snapshotHash: z.string().optional(),
 });
 export const metricsProvenanceSchema = z.object({
   schemaVersion: z.literal(1).default(1),
@@ -888,6 +900,7 @@ export const validationTradeResultSchema = z.object({
   quantity: z.number(),
   netPnl: z.number(),
   fees: z.number().nonnegative(),
+  funding: z.number().optional(),
   exitReason: z.enum(["stop-loss", "take-profit", "trailing-stop", "signal-exit", "end-of-data"]),
 });
 
@@ -902,6 +915,7 @@ export const validationMetricsSchema = z.object({
   profitFactor: z.number().nonnegative().nullable(),
   expectancy: z.number(),
   totalFees: z.number().nonnegative(),
+  totalFunding: z.number().optional(),
   candleCount: z.number().int().nonnegative(),
   evaluation: z
     .object({
@@ -948,6 +962,7 @@ export const validationMetricsSummarySchema = validationMetricsSchema.pick({
   profitFactor: true,
   expectancy: true,
   totalFees: true,
+  totalFunding: true,
   candleCount: true,
   windows: true,
   gateReasons: true,

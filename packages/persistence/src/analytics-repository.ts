@@ -1,3 +1,4 @@
+import type { Prisma } from "./generated/prisma/client";
 import type { CryptoAnalPrismaClient } from "./client";
 
 export type AnalyticsTradeFilters = {
@@ -11,14 +12,21 @@ export class AnalyticsRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
 
   public async getPerformanceDataset(workspaceId: string, filters: AnalyticsTradeFilters) {
-    const where = {
+    const where: Prisma.TradeWhereInput = {
       workspaceId,
-      funding: 0,
+      OR: [
+        { funding: 0 },
+        {
+          position: {
+            fundingPolicy: { path: ["version"], equals: "cryptoanal-funding@mark-open-v1" },
+          },
+        },
+      ],
       ...(filters.startsAt ? { closedAt: { gte: filters.startsAt } } : {}),
       ...(filters.environment ? { environment: filters.environment } : {}),
       ...(filters.strategyId ? { strategyVersion: { strategyId: filters.strategyId } } : {}),
       ...(filters.symbol ? { symbol: filters.symbol } : {}),
-    } as const;
+    };
 
     const [trades, availableTrades] = await Promise.all([
       this.prisma.trade.findMany({
@@ -33,6 +41,7 @@ export class AnalyticsRepository {
           grossPnl: true,
           fees: true,
           funding: true,
+          position: { select: { fundingPolicy: true } },
           slippage: true,
           netPnl: true,
           exitReason: true,
@@ -48,7 +57,17 @@ export class AnalyticsRepository {
         },
       }),
       this.prisma.trade.findMany({
-        where: { workspaceId, funding: 0 },
+        where: {
+          workspaceId,
+          OR: [
+            { funding: 0 },
+            {
+              position: {
+                fundingPolicy: { path: ["version"], equals: "cryptoanal-funding@mark-open-v1" },
+              },
+            },
+          ],
+        },
         distinct: ["strategyVersionId", "symbol", "environment"],
         select: {
           symbol: true,
@@ -93,6 +112,7 @@ export class AnalyticsRepository {
         configHash: trade.executionRun.configHash,
       })),
       provenance: {
+        fundingEnabled: trades.some((t) => !!t.position.fundingPolicy),
         engineVersions: [
           ...new Set(trades.map((trade) => trade.executionRun.engineVersion)),
         ].sort(),

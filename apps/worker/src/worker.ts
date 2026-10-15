@@ -1,3 +1,5 @@
+import { enabledFundingPolicy, type ExecutionFundingDataset } from "@cryptoanal/application";
+import { FundingRepository, hashTracePayload } from "@cryptoanal/persistence";
 import { runtimeErrorMessage } from "./runtime-error";
 import { runtimeTraceInputs, type RuntimeTraceRecovery } from "./runtime-trace";
 import { replayPendingEntryEvents } from "./runtime-pending-entry";
@@ -32,7 +34,6 @@ import {
   getExecutionSignal,
   getExecutionMarketRegime,
   getExecutionTradingSession,
-  fundingPolicy,
   metricProvenanceSchemaVersion,
   minimumExecutionCandleCount,
   runValidationEngine,
@@ -156,6 +157,7 @@ const runtimeEntryLiquidityPolicy = {
   maximumBookAgeMs: config.RUNTIME_ENTRY_BOOK_MAX_AGE_MS,
   makerParticipationBps: config.RUNTIME_ENTRY_MAKER_PARTICIPATION_BPS,
 };
+const fundingRepository = new FundingRepository(prisma);
 const runtimeRepository = new RuntimeRepository(
   prisma,
   runtimeRiskPolicy,
@@ -172,6 +174,7 @@ const runtimeRepository = new RuntimeRepository(
     maximumBookAgeMs: config.RUNTIME_EXIT_BOOK_MAX_AGE_MS,
     orderTtlMs: config.RUNTIME_EXIT_ORDER_TTL_MS,
   },
+  enabledFundingPolicy,
 );
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
@@ -324,6 +327,72 @@ async function instrumentMetadataLoop() {
     }
 
     await delay(config.INSTRUMENT_SYNC_INTERVAL_MS);
+  }
+}
+
+async function fundingLoop() {
+  while (!stopping) {
+    try {
+      const [tickers, positions, series] = await Promise.all([
+        marketClient.getLinearTickers(),
+        fundingRepository.listOpen(),
+        listRequiredMarketSeries(),
+      ]);
+      const symbols = [
+        ...new Set([...series.map((s) => s.symbol), ...positions.map((p) => p.symbol)]),
+      ].filter((s) => s.endsWith("USDT"));
+      for (const symbol of symbols) {
+        if (stopping) break;
+        try {
+          const ticker = tickers.find((t) => t.symbol === symbol);
+          if (!ticker?.nextFundingAt || ticker.nextFundingAt <= ticker.observedAt)
+            throw new Error("Funding schedule unavailable");
+          const held = positions.filter((p) => p.symbol === symbol),
+            throughAt = new Date(Math.min(Date.now(), +ticker.observedAt));
+          const startsAt = new Date(
+            held.reduce((min, p) => Math.min(min, +p.openedAt), +throughAt),
+          );
+          const prior = await prisma.fundingMarketState.findUnique({
+            where: { symbol },
+            include: { snapshot: true },
+          });
+          if (prior && hashTracePayload(prior.snapshot.payload) !== prior.snapshot.payloadHash)
+            throw new Error("Funding cache checksum mismatch");
+          const reusable =
+            prior &&
+            prior.checkedFrom <= startsAt &&
+            +prior.nextFundingAt === +ticker.nextFundingAt &&
+            prior.nextFundingAt > throughAt &&
+            !held.some((p) => (p.fundingState as { status?: string } | null)?.status === "pending");
+          const data: ExecutionFundingDataset = reusable
+            ? (prior.snapshot.payload as unknown as ExecutionFundingDataset)
+            : {
+                version: 1,
+                policy: enabledFundingPolicy,
+                symbols: [symbol],
+                startsAt: startsAt.toISOString(),
+                throughAt: throughAt.toISOString(),
+                coverage: "complete",
+                events: await marketClient.getLinearFundingHistory(symbol, startsAt, throughAt),
+              };
+          await fundingRepository.saveMarket({
+            data,
+            nextFundingAt: ticker.nextFundingAt,
+            observedAt: ticker.observedAt,
+          });
+          for (const p of held) await fundingRepository.synchronizePosition(p.id);
+        } catch (error) {
+          await fundingRepository.markUnavailable(symbol, "FUNDING_SOURCE_UNAVAILABLE");
+          logger.warn(
+            { err: error, symbol },
+            "Funding source unavailable; protective price processing continues",
+          );
+        }
+      }
+    } catch (error) {
+      logger.error({ err: error }, "Funding synchronization failed");
+    }
+    await delay(15000);
   }
 }
 
@@ -1463,7 +1532,8 @@ async function processRealtimeEntry(
         if (submitted.applied) return { status: "conflict" };
         if (
           submitted.riskFailure?.startsWith("ENTRY_BOOK") ||
-          submitted.riskFailure === "ENTRY_SPREAD_LIMIT"
+          submitted.riskFailure === "ENTRY_SPREAD_LIMIT" ||
+          submitted.riskFailure === "FUNDING_DATA_UNAVAILABLE"
         )
           return { status: "no-touch", reason: submitted.riskFailure as RuntimeEntryWaitReason };
         return submitted.riskFailure
@@ -1494,7 +1564,10 @@ async function processRealtimeEntry(
         unrealizedPnl: String(executionUnrealizedPnl(position, quote.price)),
         maxOpenPositions: strategyConfig.risk.maxOpenPositions,
         entryOrderType: strategyConfig.entry.orderType === "market" ? "MARKET" : "LIMIT",
-        position: serializePosition(position),
+        position: {
+          ...serializePosition(position),
+          ...(order.fundingPolicy ? { fundingPolicy: order.fundingPolicy } : {}),
+        },
         factors: {
           ...realtimeQuoteFactors(quote),
           source: "durable-price-events",
@@ -2131,7 +2204,49 @@ async function processValidationJob(job: ClaimedValidationJob) {
       workerId,
       symbols: dataset.symbols,
     });
+    let fundingScenario = await validationRepository.getFundingSnapshot(job.workspaceId, job.runId);
+    if (!fundingScenario) {
+      const startsAt = dataset.candles.reduce((min, c) => Math.min(min, +c.openTime), Infinity);
+      const throughAt =
+        +dataset.endsAt + timeframeMinutes[strategyConfig.universe.timeframe] * 60000;
+      const events: ExecutionFundingDataset["events"] = [];
+      for (const symbol of dataset.symbols) {
+        try {
+          events.push(
+            ...(await marketClient.getLinearFundingHistory(
+              symbol,
+              new Date(startsAt),
+              new Date(throughAt),
+              AbortSignal.timeout(120000),
+            )),
+          );
+        } catch (error) {
+          throw new ValidationWorkerError(
+            "FUNDING_HISTORY_UNAVAILABLE",
+            `${symbol}: ${errorMessage(error)}`,
+          );
+        }
+        if (!(await validationRepository.updateProgress(job.jobId, workerId, 85)))
+          throw new Error("Validation funding lease lost");
+      }
+      fundingScenario = await validationRepository.pinFundingSnapshot({
+        workspaceId: job.workspaceId,
+        runId: job.runId,
+        jobId: job.jobId,
+        workerId,
+        data: {
+          version: 1,
+          policy: enabledFundingPolicy,
+          symbols: dataset.symbols,
+          startsAt: new Date(startsAt).toISOString(),
+          throughAt: new Date(throughAt).toISOString(),
+          coverage: "complete",
+          events,
+        },
+      });
+    }
     const result = runValidationEngine({
+      funding: fundingScenario.payload,
       instrumentRules: instrumentScenario.instruments,
       config: strategyConfig,
       candles: dataset.candles,
@@ -2165,7 +2280,7 @@ async function processValidationJob(job: ClaimedValidationJob) {
         engineVersion: validationEngineVersion,
         asOf: dataset.endsAt.toISOString(),
         freshness: "immutable",
-        fundingPolicy,
+        fundingPolicy: { ...enabledFundingPolicy, snapshotHash: fundingScenario.hash },
         instrumentRules: {
           mode: "fixed-snapshot-scenario",
           observedAt: instrumentScenario.capturedAt,
@@ -2179,6 +2294,7 @@ async function processValidationJob(job: ClaimedValidationJob) {
       },
     });
     await validationRepository.complete({
+      engineVersion: validationEngineVersion,
       workerId,
       jobId: job.jobId,
       runId: job.runId,
@@ -2196,6 +2312,7 @@ async function processValidationJob(job: ClaimedValidationJob) {
         quantity: String(trade.quantity),
         netPnl: String(trade.netPnl),
         fees: String(trade.fees),
+        funding: String(trade.funding ?? 0),
         exitReason: trade.exitReason,
       })),
     });
@@ -2478,6 +2595,8 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  fundingPolicy?: unknown;
+  fundingRemaining?: { toNumber(): number } | null;
   remainingQuantity?: { toNumber(): number } | null;
   remainingEntryFee?: { toNumber(): number } | null;
   exitPolicy?: unknown;
@@ -2516,6 +2635,7 @@ function deserializeExecutionPosition(position: {
     takePrice: position.takePrice.toNumber(),
     trailingPrice: position.trailingPrice?.toNumber() ?? null,
     bestPrice: position.bestPrice.toNumber(),
+    ...(position.fundingPolicy ? { fundingPaid: position.fundingRemaining?.toNumber() ?? 0 } : {}),
     entryFee: (position.remainingEntryFee ?? position.entryFee).toNumber(),
     entrySlippage: position.entrySlippage.toNumber(),
   };
@@ -2872,6 +2992,7 @@ logger.info({ workerId }, "Worker started");
 await Promise.all([
   heartbeatLoop(),
   marketDataLoop(),
+  fundingLoop(),
   candleDataLoop(),
   instrumentMetadataLoop(),
   marketStreamLoop(),

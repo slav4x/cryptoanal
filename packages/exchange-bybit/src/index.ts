@@ -57,6 +57,8 @@ const tickerResponseSchema = z.object({
         lastPrice: z.string(),
         price24hPcnt: z.string(),
         turnover24h: z.string(),
+        markPrice: z.string().optional(),
+        nextFundingTime: z.string().optional(),
       }),
     ),
   }),
@@ -170,6 +172,8 @@ const apiKeyInformationResponseSchema = z.object({
 });
 
 export type BybitMarketTicker = {
+  markPrice?: string;
+  nextFundingAt?: Date;
   symbol: string;
   price: string;
   change24hPercent: string;
@@ -450,6 +454,17 @@ export class BybitPublicMarketClient {
       price: ticker.lastPrice,
       change24hPercent: new Decimal(ticker.price24hPcnt).mul(100).toString(),
       volume24h: ticker.turnover24h,
+      ...(ticker.markPrice &&
+      new Decimal(ticker.markPrice).isFinite() &&
+      new Decimal(ticker.markPrice).gt(0)
+        ? { markPrice: ticker.markPrice }
+        : {}),
+      ...(ticker.nextFundingTime &&
+      /^\d+$/.test(ticker.nextFundingTime) &&
+      Number(ticker.nextFundingTime) > 0 &&
+      Number.isFinite(+new Date(Number(ticker.nextFundingTime)))
+        ? { nextFundingAt: new Date(Number(ticker.nextFundingTime)) }
+        : {}),
       observedAt,
     }));
   }
@@ -529,6 +544,164 @@ export class BybitPublicMarketClient {
     }
 
     return [...instruments.values()].sort((left, right) => left.symbol.localeCompare(right.symbol));
+  }
+
+  public async getLinearFundingHistory(
+    symbol: string,
+    startsAt: Date,
+    throughAt: Date,
+    signal?: AbortSignal,
+  ): Promise<
+    Array<{
+      symbol: string;
+      settledAt: string;
+      rate: string;
+      markPrice: string;
+      markInterval: "1" | "60";
+    }>
+  > {
+    if (
+      !/^[A-Z0-9]+USDT$/.test(symbol) ||
+      ![+startsAt, +throughAt].every(Number.isFinite) ||
+      +startsAt > +throughAt ||
+      +throughAt > Date.now() + 1000
+    )
+      throw new Error("Invalid funding history range");
+    const schema = z.object({
+      retCode: z.number(),
+      retMsg: z.string(),
+      time: z.number(),
+      result: z.object({
+        category: z.literal("linear"),
+        list: z.array(
+          z.object({
+            symbol: z.string(),
+            fundingRate: z.string(),
+            fundingRateTimestamp: z.string(),
+          }),
+        ),
+      }),
+    });
+    const request = async (path: string, params: Record<string, string>) => {
+      const url = new URL(path, this.baseUrl);
+      url.search = new URLSearchParams({ category: "linear", symbol, ...params }).toString();
+      const response = await this.fetchImpl(url, {
+        headers: { Accept: "application/json" },
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+          : AbortSignal.timeout(15000),
+      });
+      if (!response.ok)
+        throw new Error(`Bybit funding request failed with HTTP ${response.status}`);
+      return response.json() as Promise<unknown>;
+    };
+    const rates = new Map<number, string>();
+    let cursor = +throughAt;
+    while (cursor >= +startsAt) {
+      const page = parsePublicResponse(
+        await request("/v5/market/funding/history", {
+          startTime: String(+startsAt),
+          endTime: String(cursor),
+          limit: "200",
+        }),
+        schema,
+        "funding history",
+      );
+      if (page.time < +throughAt) throw new Error("Funding range extends beyond exchange time");
+      if (!page.result.list.length) break;
+      let earliest = Infinity;
+      for (const row of page.result.list) {
+        const at = Number(row.fundingRateTimestamp),
+          rate = new Decimal(row.fundingRate);
+        if (
+          row.symbol !== symbol ||
+          !Number.isSafeInteger(at) ||
+          at < +startsAt ||
+          at > cursor ||
+          at % 60000 !== 0 ||
+          !rate.isFinite() ||
+          rate.abs().gt(1) ||
+          rate.decimalPlaces() > 18 ||
+          rates.has(at)
+        )
+          throw new Error("Invalid funding history page");
+        rates.set(at, rate.toFixed());
+        earliest = Math.min(earliest, at);
+      }
+      if (rates.size > 30000) throw new Error("Funding history exceeds 30000 settlements");
+      if (page.result.list.length < 200 || earliest <= +startsAt) break;
+      cursor = earliest - 1;
+    }
+    if (!rates.size) return [];
+    const wanted = [...rates.keys()],
+      interval = wanted.every((at) => at % 3600000 === 0) ? "60" : "1";
+    const marks = new Map<number, string>(),
+      markSchema = z.object({
+        retCode: z.number(),
+        retMsg: z.string(),
+        result: z.object({
+          category: z.literal("linear"),
+          symbol: z.string(),
+          list: z.array(z.tuple([z.string(), z.string(), z.string(), z.string(), z.string()])),
+        }),
+      });
+    const earliest = Math.min(...wanted);
+    cursor = Math.max(...wanted);
+    let scanned = 0;
+    while (cursor >= earliest) {
+      const page = parsePublicResponse(
+        await request("/v5/market/mark-price-kline", {
+          interval,
+          start: String(earliest),
+          end: String(cursor),
+          limit: "1000",
+        }),
+        markSchema,
+        "funding mark kline",
+      );
+      if (page.result.symbol !== symbol) throw new Error("Funding mark symbol mismatch");
+      if (!page.result.list.length) break;
+      let first = Infinity;
+      for (const [time, open, high, low, close] of page.result.list) {
+        const at = Number(time),
+          price = new Decimal(open);
+        if (
+          !Number.isSafeInteger(at) ||
+          at < earliest ||
+          at > cursor ||
+          at % (Number(interval) * 60000) !== 0 ||
+          !price.isFinite() ||
+          !price.gt(0) ||
+          price.decimalPlaces() > 18 ||
+          new Decimal(low).gt(price) ||
+          new Decimal(high).lt(price) ||
+          !new Decimal(close).isFinite()
+        )
+          throw new Error("Invalid funding mark candle");
+        if (rates.has(at)) {
+          if (marks.has(at)) throw new Error("Duplicate funding mark candle");
+          marks.set(at, price.toFixed());
+        }
+        first = Math.min(first, at);
+      }
+      scanned += page.result.list.length;
+      if (scanned > 250000) throw new Error("Funding mark history exceeds 250000 candles");
+      if (first <= earliest || page.result.list.length < 1000) break;
+      cursor = first - 1;
+    }
+    return wanted
+      .sort((a, b) => a - b)
+      .map((at) => {
+        const markPrice = marks.get(at);
+        if (!markPrice) throw new Error(`Funding mark price unavailable at ${at}`);
+        return {
+          symbol,
+          settledAt: new Date(at).toISOString(),
+          rate: rates.get(at)!,
+          markPrice,
+          markInterval: interval,
+        };
+      });
   }
 
   public async getLinearKlines(

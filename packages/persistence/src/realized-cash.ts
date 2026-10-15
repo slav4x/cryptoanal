@@ -2,7 +2,7 @@ import { Prisma } from "./generated/prisma/client";
 import { exitDecimal } from "./liquidity-exit-model";
 
 export async function realizedCashPnl(
-  tx: Pick<Prisma.TransactionClient, "trade" | "fill">,
+  tx: Pick<Prisma.TransactionClient, "trade" | "fill" | "positionFundingPayment">,
   input: {
     workspaceId: string;
     exchangeAccountId?: string;
@@ -15,7 +15,7 @@ export async function realizedCashPnl(
     ? { deployment: { exchangeAccountId: input.exchangeAccountId } }
     : {};
   const range = { gte: input.since, ...(input.until ? { lte: input.until } : {}) };
-  const [legacy, partial] = await Promise.all([
+  const [legacy, partial, funding] = await Promise.all([
     tx.trade.aggregate({
       where: {
         workspaceId: input.workspaceId,
@@ -45,8 +45,20 @@ export async function realizedCashPnl(
       },
       _sum: { realizedNetPnl: true },
     }),
+    tx.positionFundingPayment.aggregate({
+      where: {
+        workspaceId: input.workspaceId,
+        settledAt: range,
+        position: {
+          executionRun: account,
+          ...(input.environment ? { environment: input.environment } : {}),
+        },
+      },
+      _sum: { amount: true },
+    }),
   ]);
   return exitDecimal(legacy._sum.netPnl ?? 0)
     .add(partial._sum.realizedNetPnl?.toFixed() ?? 0)
+    .sub(funding._sum.amount?.toFixed() ?? 0)
     .toFixed();
 }

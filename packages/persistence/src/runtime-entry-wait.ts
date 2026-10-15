@@ -1,4 +1,5 @@
 export type RuntimeEntryWaitReason =
+  | "FUNDING_DATA_UNAVAILABLE"
   | "ENTRY_BOOK_AFTER_SUBMISSION_REQUIRED"
   | "ENTRY_BOOK_UNAVAILABLE"
   | "ENTRY_BOOK_STALE"
@@ -42,6 +43,7 @@ export function runtimeEntryQuoteWaitReason(input: {
 
 export function runtimeEntryWaitSummary(reason: RuntimeEntryWaitReason): string {
   const messages: Record<RuntimeEntryWaitReason, string> = {
+    FUNDING_DATA_UNAVAILABLE: "Вход ожидает подтверждённых данных funding",
     ENTRY_BOOK_AFTER_SUBMISSION_REQUIRED:
       "Рыночная заявка ожидает наблюдения стакана после отправки",
     ENTRY_BOOK_UNAVAILABLE: "Вход ожидает доступного стакана",

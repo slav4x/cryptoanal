@@ -519,9 +519,25 @@ fixture с точным порядком котировок. Validation, Analyti
 provenance-контракт с environment, exchange/source/instrument type, версиями dataset,
 config и engine, hashes, freshness и `asOf`.
 
-Funding пока отключён политикой `cryptoanal-funding@disabled-v1`: runtime пишет ноль,
-legacy-сделки с ненулевым funding исключаются из Analytics и Experiments. Включать funding
-можно только после воспроизводимого теста exchange timestamps, ставок, позиции и cash flow.
+Новые DRY_RUN заявки execution `0.9.0` закрепляют funding policy
+`cryptoanal-funding@mark-open-v1`: публичные исторические ставки и времена расчёта,
+mark-kline open как явный ценовой сценарий. Знак стоимости: положительный — списание,
+отрицательный — поступление. Funding входит в net PnL/equity, дневной риск и безубыток;
+учитываются фактический остаток и частичные выходы. История и SHA-256 закрепляются
+для начислений, нового validation `0.14.0` и replay `1.8.0`.
+
+При неполных данных новые входы ждут; исполнение стопов продолжается. Полностью
+закрытый объём может ожидать окончательного funding-расчёта без рыночной экспозиции.
+Интерфейс показывает сумму и ожидание. Начисления идемпотентны и восстанавливаются
+после restart; поздние данные не переписывают fills. Точное биржевое включение вблизи
+funding timestamp и точная settlement mark-price публичной историей не подтверждаются.
+[Правила, проверки и ограничения](docs/funding-cashflows-2026-10-15.md).
+
+Старые позиции и заявки сохраняют `cryptoanal-funding@disabled-v1`; сохранённые Trades
+и validation results не меняются. Непроверенные legacy-сделки с ненулевым funding
+исключаются из Analytics/Experiments, новые проверяемые начисления включаются.
+Отдельный сценарный пересчёт истории без записи в сделки:
+`pnpm runtime:recalculate-funding var/analysis/funding-history-scenario.json`.
 Правила обновления fixtures описаны в [`research/README.md`](research/README.md).
 
 Каталог validation возвращает только лёгкие summary-метрики. Полные equity points,

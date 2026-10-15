@@ -1,3 +1,11 @@
+import {
+  enabledFundingPolicy,
+  type ExecutionFundingDataset,
+} from "../packages/application/src/execution-funding";
+import {
+  FundingRepository,
+  initialPositionFundingState,
+} from "../packages/persistence/src/funding-repository";
 import assert from "node:assert/strict";
 import { Prisma } from "../packages/persistence/src/generated/prisma/client";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -316,6 +324,22 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
     } satisfies Pick<PersistRuntimeCycleInput, "providerVersion" | "candidate" | "contextSnapshot">;
   }
   try {
+    await t.test("ticker funding fields never leak into market snapshot storage", async () => {
+      const c = await setup();
+      const ticker = {
+        symbol: c.symbol,
+        price: "100",
+        change24hPercent: "1",
+        volume24h: "10",
+        observedAt: new Date(),
+        markPrice: "101",
+        nextFundingAt: new Date(Date.now() + 3600000),
+      };
+      assert.equal(await candles.saveSnapshots([ticker]), 1);
+      const stored = await prisma.marketSnapshot.findFirstOrThrow({ where: { symbol: c.symbol } });
+      assert.equal(stored.price.toFixed(), "100");
+      assert.equal(stored.regime, "unknown");
+    });
     await t.test(
       "archive cleanup retains a pending entry cursor without open positions",
       async () => {
@@ -3689,6 +3713,22 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         where: { id: source.id },
         data: { receivedAt: quoteAt, executionData: data },
       });
+      if (repository !== runtime) {
+        const now = new Date();
+        await new FundingRepository(prisma).saveMarket({
+          data: {
+            version: 1,
+            policy: enabledFundingPolicy,
+            symbols: [context.symbol],
+            startsAt: now.toISOString(),
+            throughAt: now.toISOString(),
+            coverage: "complete",
+            events: [],
+          },
+          nextFundingAt: new Date(+now + 3600000),
+          observedAt: now,
+        });
+      }
       const submitted = await repository.submitRealtimeEntryOrder({
         workspaceId: context.workspace.id,
         executionRunId: context.run.id,
@@ -3766,6 +3806,9 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         position: {
           ...context.entry.position,
           ...(context.snapshot.exitPolicy ? { exitPolicy: context.snapshot.exitPolicy } : {}),
+          ...(context.snapshot.fundingPolicy
+            ? { fundingPolicy: context.snapshot.fundingPolicy }
+            : {}),
           entryExecution: p.entryExecution!,
           openedAt: time,
           quantity: String(p.quantity),
@@ -4240,8 +4283,17 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         ...defaultLiquidityExitPolicy,
         orderTtlMs: 1000,
       });
-    async function exitContext() {
-      const repo = exitRepository(),
+    async function exitContext(funded = false) {
+      const repo = funded
+          ? new RuntimeRepository(
+              prisma,
+              undefined,
+              undefined,
+              undefined,
+              { ...defaultLiquidityExitPolicy, orderTtlMs: 1000 },
+              enabledFundingPolicy,
+            )
+          : exitRepository(),
         context = await liquiditySetup(false, false, "0", repo);
       const { input } = await liquidityFill(context);
       assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
@@ -4295,6 +4347,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           entrySession: "europe",
           entryPrice: Number(p.entryPrice),
           quantity: Number(p.quantity),
+          ...(p.fundingPolicy ? { fundingPaid: p.fundingRemaining!.toNumber() } : {}),
           stopPrice: Number(p.stopPrice),
           takePrice: Number(p.takePrice),
           trailingPrice: null,
@@ -4362,13 +4415,27 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         expectedPositionVersion: p.runtimeVersion,
       });
     }
-    async function replayExit(context: Awaited<ReturnType<typeof exitContext>>, tamper = false) {
+    async function replayExit(
+      context: Awaited<ReturnType<typeof exitContext>>,
+      tamper: boolean | "funding" = false,
+      missingSource = false,
+    ) {
       const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
         where: { positionId: context.position.id },
         include: { records: { orderBy: { id: "asc" } }, position: { include: { trade: true } } },
       });
       const t = trace.position.trade;
-      if (tamper) {
+      if (tamper === "funding") {
+        const record = trace.records.find(
+          (r) => r.kind === "funding" && (r.payload as { payments: unknown[] }).payments.length,
+        )!;
+        const payload = structuredClone(record.payload) as unknown as {
+          payments: Array<{ amount: string }>;
+        };
+        payload.payments[0]!.amount = "999";
+        record.payload = payload as unknown as Prisma.JsonValue;
+        record.payloadHash = hashTracePayload(payload);
+      } else if (tamper) {
         const record = trace.records.find(
           (r) =>
             r.kind === "liquidity-step" &&
@@ -4389,6 +4456,13 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         records: trace.records,
         loadEvents: (cursor, through) =>
           new PriceArchiveRepository(prisma).after(context.symbol, cursor, through),
+        loadFundingSnapshot: (id) =>
+          missingSource
+            ? Promise.resolve(null)
+            : prisma.fundingHistorySnapshot.findUnique({
+                where: { id },
+                select: { payload: true, payloadHash: true },
+              }),
         trade: t
           ? {
               exitReason: t.exitReason,
@@ -4398,10 +4472,203 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
               netPnl: t.netPnl.toFixed(),
               fees: t.fees.toFixed(),
               slippage: t.slippage.toFixed(),
+              funding: t.funding.toFixed(),
             }
           : null,
       });
     }
+    async function fundingContext() {
+      const c = await exitContext(true),
+        settledAt = new Date(Math.floor(Date.now() / 60000) * 60000),
+        openedAt = new Date(+settledAt - 3600000);
+      const state = initialPositionFundingState(openedAt, settledAt);
+      c.position = await prisma.position.update({
+        where: { id: c.position.id },
+        data: { openedAt, fundingState: state },
+      });
+      const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+        where: { positionId: c.position.id },
+      });
+      const snapshot = structuredClone(trace.snapshot) as unknown as {
+        position: Record<string, unknown>;
+        funding: Record<string, unknown>;
+      };
+      snapshot.position.openedAt = openedAt.toISOString();
+      snapshot.funding.state = state;
+      await prisma.positionExecutionTrace.update({
+        where: { positionId: c.position.id },
+        data: {
+          snapshot: snapshot as unknown as Prisma.InputJsonValue,
+          snapshotHash: hashTracePayload(snapshot),
+          fullFromEntry: false,
+        },
+      });
+      const funding = new FundingRepository(prisma);
+      const data: ExecutionFundingDataset = {
+        version: 1,
+        policy: enabledFundingPolicy,
+        symbols: [c.symbol],
+        startsAt: openedAt.toISOString(),
+        throughAt: new Date().toISOString(),
+        coverage: "complete",
+        events: [
+          {
+            symbol: c.symbol,
+            settledAt: settledAt.toISOString(),
+            rate: "0.001",
+            markPrice: "100",
+            markInterval: "1",
+          },
+        ],
+      };
+      const publish = () =>
+        funding.saveMarket({
+          data,
+          nextFundingAt: new Date(+settledAt + 3600000),
+          observedAt: new Date(),
+        });
+      return { c, funding, data, publish };
+    }
+    await t.test(
+      "funding policy pins to new entry; missing settlement blocks entries and repeated concurrent synchronization pays once",
+      async () => {
+        const { c, funding, publish } = await fundingContext();
+        assert.equal(c.snapshot.fundingPolicy?.version, enabledFundingPolicy.version);
+        await publish();
+        const freshMarket = await prisma.fundingMarketState.findUniqueOrThrow({
+          where: { symbol: c.symbol },
+        });
+        const savedData = (
+          await prisma.fundingHistorySnapshot.findUniqueOrThrow({
+            where: { id: freshMarket.snapshotId },
+          })
+        ).payload as unknown as ExecutionFundingDataset;
+        await funding.saveMarket({
+          data: savedData,
+          nextFundingAt: new Date(+freshMarket.nextFundingAt + 3600000),
+          observedAt: new Date(+freshMarket.observedAt - 1000),
+        });
+        assert.deepEqual(
+          await prisma.fundingMarketState.findUniqueOrThrow({ where: { symbol: c.symbol } }),
+          freshMarket,
+        );
+        await Promise.all([
+          funding.synchronizePosition(c.position.id),
+          funding.synchronizePosition(c.position.id),
+        ]);
+        let p = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        assert.equal(p.fundingAccrued!.toFixed(), "0.04");
+        assert.equal(p.fundingRemaining!.toFixed(), "0.04");
+        assert.equal(p.realizedPnl.toFixed(), "-0.04");
+        assert.equal(await prisma.positionFundingPayment.count({ where: { positionId: p.id } }), 1);
+        assert.equal(
+          await realizedCashPnl(prisma, {
+            workspaceId: p.workspaceId,
+            exchangeAccountId: c.deployment.exchangeAccountId,
+            environment: "DRY_RUN",
+            since: new Date(0),
+          }),
+          "-0.04",
+        );
+        assert.equal((await replayExit(c)).status, "matched");
+        await assert.rejects(replayExit(c, "funding"), /cash flow/);
+        await assert.rejects(replayExit(c, false, true), /source snapshot is missing/);
+        await funding.markUnavailable(c.symbol, "FUNDING_SOURCE_UNAVAILABLE");
+        assert.equal(
+          (
+            await new RuntimeRiskRepository(prisma).assess(
+              c.workspace.id,
+              c.deployment.exchangeAccountId,
+              fixture.config as Prisma.JsonValue,
+            )
+          ).reason,
+          "FUNDING_DATA_UNAVAILABLE",
+        );
+        p = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        assert.equal((p.fundingState as { status: string }).status, "pending");
+        c.position = p;
+        await latchExit(c);
+        await advanceExit(c);
+        await exitEvent(c, "97", "1");
+        await new Promise((r) => setTimeout(r, 1100));
+        await advanceExit(c);
+        p = await prisma.position.findUniqueOrThrow({ where: { id: p.id } });
+        assert.equal(p.remainingQuantity!.toFixed(), "0");
+        assert.equal(p.status, "OPEN");
+        assert.equal(await prisma.trade.count({ where: { positionId: p.id } }), 0);
+        await publish();
+        await new FundingRepository(prisma).synchronizePosition(p.id);
+        assert.deepEqual(await advanceExit(c), { applied: true, closed: true });
+        const trade = await prisma.trade.findUniqueOrThrow({ where: { positionId: p.id } });
+        assert.equal(trade.funding.toFixed(), "0.04");
+        assert.equal(await prisma.positionFundingPayment.count({ where: { positionId: p.id } }), 1);
+        assert.equal((await replayExit(c)).status, "matched");
+      },
+    );
+    await t.test(
+      "late funding after partial fills uses original settlement exposure and preserves fill cash",
+      async () => {
+        const { c, funding, publish } = await fundingContext();
+        await funding.markUnavailable(c.symbol, "FUNDING_SOURCE_UNAVAILABLE");
+        c.position = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        await latchExit(c);
+        await advanceExit(c);
+        await exitEvent(c);
+        await new Promise((r) => setTimeout(r, 1100));
+        await advanceExit(c);
+        const before = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        assert.equal(before.remainingQuantity!.toFixed(), "0.25");
+        const fill = await prisma.fill.findFirstOrThrow({
+          where: { order: { positionId: before.id, side: "SELL" } },
+        });
+        await publish();
+        await funding.synchronizePosition(before.id);
+        const after = await prisma.position.findUniqueOrThrow({ where: { id: before.id } });
+        assert.equal(after.fundingAccrued!.toFixed(), "0.04");
+        assert.equal(after.fundingRemaining!.toFixed(), "0.025");
+        assert.equal(after.realizedPnl.sub(before.realizedPnl).toFixed(), "-0.04");
+        assert.deepEqual(await prisma.fill.findUniqueOrThrow({ where: { id: fill.id } }), fill);
+        assert.equal((await replayExit(c)).status, "matched");
+      },
+    );
+    await t.test(
+      "funding payment write failure rolls back money, proof and runtime version",
+      async () => {
+        const { c, funding, publish } = await fundingContext();
+        await publish();
+        const before = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } }),
+          records = await prisma.positionTraceRecord.count({
+            where: { positionId: c.position.id },
+          });
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION reject_funding_payment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'funding write unavailable'; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER reject_funding_payment BEFORE INSERT ON "PositionFundingPayment" FOR EACH ROW EXECUTE FUNCTION reject_funding_payment()`,
+        );
+        try {
+          await assert.rejects(funding.synchronizePosition(c.position.id));
+          assert.deepEqual(
+            await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } }),
+            before,
+          );
+          assert.equal(
+            await prisma.positionTraceRecord.count({ where: { positionId: c.position.id } }),
+            records,
+          );
+        } finally {
+          await prisma.$executeRawUnsafe(
+            `DROP TRIGGER reject_funding_payment ON "PositionFundingPayment"`,
+          );
+          await prisma.$executeRawUnsafe(`DROP FUNCTION reject_funding_payment()`);
+        }
+        await funding.synchronizePosition(c.position.id);
+        assert.equal(
+          await prisma.positionFundingPayment.count({ where: { positionId: c.position.id } }),
+          1,
+        );
+      },
+    );
     await t.test(
       "liquidity stop persists intent, fills in parts, survives restart and books cash exactly once",
       async () => {

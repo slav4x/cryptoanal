@@ -314,6 +314,14 @@ function PositionsTable({
                     )}
                   >
                     {formatMoney(position.unrealizedPnl)}
+                    {position.funding?.status === "pending" && (
+                      <div className="text-xs text-warning">Funding уточняется</div>
+                    )}
+                    {position.funding?.status === "ready" && (
+                      <div className="text-xs text-muted-foreground">
+                        Funding {formatMoney(position.funding.amount)}
+                      </div>
+                    )}
                     {Number(position.realizedPnl) !== 0 && (
                       <div className="text-xs text-muted-foreground">
                         Зафиксировано {formatMoney(position.realizedPnl)}
@@ -340,7 +348,11 @@ function PositionsTable({
                         setSelectedPositionId(position.id);
                       }}
                     >
-                      {position.closing ? "Закрывается" : "Закрыть"}
+                      {position.closing
+                        ? Number(position.quantity) === 0
+                          ? "Расчёт funding"
+                          : "Закрывается"
+                        : "Закрыть"}
                     </Button>
                   </td>
                 </tr>

@@ -40,7 +40,14 @@ export class MarketDataRepository {
   public async saveSnapshots(snapshots: MarketSnapshotInput[]): Promise<number> {
     if (snapshots.length === 0) return 0;
     const result = await this.prisma.marketSnapshot.createMany({
-      data: snapshots.map((snapshot) => ({ ...snapshot, regime: "unknown" })),
+      data: snapshots.map(({ symbol, price, change24hPercent, volume24h, observedAt }) => ({
+        symbol,
+        price,
+        change24hPercent,
+        volume24h,
+        observedAt,
+        regime: "unknown",
+      })),
       skipDuplicates: true,
     });
     return result.count;

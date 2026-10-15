@@ -257,7 +257,7 @@ export class HealthRepository {
         ) events
       ) pending ON true
       WHERE p."workspaceId" = ${workspaceId} AND p.environment = 'DRY_RUN' AND p.status = 'OPEN'
-        AND r.status = 'RUNNING' AND d.status IN ('RUNNING', 'PAUSED')
+        AND coalesce(p."remainingQuantity",p.quantity)>0 AND r.status = 'RUNNING' AND d.status IN ('RUNNING', 'PAUSED')
       ORDER BY p."openedAt", p.id
     `);
     return rows.map((row) => ({

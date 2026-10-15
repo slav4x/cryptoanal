@@ -1,3 +1,5 @@
+import { allocateFunding } from "../../application/src/execution-funding";
+import { fundingSettlementReady } from "./funding-repository";
 import type { Prisma, Position } from "./generated/prisma/client";
 import {
   hashTracePayload,
@@ -89,6 +91,7 @@ export async function latchLiquidityExit(
   ).config as unknown as ExecutionStrategyConfig;
   const protection = input.action.protection;
   const pos: ExecutionPosition = {
+    ...(p.fundingPolicy ? { fundingPaid: p.fundingRemaining?.toNumber() ?? 0 } : {}),
     ...liquidityExitBasis(p),
     exitPolicy: liquidityExitBasis(p).policy,
     side: p.side === "BUY" ? "long" : "short",
@@ -270,6 +273,42 @@ export async function advanceLiquidityExit(
     })
   ).config as unknown as ExecutionStrategyConfig;
   const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0]!.now;
+  if (exitDecimal(remainingExitQuantity(state)).eq(0)) {
+    if (!p.closedAt) throw new Error("Filled exit has no final fill timestamp");
+    if (!(await fundingSettlementReady(tx, p, p.closedAt)))
+      return { applied: false, closed: false };
+    const after = { ...state, waitingReason: null };
+    const payload = {
+      version: liquidityExitVersion,
+      before: state,
+      after,
+      closedAt: p.closedAt.toISOString(),
+      funding: p.fundingAccrued?.toFixed() ?? "0",
+    };
+    await tx.positionTraceRecord.create({
+      data: {
+        positionId: p.id,
+        runtimeVersion: p.runtimeVersion + 1,
+        eventId: p.priceEventId,
+        kind: "liquidity-finalize",
+        payload: json(payload),
+        payloadHash: hashTracePayload(payload),
+      },
+    });
+    await tx.position.update({
+      where: { id: p.id },
+      data: {
+        status: "CLOSED",
+        exitState: json(after),
+        realizedPnl: exitDecimal(state.netPnl)
+          .sub(p.fundingAccrued?.toFixed() ?? "0")
+          .toFixed(),
+        runtimeVersion: { increment: 1 },
+      },
+    });
+    await completeLiquidityExit(tx, p, after, p.closedAt, now);
+    return { applied: true, closed: true };
+  }
   const latest = await tx.marketPriceEvent.findFirst({
     where: { symbol: p.symbol },
     orderBy: { id: "desc" },
@@ -282,6 +321,12 @@ export async function advanceLiquidityExit(
     publicConsumed = "0",
     scanned = 0;
   const cursor = p.priceEventId ?? 0n;
+  let fundingAllocation: {
+    before: string;
+    allocated: string;
+    remaining: string;
+    accrued: string;
+  } | null = null;
   if (!state.order) {
     const snapshot = prepareLiquidityExitOrder(
       basis,
@@ -378,6 +423,7 @@ export async function advanceLiquidityExit(
       return { applied: false, closed: false };
     if (!events.length) event = latest;
     if (result.kind === "fill") {
+      const stateBeforeFill = state;
       fill = applyLiquidityExitFill(
         basis,
         state,
@@ -387,6 +433,25 @@ export async function advanceLiquidityExit(
         event.price.toFixed(),
       );
       state = fill.state;
+      if (p.fundingPolicy) {
+        const before = p.fundingRemaining?.toFixed() ?? "0",
+          allocated = allocateFunding(
+            before,
+            result.quantity,
+            remainingExitQuantity(stateBeforeFill),
+          );
+        fundingAllocation = {
+          before,
+          allocated,
+          remaining: exitDecimal(before).sub(allocated).toFixed(),
+          accrued: p.fundingAccrued?.toFixed() ?? "0",
+        };
+      }
+      if (
+        exitDecimal(remainingExitQuantity(state)).eq(0) &&
+        !(await fundingSettlementReady(tx, p, event.observedAt))
+      )
+        state = { ...state, waitingReason: "EXIT_WAITING_FUNDING" };
     } else if (result.kind === "cancel")
       state = { ...state, order: null, waitingReason: result.reason };
     action = {
@@ -436,6 +501,7 @@ export async function advanceLiquidityExit(
           price: result.price,
           role: "taker",
           fill,
+          ...(fundingAllocation ? { fundingAllocation } : {}),
         };
         await tx.fill.create({
           data: {
@@ -446,6 +512,7 @@ export async function advanceLiquidityExit(
             fee: fill.exitFee,
             feeAsset: "USDT",
             filledAt: event.observedAt,
+            ...(fundingAllocation ? { fundingAllocated: fundingAllocation.allocated } : {}),
             realizedGrossPnl: fill.grossPnl,
             realizedNetPnl: fill.netPnl,
             entryFeeAllocated: fill.entryFee,
@@ -464,6 +531,7 @@ export async function advanceLiquidityExit(
     now: now.toISOString(),
     scan: { cursor: String(cursor), latestEventId: String(latest.id), exhausted: scanned < 2000 },
     action,
+    ...(fundingAllocation ? { fundingAllocation } : {}),
   };
   await tx.positionTraceRecord.create({
     data: {
@@ -483,7 +551,8 @@ export async function advanceLiquidityExit(
     data: { eventCount: { increment: BigInt(count) } },
   });
   const remaining = remainingExitQuantity(state),
-    closed = exitDecimal(remaining).eq(0);
+    fullyFilled = exitDecimal(remaining).eq(0),
+    closed = fullyFilled && state.waitingReason !== "EXIT_WAITING_FUNDING";
   const unrealized = exitDecimal(event.price.toFixed())
     .sub(p.entryPrice.toFixed())
     .mul(remaining)
@@ -495,7 +564,10 @@ export async function advanceLiquidityExit(
     data: {
       remainingQuantity: remaining,
       remainingEntryFee: remainingExitEntryFee(state),
-      realizedPnl: state.netPnl,
+      realizedPnl: exitDecimal(state.netPnl)
+        .sub(p.fundingAccrued?.toFixed() ?? "0")
+        .toFixed(),
+      ...(fundingAllocation ? { fundingRemaining: fundingAllocation.remaining } : {}),
       unrealizedPnl: closed ? "0" : unrealized,
       exitState: json(state),
       priceEventId: event.id,
@@ -503,56 +575,13 @@ export async function advanceLiquidityExit(
       managedThroughAt: new Date(Math.max(+(p.managedThroughAt ?? p.openedAt), +event.observedAt)),
       markPrice: event.price,
       runtimeVersion: { increment: 1 },
-      ...(closed ? { status: "CLOSED", closedAt: event.observedAt } : {}),
+      ...(fullyFilled
+        ? { closedAt: event.observedAt, ...(closed ? { status: "CLOSED" as const } : {}) }
+        : {}),
     },
   });
   if (closed) {
-    const settlement = liquidityExitSettlement(state, event.observedAt);
-    const trade = await tx.trade.create({
-      data: {
-        workspaceId: p.workspaceId,
-        positionId: p.id,
-        executionRunId: p.executionRunId,
-        strategyVersionId: p.strategyVersionId,
-        symbol: p.symbol,
-        environment: "DRY_RUN",
-        side: p.side,
-        entryRegime: p.entryRegime,
-        entrySession: p.entrySession,
-        quantity: p.quantity,
-        averageEntryPrice: p.entryPrice,
-        averageExitPrice: settlement.exitPrice,
-        grossPnl: settlement.grossPnl,
-        netPnl: settlement.netPnl,
-        fees: settlement.fees,
-        slippage: settlement.slippage,
-        funding: "0",
-        exitReason: settlement.exitReason,
-        openedAt: p.openedAt,
-        closedAt: event.observedAt,
-      },
-    });
-    await closePositionTrace(tx, p.id, settlement);
-    await tx.decision.create({
-      data: {
-        workspaceId: p.workspaceId,
-        executionRunId: p.executionRunId,
-        strategyVersionId: p.strategyVersionId,
-        positionId: p.id,
-        tradeId: trade.id,
-        symbol: p.symbol,
-        action: "CLOSE",
-        reasonCode: settlement.exitReason.toUpperCase().replaceAll("-", "_"),
-        summary: "Позиция полностью закрыта",
-        factors: json({ source: "liquidity-exit", state }),
-        correlationId: `exit-complete:${p.id}`,
-        decidedAt: now,
-      },
-    });
-    await tx.runtimeCursor.updateMany({
-      where: { executionRunId: p.executionRunId, symbol: p.symbol },
-      data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
-    });
+    await completeLiquidityExit(tx, p, state, event.observedAt, now);
   } else if (fill)
     await tx.decision.create({
       data: {
@@ -562,8 +591,10 @@ export async function advanceLiquidityExit(
         positionId: p.id,
         symbol: p.symbol,
         action: "HOLD",
-        reasonCode: "EXIT_PARTIALLY_FILLED",
-        summary: `Частично закрыто; осталось ${remaining}`,
+        reasonCode: fullyFilled ? "EXIT_WAITING_FUNDING" : "EXIT_PARTIALLY_FILLED",
+        summary: fullyFilled
+          ? "Объём закрыт; ожидается расчёт funding"
+          : `Частично закрыто; осталось ${remaining}`,
         factors: json({ remainingQuantity: remaining, realizedPnl: state.netPnl }),
         correlationId: `exit-partial:${p.id}:${p.runtimeVersion}`,
         decidedAt: now,
@@ -586,6 +617,67 @@ export async function advanceLiquidityExit(
       },
     });
   return { applied: true, closed };
+}
+async function completeLiquidityExit(
+  tx: Prisma.TransactionClient,
+  p: Position,
+  state: LiquidityExitState,
+  closedAt: Date,
+  now: Date,
+) {
+  const priceSettlement = liquidityExitSettlement(state, closedAt);
+  const settlement = {
+    ...priceSettlement,
+    ...(p.fundingPolicy ? { funding: p.fundingAccrued?.toFixed() ?? "0" } : {}),
+    netPnl: exitDecimal(priceSettlement.netPnl)
+      .sub(p.fundingAccrued?.toFixed() ?? "0")
+      .toFixed(),
+  };
+  const trade = await tx.trade.create({
+    data: {
+      workspaceId: p.workspaceId,
+      positionId: p.id,
+      executionRunId: p.executionRunId,
+      strategyVersionId: p.strategyVersionId,
+      symbol: p.symbol,
+      environment: "DRY_RUN",
+      side: p.side,
+      entryRegime: p.entryRegime,
+      entrySession: p.entrySession,
+      quantity: p.quantity,
+      averageEntryPrice: p.entryPrice,
+      averageExitPrice: settlement.exitPrice,
+      grossPnl: settlement.grossPnl,
+      netPnl: settlement.netPnl,
+      fees: settlement.fees,
+      slippage: settlement.slippage,
+      funding: p.fundingAccrued?.toFixed() ?? "0",
+      exitReason: settlement.exitReason,
+      openedAt: p.openedAt,
+      closedAt: closedAt,
+    },
+  });
+  await closePositionTrace(tx, p.id, settlement);
+  await tx.decision.create({
+    data: {
+      workspaceId: p.workspaceId,
+      executionRunId: p.executionRunId,
+      strategyVersionId: p.strategyVersionId,
+      positionId: p.id,
+      tradeId: trade.id,
+      symbol: p.symbol,
+      action: "CLOSE",
+      reasonCode: settlement.exitReason.toUpperCase().replaceAll("-", "_"),
+      summary: "Позиция полностью закрыта",
+      factors: json({ source: "liquidity-exit", state }),
+      correlationId: `exit-complete:${p.id}`,
+      decidedAt: now,
+    },
+  });
+  await tx.runtimeCursor.updateMany({
+    where: { executionRunId: p.executionRunId, symbol: p.symbol },
+    data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
+  });
 }
 export function eventPayload(event: {
   id: bigint;

@@ -1,3 +1,4 @@
+import { verifyFundingAllocation } from "./funding-proof";
 import type { ExecutionStrategyConfig } from "../../application/src/execution-engine";
 import { liquidityExitVersion } from "../../application/src/execution-exit-policy";
 import { hashTracePayload } from "./position-trace";
@@ -31,6 +32,7 @@ export type LiquidityExitStep = {
   after: LiquidityExitState;
   event: ExitReceiptEvent;
   now: string;
+  fundingAllocation?: { before: string; allocated: string; remaining: string; accrued: string };
   scan: { cursor: string; latestEventId: string; exhausted: boolean };
   action:
     | { kind: "submit"; orderId: string; snapshot: LiquidityExitOrder }
@@ -129,6 +131,16 @@ export function verifyLiquidityExitStep(
       );
       same(a.fill, applied, "accounting");
       expected = applied.state;
+      if (s.fundingAllocation) {
+        verifyFundingAllocation(
+          s.fundingAllocation,
+          s.fundingAllocation.before,
+          result.quantity,
+          exitDecimal(s.before.originalQuantity).sub(s.before.closedQuantity).toFixed(),
+        );
+        if (applied.remainingQuantity === "0" && s.after.waitingReason === "EXIT_WAITING_FUNDING")
+          expected = { ...expected, waitingReason: "EXIT_WAITING_FUNDING" };
+      }
     } else
       expected =
         result.kind === "cancel"
@@ -147,6 +159,7 @@ export function verifyLiquidityExitFill(
     realizedNetPnl: string | { toFixed(): string } | null;
     entryFeeAllocated: string | { toFixed(): string } | null;
     filledAt: Date;
+    fundingAllocated?: string | { toFixed(): string } | null;
     execution: unknown;
   },
   config: ExecutionStrategyConfig,
@@ -170,6 +183,7 @@ export function verifyLiquidityExitFill(
       quantity: string;
       price: string;
       role: string;
+      fundingAllocation?: { before: string; allocated: string; remaining: string; accrued: string };
       fill: AppliedFill;
     };
   };
@@ -209,7 +223,26 @@ export function verifyLiquidityExitFill(
     p.event.price,
   );
   same(p.fill, applied, "fill accounting");
-  same(p.after, applied.state, "fill balance");
+  const expected =
+    p.fundingAllocation &&
+    applied.remainingQuantity === "0" &&
+    p.after.waitingReason === "EXIT_WAITING_FUNDING"
+      ? { ...applied.state, waitingReason: "EXIT_WAITING_FUNDING" }
+      : applied.state;
+  same(p.after, expected, "fill balance");
+  if (p.fundingAllocation) {
+    const allocation = verifyFundingAllocation(
+      p.fundingAllocation,
+      p.fundingAllocation.before,
+      result.quantity,
+      exitDecimal(p.before.originalQuantity).sub(p.before.closedQuantity).toFixed(),
+    );
+    if (
+      fill.fundingAllocated == null ||
+      !exitDecimal(fill.fundingAllocated).eq(allocation.allocated)
+    )
+      throw new Error("Funding allocation column mismatch");
+  }
   for (const [actual, expected] of [
     [fill.quantity, result.quantity],
     [fill.price, result.price],

@@ -1,8 +1,12 @@
 import {
+  advanceFundedCandle,
+  validateFundingDataset,
+  type ExecutionFundingDataset,
+} from "./execution-funding";
+import {
   executionEntryCandleRange,
   enrichExecutionCandles,
   minimumExecutionCandleCount,
-  advanceExecutionCandlePosition,
   getExecutionSignal,
   getTradingDateKey,
   openExecutionPosition,
@@ -20,12 +24,13 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.13.0";
+export const validationEngineVersion = "cryptoanal-validation@0.14.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
 
 export type ValidationEngineInput = {
+  funding?: ExecutionFundingDataset;
   instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ValidationStrategyConfig;
   candles: ValidationCandle[];
@@ -45,6 +50,7 @@ export type ValidationTrade = {
   quantity: number;
   netPnl: number;
   fees: number;
+  funding?: number;
   exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data";
 };
 
@@ -59,6 +65,7 @@ export type ValidationMetrics = {
   profitFactor: number | null;
   expectancy: number;
   totalFees: number;
+  totalFunding?: number;
   candleCount: number;
   evaluation: {
     startsAt: string | null;
@@ -80,6 +87,19 @@ export type ValidationEngineResult = {
 };
 
 export function runValidationEngine(input: ValidationEngineInput): ValidationEngineResult {
+  if (input.funding && input.candles.length) {
+    const interval =
+      { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 }[
+        input.config.universe.timeframe
+      ] * 60000;
+    const times = input.candles.map((c) => +c.openTime);
+    validateFundingDataset(
+      input.funding,
+      [...new Set(input.candles.map((c) => c.symbol))],
+      new Date(times.reduce((a, b) => Math.min(a, b), Infinity)),
+      new Date(times.reduce((a, b) => Math.max(a, b), -Infinity) + interval),
+    );
+  }
   if (input.instrumentRules)
     for (const symbol of new Set(input.candles.map((candle) => candle.symbol))) {
       const rules = readExecutionInstrumentRules(input.instrumentRules[symbol]);
@@ -294,6 +314,13 @@ function runBacktest(
   const equitySeries: Array<{ observedAt: string; equity: number }> = [];
   const dailyPnl = new Map<string, number>();
   let equity = input.initialCapital;
+  const applyCharges = (charges: Array<{ settledAt: string; amount: string }>) => {
+    for (const charge of charges) {
+      equity -= Number(charge.amount);
+      const day = getTradingDateKey(new Date(charge.settledAt), input.config.schedule.timezone);
+      dailyPnl.set(day, (dailyPnl.get(day) ?? 0) - Number(charge.amount));
+    }
+  };
   let sampleIndex = 0;
   const equitySampleStep = Math.max(
     1,
@@ -304,14 +331,15 @@ function runBacktest(
     for (const candle of candles) {
       const position = positions.get(candle.symbol);
       if (!position) continue;
-      const step = advanceExecutionCandlePosition(position, candle, input.config);
+      const step = advanceFundedCandle(position, candle, input.config, input.funding);
+      applyCharges(step.charges);
       const closed = step.settlement;
       if (closed) {
         positions.delete(candle.symbol);
         trades.push(closed);
-        equity += closed.netPnl;
+        equity += closed.netPnl + (closed.funding ?? 0);
         const day = getTradingDateKey(new Date(closed.closedAt), input.config.schedule.timezone);
-        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + closed.netPnl);
+        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + closed.netPnl + (closed.funding ?? 0));
       } else {
         positions.set(candle.symbol, step.position);
       }
@@ -337,16 +365,20 @@ function runBacktest(
       );
       if (!position) continue;
       const entryRange = executionEntryCandleRange(position, candle, input.config);
-      const step = advanceExecutionCandlePosition(position, entryRange.candle, input.config);
+      const step = advanceFundedCandle(position, entryRange.candle, input.config, input.funding);
+      applyCharges(step.charges);
       const closed = step.settlement;
       if (closed) {
         trades.push(closed);
-        equity += closed.netPnl;
+        equity += closed.netPnl + (closed.funding ?? 0);
         const closeDay = getTradingDateKey(
           new Date(closed.closedAt),
           input.config.schedule.timezone,
         );
-        dailyPnl.set(closeDay, (dailyPnl.get(closeDay) ?? 0) + closed.netPnl);
+        dailyPnl.set(
+          closeDay,
+          (dailyPnl.get(closeDay) ?? 0) + closed.netPnl + (closed.funding ?? 0),
+        );
       } else {
         positions.set(candle.symbol, step.position);
       }
@@ -384,16 +416,23 @@ function runBacktest(
     const closed = settleExecutionPosition(
       position,
       lastCandle.close,
-      lastCandle.openTime,
+      input.funding
+        ? new Date(+lastCandle.openTime + timeframeMinutes[input.config.universe.timeframe] * 60000)
+        : lastCandle.openTime,
       "end-of-data",
       input.config,
     );
     trades.push(closed);
-    equity += closed.netPnl;
+    equity += closed.netPnl + (closed.funding ?? 0);
   }
   const lastTime = [...groups.keys()].reduce((maximum, time) => Math.max(maximum, time), -Infinity);
   if (Number.isFinite(lastTime) && (entryFrom === null || lastTime >= entryFrom)) {
-    equitySeries.push({ observedAt: new Date(lastTime).toISOString(), equity: round(equity) });
+    equitySeries.push({
+      observedAt: new Date(
+        lastTime + (input.funding ? timeframeMinutes[input.config.universe.timeframe] * 60000 : 0),
+      ).toISOString(),
+      equity: round(equity),
+    });
   }
 
   return { trades, equitySeries: deduplicateEquity(equitySeries) };
@@ -436,6 +475,9 @@ function buildResult(
     profitFactor: profitFactor === null ? null : round(profitFactor),
     expectancy: simulation.trades.length ? round(netPnl / simulation.trades.length) : 0,
     totalFees: round(totalFees),
+    ...(simulation.trades.some((t) => t.funding !== undefined)
+      ? { totalFunding: round(simulation.trades.reduce((sum, t) => sum + (t.funding ?? 0), 0)) }
+      : {}),
     candleCount: evaluation.candleCount,
     evaluation: evaluation.metadata,
     windows,

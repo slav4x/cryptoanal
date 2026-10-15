@@ -13,6 +13,13 @@ import {
 } from "@cryptoanal/application";
 import { isLiquidityExitPolicy } from "@cryptoanal/application";
 import { replayLiquidityRuntimeTrace } from "./liquidity-trace-replay";
+import { readExecutionFundingPolicy } from "@cryptoanal/application";
+import {
+  verifyFundingRecord,
+  readPositionFundingState,
+  type FundingReplayBalance,
+  type LoadFundingSnapshot,
+} from "@cryptoanal/persistence";
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
 import { processRuntimePriceEvents, type RuntimeSignalEvent } from "./runtime-price-processor";
@@ -20,6 +27,7 @@ import { recoverRuntimeGap } from "./runtime-recovery";
 
 type Snapshot = {
   version: 1;
+  positionId?: string;
   executionEngineVersion: string;
   config: unknown;
   position: Record<string, string | null>;
@@ -30,7 +38,7 @@ type Snapshot = {
   signalCandleAt: string | null;
   profitProtectionState: unknown;
   profitProtectionPolicy: ExecutionProfitProtectionPolicy | null;
-  funding: { status: string };
+  funding: { status: string; state?: unknown; accrued?: string; remaining?: string };
 };
 type TraceInputs = {
   version: 1;
@@ -65,6 +73,7 @@ type TracePayload = {
 class RuntimeTraceIncompleteError extends Error {}
 
 export type RuntimeTraceReplayInput = {
+  loadFundingSnapshot?: LoadFundingSnapshot;
   snapshot: unknown;
   snapshotHash: string;
   fullFromEntry: boolean;
@@ -80,6 +89,7 @@ export type RuntimeTraceReplayInput = {
     grossPnl: string;
     netPnl: string;
     fees: string;
+    funding?: string;
     slippage: string;
   };
 };
@@ -106,6 +116,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.8.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.7.0" &&
       !(
         snapshot.executionEngineVersion === "cryptoanal-execution@0.6.0" &&
@@ -121,7 +132,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
         !snapshot.position.instrumentRules &&
         !snapshot.position.exitPolicy
       )) ||
-    snapshot.funding?.status !== "disabled"
+    (snapshot.funding?.status !== "disabled" && !readExecutionFundingPolicy(snapshot.funding))
   )
     throw new Error("Unsupported execution trace version or funding policy");
   if (snapshot.eventId !== String(input.startEventId))
@@ -139,7 +150,30 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
     if (!Number.isFinite(+result)) throw new Error("Invalid trace timestamp");
     return result;
   };
+  let fundingBalance: FundingReplayBalance | null =
+    snapshot.funding.status === "enabled"
+      ? {
+          state: readPositionFundingState(snapshot.funding.state)!,
+          accrued: snapshot.funding.accrued ?? "0",
+          remaining: snapshot.funding.remaining ?? "0",
+          paid: {},
+        }
+      : null;
+  const fundingBasis = {
+    id:
+      snapshot.positionId ??
+      (
+        input.records.find((r) => r.kind === "funding")?.payload as
+          { positionId?: string } | undefined
+      )?.positionId ??
+      "",
+    symbol: stored.symbol!,
+    side: stored.side === "BUY" ? ("BUY" as const) : ("SELL" as const),
+    quantity: stored.quantity!,
+    openedAt: stored.openedAt!,
+  };
   let position: ExecutionPosition = {
+    ...(fundingBalance ? { fundingPaid: Number(fundingBalance.remaining) } : {}),
     ...(stored.exitPolicy ? { exitPolicy: readExecutionExitPolicy(stored.exitPolicy)! } : {}),
     ...(stored.entryExecution
       ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
@@ -197,14 +231,16 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   for (const record of input.records)
     if (hashTracePayload(record.payload) !== record.payloadHash)
       throw new Error("Trace record checksum mismatch");
-  const records = input.records.filter((record) => record.kind === "journal");
+  const records = input.records.filter(
+    (record) => record.kind === "journal" || record.kind === "funding",
+  );
   for (const record of [
     ...records,
     { eventId: input.endEventId, kind: "tail", payload: null, payloadHash: hashTracePayload(null) },
   ]) {
     const end = record.eventId;
     if (end === null || end < cursor || settlement) continue;
-    const payload = record.payload as TracePayload | null;
+    const payload = record.kind === "funding" ? null : (record.payload as TracePayload | null);
     const inputs = payload?.inputs;
     if (payload && (!inputs || inputs.version !== 1 || inputs.mode !== "journal")) {
       gaps.push(`Missing replay inputs at ${end}`);
@@ -301,6 +337,18 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
       }
     }
     if (gaps.length) break;
+    if (record.kind === "funding") {
+      if (!fundingBalance) throw new Error("Unexpected funding in a disabled trace");
+      fundingBalance = await verifyFundingRecord(
+        record.payload,
+        fundingBasis,
+        fundingBalance,
+        [],
+        input.loadFundingSnapshot,
+      );
+      position = { ...position, fundingPaid: Number(fundingBalance.remaining) };
+      continue;
+    }
     if (payload) {
       checkpoints++;
       const protection =
@@ -376,6 +424,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
     }
   }
   return {
+    ...(fundingBalance ? { fundingBalance } : {}),
     coverage: input.fullFromEntry ? "from-entry" : "from-existing-checkpoint",
     status: gaps.length ? "incomplete" : differences.length ? "mismatch" : "matched",
     events: count,

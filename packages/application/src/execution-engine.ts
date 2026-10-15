@@ -85,6 +85,8 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 };
 
 export type ExecutionPosition = {
+  fundingPaid?: number;
+  fundingThroughAt?: Date;
   exitPolicy?: ExecutionExitPolicy;
   entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
@@ -128,6 +130,7 @@ export type ExecutionExitReason =
   | "daily-loss-limit";
 
 export type ExecutionSettlement<Reason extends ExecutionExitReason = ExecutionExitReason> = {
+  funding?: number;
   symbol: string;
   side: "long" | "short";
   entryRegime: ExecutionMarketRegime;
@@ -1281,7 +1284,10 @@ export function executionBreakEvenPrice(
     const mode = direction === 1 ? "ceil" : "floor";
     const notionalWithFees = executionDecimalSum(
       executionDecimalProduct(position.entryPrice, position.quantity),
-      executionDecimalProduct(position.entryFee, direction),
+      executionDecimalProduct(
+        executionDecimalSum(position.entryFee, position.fundingPaid ?? 0),
+        direction,
+      ),
     );
     const settled = roundExecutionRatio(
       notionalWithFees,
@@ -1307,7 +1313,7 @@ export function executionBreakEvenPrice(
       ),
     );
   }
-  const entryCostsPerUnit = position.entryFee / position.quantity;
+  const entryCostsPerUnit = (position.entryFee + (position.fundingPaid ?? 0)) / position.quantity;
   const takerRate = config.costs.takerFeeBps / 10_000;
   const slippageRate = config.costs.slippageBps / 10_000;
   if (position.side === "long") {
@@ -1360,7 +1366,10 @@ export function settleExecutionPosition<Reason extends ExecutionExitReason>(
     exitPrice,
     quantity: position.quantity,
     grossPnl: roundExecutionValue(grossPnl),
-    netPnl: roundExecutionValue(grossPnl - fees),
+    netPnl: roundExecutionValue(grossPnl - fees - (position.fundingPaid ?? 0)),
+    ...(position.fundingPaid === undefined
+      ? {}
+      : { funding: roundExecutionValue(position.fundingPaid) }),
     fees: roundExecutionValue(fees),
     slippage: roundExecutionValue(position.entrySlippage + exitSlippage),
     exitReason,

@@ -1,3 +1,4 @@
+import { fundingCovers, readPositionFundingState } from "./funding-repository";
 import { realizedCashPnl } from "./realized-cash";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
@@ -37,6 +38,11 @@ export class DashboardRepository {
               unrealizedPnl: true,
               realizedPnl: true,
               exitState: true,
+              closedAt: true,
+              fundingPolicy: true,
+              fundingState: true,
+              fundingAccrued: true,
+              fundingRemaining: true,
             },
           }),
           tx.strategy.count({
@@ -309,6 +315,11 @@ export class DashboardRepository {
               unrealizedPnl: true,
               realizedPnl: true,
               exitState: true,
+              closedAt: true,
+              fundingPolicy: true,
+              fundingState: true,
+              fundingAccrued: true,
+              fundingRemaining: true,
               openedAt: true,
               strategyVersion: {
                 select: { version: true, strategy: { select: { id: true, name: true } } },
@@ -374,6 +385,17 @@ export class DashboardRepository {
         ...p,
         quantity: p.remainingQuantity ?? p.quantity,
         closing: p.exitState !== null,
+        funding: {
+          status: p.fundingPolicy
+            ? readPositionFundingState(p.fundingState) &&
+              fundingCovers(readPositionFundingState(p.fundingState)!, p.closedAt ?? new Date())
+              ? "ready"
+              : "pending"
+            : "disabled",
+          amount: p.fundingAccrued?.toFixed() ?? null,
+          remaining: p.fundingRemaining?.toFixed() ?? null,
+          reason: readPositionFundingState(p.fundingState)?.reason ?? null,
+        } as const,
       })),
       trades,
       summary: {

@@ -91,6 +91,10 @@ export async function ensurePositionTrace(
       bestPrice: true,
       entryFee: true,
       entrySlippage: true,
+      fundingPolicy: true,
+      fundingState: true,
+      fundingAccrued: true,
+      fundingRemaining: true,
       exitState: true,
       remainingQuantity: true,
       remainingEntryFee: true,
@@ -98,6 +102,7 @@ export async function ensurePositionTrace(
   });
   const snapshot = {
     version: 1,
+    positionId: input.positionId,
     executionEngineVersion,
     config: version.config,
     configHash: version.configHash,
@@ -114,6 +119,7 @@ export async function ensurePositionTrace(
             exitState: persisted.exitState,
           }
         : {}),
+      ...(persisted.fundingPolicy ? { fundingPaid: persisted.fundingRemaining!.toFixed() } : {}),
       symbol: input.position.symbol,
       side: input.position.side,
       entryRegime: input.position.entryRegime,
@@ -139,7 +145,14 @@ export async function ensurePositionTrace(
     marketEntryPolicy: input.marketEntryPolicy,
     profitProtectionPolicy: input.options.profitProtectionPolicy,
     retentionDays: input.options.retentionDays,
-    funding: { status: "disabled", version: "cryptoanal-funding@disabled-v1" },
+    funding: persisted.fundingPolicy
+      ? {
+          ...(persisted.fundingPolicy as Prisma.InputJsonObject),
+          state: persisted.fundingState,
+          accrued: persisted.fundingAccrued!.toFixed(),
+          remaining: persisted.fundingRemaining!.toFixed(),
+        }
+      : { status: "disabled", version: "cryptoanal-funding@disabled-v1" },
     coverage: input.fullFromEntry ? "from-entry" : "from-existing-checkpoint",
   };
   return tx.positionExecutionTrace.create({
@@ -161,6 +174,7 @@ export async function closePositionTrace(
   tx: Prisma.TransactionClient,
   positionId: string,
   settlement: {
+    funding?: string;
     exitPrice: string;
     grossPnl: string;
     netPnl: string;

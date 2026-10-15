@@ -1,6 +1,10 @@
 import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { readExecutionMarketData } from "@cryptoanal/application";
 import {
+  verifyFundingRecord,
+  verifyFundingAllocation,
+  fundingCovers,
+  type FundingReplayBalance,
   hashTracePayload,
   evaluateLiquidityExitOrder,
   initialLiquidityExitState,
@@ -67,7 +71,9 @@ export async function replayLiquidityRuntimeTrace(
   )
     throw new Error("Liquidity trace initial intent mismatch");
   const automatic = !["manual", "independent-risk-guard"].includes(trigger.origin);
-  const prefixRecords = input.records.slice(0, triggerIndex).filter((r) => r.kind === "journal");
+  const prefixRecords = input.records
+    .slice(0, triggerIndex)
+    .filter((r) => r.kind === "journal" || r.kind === "funding");
   const prefixEnd = automatic
     ? record.eventId
     : (prefixRecords.at(-1)?.eventId ?? input.startEventId);
@@ -120,9 +126,52 @@ export async function replayLiquidityRuntimeTrace(
     fills = 0,
     steps = 0,
     finalAt: Date | null = null;
+  let fundingBalance: FundingReplayBalance | null = prefix.fundingBalance ?? null;
+  const fundingBasis = {
+    id: basis.id,
+    symbol: basis.symbol,
+    side: basis.side,
+    quantity: basis.quantity,
+    openedAt: String(snapshot.position.openedAt),
+  };
+  const exits: Array<{ quantity: string; filledAt: string }> = [];
   const sources = new Map<string, string>();
   for (const r of input.records.slice(triggerIndex + 1)) {
     if (r.kind === "settlement") continue;
+    if (r.kind === "funding") {
+      if (!fundingBalance || r.eventId !== cursor)
+        throw new Error("Unexpected funding exit record");
+      fundingBalance = await verifyFundingRecord(
+        r.payload,
+        fundingBasis,
+        fundingBalance,
+        exits,
+        input.loadFundingSnapshot,
+      );
+      continue;
+    }
+    if (r.kind === "liquidity-finalize") {
+      const finalized = r.payload as {
+        before: typeof state;
+        after: typeof state;
+        funding: string;
+        closedAt: string;
+      };
+      if (
+        !fundingBalance ||
+        r.eventId !== cursor ||
+        remainingExitQuantity(state) !== "0" ||
+        hashTracePayload(finalized.before) !== hashTracePayload(state) ||
+        hashTracePayload(finalized.after) !== hashTracePayload({ ...state, waitingReason: null }) ||
+        !exitDecimal(finalized.funding).eq(fundingBalance.accrued) ||
+        !fundingCovers(fundingBalance.state, new Date(finalized.closedAt)) ||
+        finalized.closedAt !== finalAt?.toISOString()
+      )
+        throw new Error("Funding exit finalization mismatch");
+      state = finalized.after;
+      continue;
+    }
+
     if (r.kind !== "liquidity-step")
       throw new Error("Unexpected management after liquidity exit intent");
     const step = r.payload as LiquidityExitStep;
@@ -205,21 +254,48 @@ export async function replayLiquidityRuntimeTrace(
       }
     } else if (step.scan.latestEventId !== step.event.id)
       throw new Error("Liquidity placement does not use its latest event");
+    if (step.action.kind === "fill" && step.action.result.kind === "fill" && fundingBalance) {
+      const allocation = verifyFundingAllocation(
+        step.fundingAllocation,
+        fundingBalance.remaining,
+        step.action.result.quantity,
+        remainingExitQuantity(state),
+      );
+      if (!exitDecimal(allocation.accrued).eq(fundingBalance.accrued))
+        throw new Error("Funding accrued balance at fill mismatch");
+      fundingBalance = { ...fundingBalance, remaining: allocation.remaining };
+    }
     state = verifyLiquidityExitStep(step, config, basis, state).state;
     cursor = r.eventId;
     steps++;
     if (step.action.kind === "fill") {
       fills++;
+      if (step.action.result.kind !== "fill") throw new Error("Missing exit fill result");
+      exits.push({
+        quantity: step.action.result.quantity,
+        filledAt: original.observedAt.toISOString(),
+      });
       finalAt = original.observedAt;
     }
   }
   if (input.expectedEventCount === null || BigInt(availableEvents) !== input.expectedEventCount)
     gaps.push("Liquidity trace event coverage mismatch");
   if (cursor !== input.endEventId) gaps.push("Liquidity trace tail does not match position cursor");
-  const final =
-    exitDecimal(remainingExitQuantity(state)).eq(0) && finalAt
+  const priced =
+    exitDecimal(remainingExitQuantity(state)).eq(0) &&
+    finalAt &&
+    state.waitingReason !== "EXIT_WAITING_FUNDING"
       ? liquidityExitSettlement(state, finalAt)
       : null;
+  const final = priced
+    ? {
+        ...priced,
+        ...(fundingBalance ? { funding: fundingBalance.accrued } : {}),
+        netPnl: exitDecimal(priced.netPnl)
+          .sub(fundingBalance?.accrued ?? "0")
+          .toFixed(),
+      }
+    : null;
   const settlements = input.records.filter((r) => r.kind === "settlement");
   if (final) {
     if (
@@ -234,6 +310,8 @@ export async function replayLiquidityRuntimeTrace(
     else {
       if (final.exitReason !== input.trade.exitReason || +final.closedAt !== +input.trade.closedAt)
         differences.push("Liquidity trade reason or time mismatch");
+      if (fundingBalance && !exitDecimal(input.trade.funding ?? "0").eq(fundingBalance.accrued))
+        differences.push("Trade funding mismatch");
       for (const [actual, expected] of [
         [final.exitPrice, input.trade.averageExitPrice],
         [final.grossPnl, input.trade.grossPnl],
@@ -247,6 +325,7 @@ export async function replayLiquidityRuntimeTrace(
   } else if (final) differences.push("Filled liquidity exit has no trade");
   return {
     ...prefix,
+    ...(fundingBalance ? { fundingBalance } : {}),
     status: gaps.length ? "incomplete" : differences.length ? "mismatch" : "matched",
     events: availableEvents,
     availableEvents,
@@ -257,6 +336,7 @@ export async function replayLiquidityRuntimeTrace(
     settlement: final
       ? {
           ...final,
+          ...(fundingBalance ? { funding: Number(fundingBalance.accrued) } : {}),
           exitPrice: Number(final.exitPrice),
           grossPnl: Number(final.grossPnl),
           netPnl: Number(final.netPnl),
@@ -269,7 +349,9 @@ export async function replayLiquidityRuntimeTrace(
       steps,
       fills,
       remainingQuantity: remainingExitQuantity(state),
-      realizedPnl: state.netPnl,
+      realizedPnl: exitDecimal(state.netPnl)
+        .sub(fundingBalance?.accrued ?? "0")
+        .toFixed(),
     },
     limits: [
       ...prefix.limits,

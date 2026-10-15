@@ -1,3 +1,8 @@
+import {
+  readExecutionFundingPolicy,
+  type ExecutionFundingPolicy,
+} from "../../application/src/execution-funding";
+import { initialPositionFundingState } from "./funding-repository";
 import { latchLiquidityExit, advanceLiquidityExit } from "./liquidity-exit-repository";
 import { runtimeEntryWaitSummary, type RuntimeEntryWaitReason } from "./runtime-entry-wait";
 import { buildExitTriggerProof } from "./exit-trigger-proof";
@@ -56,6 +61,7 @@ import {
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
 export type RuntimeCyclePosition = {
+  fundingPolicy?: ExecutionFundingPolicy;
   exitPolicy?: ExecutionExitPolicy;
   entryExecution?: EntryExecutionMarker;
   instrumentRules?: ExecutionInstrumentRules;
@@ -208,7 +214,11 @@ export class RuntimeRepository {
     private readonly marketEntryPolicy: RuntimeMarketEntryPolicy = defaultRuntimeMarketEntryPolicy,
     private readonly traceOptions: PositionTraceOptions = defaultPositionTraceOptions,
     private readonly exitPolicy: ExecutionExitPolicy = defaultExecutionExitPolicy,
-  ) {}
+    private readonly fundingPolicy?: ExecutionFundingPolicy,
+  ) {
+    if (fundingPolicy && !isLiquidityExitPolicy(exitPolicy))
+      throw new Error("Funding requires liquidity exits");
+  }
 
   public listActiveTargets(workspaceId: string) {
     return this.prisma.deployment.findMany({
@@ -278,6 +288,10 @@ export class RuntimeRepository {
           id: true,
           instrumentRules: true,
           exitPolicy: true,
+          fundingPolicy: true,
+          fundingState: true,
+          fundingAccrued: true,
+          fundingRemaining: true,
           remainingQuantity: true,
           remainingEntryFee: true,
           exitState: true,
@@ -407,6 +421,10 @@ export class RuntimeRepository {
         profitProtection: true,
         instrumentRules: true,
         exitPolicy: true,
+        fundingPolicy: true,
+        fundingState: true,
+        fundingAccrued: true,
+        fundingRemaining: true,
         remainingQuantity: true,
         remainingEntryFee: true,
         exitState: true,
@@ -472,6 +490,10 @@ export class RuntimeRepository {
           profitProtection: true,
           instrumentRules: true,
           exitPolicy: true,
+          fundingPolicy: true,
+          fundingState: true,
+          fundingAccrued: true,
+          fundingRemaining: true,
           remainingQuantity: true,
           remainingEntryFee: true,
           exitState: true,
@@ -934,8 +956,26 @@ export class RuntimeRepository {
         +now - book[5] > input.policy.maximumBookAgeMs
       )
         return { applied: false, riskFailure: "ENTRY_BOOK_STALE" };
+      if (this.fundingPolicy) {
+        const market = await tx.fundingMarketState.findUnique({ where: { symbol: input.symbol } });
+        if (
+          !market ||
+          +now - +market.observedAt > 120000 ||
+          market.observedAt > new Date(+now + 1000) ||
+          market.nextFundingAt <= now
+        )
+          return { applied: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
+      }
       const snapshot: ExecutionEntryOrder = {
         version: entryLiquidityVersion,
+        ...(this.fundingPolicy
+          ? {
+              fundingPolicy: readExecutionFundingPolicy(this.fundingPolicy)!,
+              fundingNextAt: (
+                await tx.fundingMarketState.findUniqueOrThrow({ where: { symbol: input.symbol } })
+              ).nextFundingAt.toISOString(),
+            }
+          : {}),
         exitPolicy: readExecutionExitPolicy(this.exitPolicy)!,
         symbol: input.symbol,
         side: pending.side as "long" | "short",
@@ -1426,6 +1466,8 @@ export class RuntimeRepository {
           !new Prisma.Decimal(input.position.entryPrice).eq(
             result.kind === "fill" ? result.price : 0,
           ) ||
+          hashTracePayload(input.position.fundingPolicy ?? null) !==
+            hashTracePayload(snapshot.fundingPolicy ?? null) ||
           hashTracePayload(input.position.exitPolicy ?? null) !==
             hashTracePayload(snapshot.exitPolicy ?? null) ||
           hashTracePayload(input.position.instrumentRules) !==
@@ -1494,9 +1536,34 @@ export class RuntimeRepository {
       if (+fillAt >= expiresAt)
         return { applied: false, capacityReached: false, riskFailure: "ENTRY_SIGNAL_EXPIRED" };
       const correlationId = `runtime-entry:${input.executionRunId}:${input.symbol}:${input.quoteAt.toISOString()}`;
+      if (input.position.fundingPolicy && !entryProof)
+        return {
+          applied: false,
+          capacityReached: false,
+          riskFailure: "FUNDING_ENTRY_PROOF_REQUIRED",
+        };
+      const fundingMarket = input.position.fundingPolicy
+        ? await transaction.fundingMarketState.findUnique({ where: { symbol: input.symbol } })
+        : null;
+      if (
+        input.position.fundingPolicy &&
+        (!fundingMarket || +now - +fundingMarket.observedAt > 120000)
+      )
+        return { applied: false, capacityReached: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
       const position = await transaction.position.create({
         data: {
           workspaceId: input.workspaceId,
+          ...(input.position.fundingPolicy
+            ? {
+                fundingPolicy: input.position.fundingPolicy,
+                fundingState: initialPositionFundingState(
+                  input.position.openedAt,
+                  new Date(entryProof!.snapshot.fundingNextAt!),
+                ),
+                fundingAccrued: "0",
+                fundingRemaining: "0",
+              }
+            : {}),
           priceEventId: entryEvent.id,
           priceStreamId: entryEvent.streamId,
           managedThroughAt: entryEvent.observedAt,
@@ -2403,6 +2470,10 @@ export class RuntimeRepository {
             id: true,
             side: true,
             exitPolicy: true,
+            fundingPolicy: true,
+            fundingState: true,
+            fundingAccrued: true,
+            fundingRemaining: true,
             quantity: true,
             entryPrice: true,
             entryFee: true,
@@ -2690,6 +2761,10 @@ export class RuntimeRepository {
       select: {
         instrumentRules: true,
         exitPolicy: true,
+        fundingPolicy: true,
+        fundingState: true,
+        fundingAccrued: true,
+        fundingRemaining: true,
         remainingQuantity: true,
         remainingEntryFee: true,
         exitState: true,
@@ -2904,6 +2979,10 @@ export class RuntimeRepository {
         select: {
           id: true,
           exitPolicy: true,
+          fundingPolicy: true,
+          fundingState: true,
+          fundingAccrued: true,
+          fundingRemaining: true,
           environment: true,
           executionRunId: true,
           strategyVersionId: true,

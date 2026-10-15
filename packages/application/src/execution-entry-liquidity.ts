@@ -1,3 +1,4 @@
+import { readExecutionFundingPolicy, type ExecutionFundingPolicy } from "./execution-funding";
 import {
   readExecutionMarketData,
   executionBookFailure,
@@ -32,6 +33,8 @@ export type EntryExecutionMarker = {
   requestedQuantity: string;
 };
 export type ExecutionEntryOrder = {
+  fundingPolicy?: ExecutionFundingPolicy;
+  fundingNextAt?: string;
   exitPolicy?: ExecutionExitPolicy;
   version: typeof entryLiquidityVersion;
   symbol: string;
@@ -126,6 +129,12 @@ export function readExecutionEntryOrder(value: unknown): ExecutionEntryOrder {
     throw new Error("Invalid entry instrument snapshot");
   readExecutionMarketData(order.placementData);
   readExecutionExitPolicy(order.exitPolicy);
+  readExecutionFundingPolicy(order.fundingPolicy);
+  if (
+    order.fundingPolicy &&
+    (!order.fundingNextAt || !Number.isFinite(Date.parse(order.fundingNextAt)))
+  )
+    throw new Error("Invalid pinned funding schedule");
   return order;
 }
 export function entryLiquidityBookFailure(

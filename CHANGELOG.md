@@ -4,6 +4,15 @@
 
 ### Added
 
+- Execution 0.9.0: funding новых DRY_RUN заявок и позиций, immutable public history,
+  mark-open scenario и отдельные идемпотентные денежные события. Частичные/поздние
+  начисления, cash/equity/дневной риск/безубыток, ожидание данных без задержки стопа.
+- Validation 0.14.0 / candle replay 1.8.0: закреплённые funding snapshots и единый
+  расчёт; trace/ledger сверяют события, остатки и их происхождение. Отдельный read-only
+  `runtime:recalculate-funding` создаёт новые результаты без изменения старых Trades.
+- Сумма и полнота funding в позициях, funding новых проверяемых сделок в
+  Analytics/Experiments; исходные политики старых позиций и результаты сохранены.
+
 - Execution 0.8.0: частичные выходы новых DRY_RUN позиций по встречному L1 IOC,
   неотменяемое намерение закрытия, TTL/повторы после restart и причины ожидания.
   SL/TP/trailing, signal/recovery, risk guard и ручное закрытие используют один путь.

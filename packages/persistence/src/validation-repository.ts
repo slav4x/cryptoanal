@@ -1,3 +1,7 @@
+import {
+  validateFundingDataset,
+  type ExecutionFundingDataset,
+} from "../../application/src/execution-funding";
 import type { CryptoAnalPrismaClient } from "./client";
 import { Prisma } from "./generated/prisma/client";
 import { createHash } from "node:crypto";
@@ -53,6 +57,7 @@ export type ClaimedValidationJob = {
 };
 
 export type CompleteValidationJobInput = {
+  engineVersion?: string;
   workerId: string;
   jobId: string;
   runId: string;
@@ -97,6 +102,7 @@ export type ValidationTradePersistenceInput = {
   quantity: string;
   netPnl: string;
   fees: string;
+  funding?: string;
   exitReason: string;
 };
 
@@ -117,6 +123,80 @@ export class ValidationDatasetConflictError extends Error {}
 
 export class ValidationRepository {
   public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
+
+  public async getFundingSnapshot(workspaceId: string, runId: string) {
+    const run = await this.prisma.validationRun.findFirstOrThrow({
+      where: { id: runId, workspaceId },
+      select: { fundingSnapshot: true },
+    });
+    if (!run.fundingSnapshot) return null;
+    const saved = run.fundingSnapshot as unknown as {
+      payload: ExecutionFundingDataset;
+      hash: string;
+    };
+    if (hashTracePayload(saved.payload) !== saved.hash)
+      throw new Error("Validation funding snapshot checksum mismatch");
+    validateFundingDataset(
+      saved.payload,
+      saved.payload.symbols,
+      new Date(saved.payload.startsAt),
+      new Date(saved.payload.throughAt),
+    );
+    return saved;
+  }
+  public async pinFundingSnapshot(input: {
+    workspaceId: string;
+    runId: string;
+    jobId: string;
+    workerId: string;
+    data: ExecutionFundingDataset;
+  }) {
+    validateFundingDataset(
+      input.data,
+      input.data.symbols,
+      new Date(input.data.startsAt),
+      new Date(input.data.throughAt),
+    );
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "ValidationRun" WHERE id=${input.runId} AND "workspaceId"=${input.workspaceId} FOR UPDATE`;
+      const lease = await tx.job.updateMany({
+        where: {
+          id: input.jobId,
+          workspaceId: input.workspaceId,
+          status: "RUNNING",
+          lockedBy: input.workerId,
+        },
+        data: { lockedAt: new Date() },
+      });
+      if (lease.count !== 1) throw new Error("Validation funding lease lost");
+      const saved = await this.getFundingSnapshotInTransaction(tx, input.workspaceId, input.runId);
+      if (saved) return saved;
+      const snapshot = { payload: input.data, hash: hashTracePayload(input.data) };
+      await tx.validationRun.update({
+        where: { id: input.runId },
+        data: { fundingSnapshot: snapshot as unknown as Prisma.InputJsonValue },
+      });
+      return snapshot;
+    });
+  }
+  private async getFundingSnapshotInTransaction(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    runId: string,
+  ) {
+    const run = await tx.validationRun.findFirstOrThrow({
+      where: { id: runId, workspaceId, status: "RUNNING" },
+      select: { fundingSnapshot: true },
+    });
+    if (!run.fundingSnapshot) return null;
+    const saved = run.fundingSnapshot as unknown as {
+      payload: ExecutionFundingDataset;
+      hash: string;
+    };
+    if (hashTracePayload(saved.payload) !== saved.hash)
+      throw new Error("Validation funding snapshot checksum mismatch");
+    return saved;
+  }
 
   public async pinInstrumentRules(input: {
     workspaceId: string;
@@ -221,6 +301,7 @@ export class ValidationRepository {
             quantity: true,
             netPnl: true,
             fees: true,
+            funding: true,
             exitReason: true,
           },
         },
@@ -409,6 +490,7 @@ export class ValidationRepository {
           status: "COMPLETED",
           verdict: input.verdict,
           metrics: input.metrics,
+          ...(input.engineVersion ? { engineVersion: input.engineVersion } : {}),
           failureCode: null,
           failureMessage: null,
           completedAt,

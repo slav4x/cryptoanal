@@ -9,6 +9,7 @@ import {
   executionEngineVersion,
   evaluateStrategyLifecycle,
   fundingPolicy,
+  enabledFundingPolicy,
   getDeploymentCommands,
   metricProvenanceSchemaVersion,
   settleExecutionPosition,
@@ -2345,7 +2346,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             engineVersion: singleValue(rankingEngineVersions) ?? "mixed",
             asOf: rankingAsOf?.toISOString() ?? null,
             freshness: metricFreshness(ranking.items.length > 0),
-            fundingPolicy,
+            fundingPolicy: dataset.some((d) => d.trades.some((t) => !!t.position.fundingPolicy))
+              ? {
+                  ...enabledFundingPolicy,
+                  reason:
+                    "Funding included for positions with a pinned policy; legacy positions retain disabled funding",
+                }
+              : fundingPolicy,
           },
           filters: {
             period: filters.period,
@@ -2439,7 +2446,13 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             engineVersion: singleValue(dataset.provenance.engineVersions) ?? "mixed",
             asOf: dataset.provenance.asOf?.toISOString() ?? null,
             freshness: metricFreshness(analytics.summary.trades > 0),
-            fundingPolicy,
+            fundingPolicy: dataset.provenance.fundingEnabled
+              ? {
+                  ...enabledFundingPolicy,
+                  reason:
+                    "Funding included for positions with a pinned policy; legacy positions retain disabled funding",
+                }
+              : fundingPolicy,
           },
           filters: {
             period: filters.period,
@@ -3097,6 +3110,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
             quantity: Number(trade.quantity),
             netPnl: Number(trade.netPnl),
             fees: Number(trade.fees),
+            ...(trade.funding === null ? {} : { funding: Number(trade.funding) }),
             exitReason: serializeValidationExitReason(trade.exitReason),
           })),
           tradesTotal: run._count.trades,
@@ -3661,6 +3675,7 @@ export async function createApp({ config, prisma }: CreateAppDependencies) {
           summary: ledger.summary,
           positions: ledger.positions.map((position) => ({
             closing: position.closing,
+            funding: position.funding,
             realizedPnl: position.realizedPnl.toFixed(),
             id: position.id,
             symbol: position.symbol,

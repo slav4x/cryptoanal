@@ -197,6 +197,13 @@ function CompletedRun({
                   периода это сценарное допущение: история изменений правил биржи не подтверждена.
                 </p>
               ) : null}
+              {metrics.provenance.fundingPolicy.status === "enabled" && (
+                <p className="text-muted-foreground">
+                  Funding {formatMoney(metrics.totalFunding ?? 0)}. Исторические ставки и mark-price
+                  open — расчётный сценарий; биржевое включение позиции вблизи границы может
+                  отличаться.
+                </p>
+              )}
               <DetailRow label="Окон" value={String(metrics.windows)} />
               <DetailRow label="Доходность" value={formatSignedPercent(metrics.returnPercent)} />
               <DetailRow label="Verdict" value={verdictLabels[run.verdict]} />

@@ -1,7 +1,11 @@
 import {
+  advanceFundedCandle,
+  validateFundingDataset,
+  type ExecutionFundingDataset,
+} from "./execution-funding";
+import {
   executionEntryCandleRange,
   enrichExecutionCandles,
-  advanceExecutionCandlePosition,
   getExecutionSignal,
   getTradingDateKey,
   openExecutionPosition,
@@ -18,7 +22,7 @@ import {
 } from "./execution-instrument";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.7.0";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.8.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -44,15 +48,30 @@ export type RuntimeReplayTrade = {
   quantity: number;
   netPnl: number;
   fees: number;
+  funding?: number;
   exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data";
 };
 
 export function runRuntimeReplay(input: {
+  funding?: ExecutionFundingDataset;
   instrumentRules?: Record<string, ExecutionInstrumentRules>;
   config: ExecutionStrategyConfig;
   candles: ExecutionCandle[];
   initialCapital: number;
 }) {
+  if (input.funding && input.candles.length) {
+    const interval =
+      { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 }[
+        input.config.universe.timeframe
+      ] * 60000;
+    const times = input.candles.map((c) => +c.openTime);
+    validateFundingDataset(
+      input.funding,
+      [...new Set(input.candles.map((c) => c.symbol))],
+      new Date(times.reduce((a, b) => Math.min(a, b), Infinity)),
+      new Date(times.reduce((a, b) => Math.max(a, b), -Infinity) + interval),
+    );
+  }
   if (input.instrumentRules)
     for (const symbol of new Set(input.candles.map((candle) => candle.symbol))) {
       const rules = readExecutionInstrumentRules(input.instrumentRules[symbol]);
@@ -83,23 +102,31 @@ export function runRuntimeReplay(input: {
   const decisions: RuntimeReplayDecision[] = [];
   const dailyPnl = new Map<string, number>();
   let equity = input.initialCapital;
+  const applyCharges = (charges: Array<{ settledAt: string; amount: string }>) => {
+    for (const charge of charges) {
+      equity -= Number(charge.amount);
+      const day = getTradingDateKey(new Date(charge.settledAt), input.config.schedule.timezone);
+      dailyPnl.set(day, (dailyPnl.get(day) ?? 0) - Number(charge.amount));
+    }
+  };
   let sequence = 0;
 
   for (const [, candles] of [...groups.entries()].sort(([left], [right]) => left - right)) {
     for (const candle of candles) {
       const position = positions.get(candle.symbol);
       if (!position) continue;
-      const step = advanceExecutionCandlePosition(position, candle, input.config);
+      const step = advanceFundedCandle(position, candle, input.config, input.funding);
+      applyCharges(step.charges);
       const settlement = step.settlement;
       if (settlement) {
         positions.delete(candle.symbol);
         trades.push(settlement);
-        equity += settlement.netPnl;
+        equity += settlement.netPnl + (settlement.funding ?? 0);
         const day = getTradingDateKey(
           new Date(settlement.closedAt),
           input.config.schedule.timezone,
         );
-        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + settlement.netPnl);
+        dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + settlement.netPnl + (settlement.funding ?? 0));
         decisions.push({
           sequence: sequence++,
           symbol: candle.symbol,
@@ -144,16 +171,20 @@ export function runRuntimeReplay(input: {
             : "pending-signal-filled",
         price: position.entryPrice,
       });
-      const step = advanceExecutionCandlePosition(position, entryRange.candle, input.config);
+      const step = advanceFundedCandle(position, entryRange.candle, input.config, input.funding);
+      applyCharges(step.charges);
       const settlement = step.settlement;
       if (settlement) {
         trades.push(settlement);
-        equity += settlement.netPnl;
+        equity += settlement.netPnl + (settlement.funding ?? 0);
         const closeDay = getTradingDateKey(
           new Date(settlement.closedAt),
           input.config.schedule.timezone,
         );
-        dailyPnl.set(closeDay, (dailyPnl.get(closeDay) ?? 0) + settlement.netPnl);
+        dailyPnl.set(
+          closeDay,
+          (dailyPnl.get(closeDay) ?? 0) + settlement.netPnl + (settlement.funding ?? 0),
+        );
         decisions.push({
           sequence: sequence++,
           symbol: candle.symbol,
@@ -180,12 +211,16 @@ export function runRuntimeReplay(input: {
     const settlement = settleExecutionPosition(
       position,
       candle.close,
-      candle.openTime,
+      input.funding
+        ? new Date(
+            +candle.openTime + replayFundingTimeframes[input.config.universe.timeframe] * 60000,
+          )
+        : candle.openTime,
       "end-of-data",
       input.config,
     );
     trades.push(settlement);
-    equity += settlement.netPnl;
+    equity += settlement.netPnl + (settlement.funding ?? 0);
     decisions.push({
       sequence: sequence++,
       symbol,
@@ -198,13 +233,16 @@ export function runRuntimeReplay(input: {
 
   return {
     engineVersion: runtimeReplayEngineVersion,
-    fundingPolicy,
+    fundingPolicy: input.funding?.policy ?? fundingPolicy,
     decisions,
     trades,
     metrics: {
       trades: trades.length,
       netPnl: round(trades.reduce((sum, trade) => sum + trade.netPnl, 0)),
       totalFees: round(trades.reduce((sum, trade) => sum + trade.fees, 0)),
+      ...(input.funding
+        ? { totalFunding: round(trades.reduce((sum, t) => sum + (t.funding ?? 0), 0)) }
+        : {}),
       endingEquity: round(equity),
     },
   };
@@ -213,3 +251,13 @@ export function runRuntimeReplay(input: {
 function round(value: number) {
   return Math.round(value * 1e8) / 1e8;
 }
+
+const replayFundingTimeframes = {
+  "1m": 1,
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "4h": 240,
+  "1d": 1440,
+};

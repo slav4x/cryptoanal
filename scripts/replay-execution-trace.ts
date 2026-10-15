@@ -51,6 +51,11 @@ try {
     endEventId: trace.endEventId ?? trace.position.priceEventId ?? trace.startEventId,
     records: trace.records,
     loadEvents: (cursor, through) => archive.after(trace.symbol, cursor, through),
+    loadFundingSnapshot: (id) =>
+      prisma.fundingHistorySnapshot.findUnique({
+        where: { id },
+        select: { payload: true, payloadHash: true },
+      }),
     trade: trade
       ? {
           exitReason: trade.exitReason,
@@ -59,6 +64,7 @@ try {
           grossPnl: trade.grossPnl.toFixed(),
           netPnl: trade.netPnl.toFixed(),
           fees: trade.fees.toFixed(),
+          funding: trade.funding.toFixed(),
           slippage: trade.slippage.toFixed(),
         }
       : null,

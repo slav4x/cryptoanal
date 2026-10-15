@@ -1,3 +1,4 @@
+import { fundingCovers, readPositionFundingState } from "./funding-repository";
 import { realizedCashPnl } from "./realized-cash";
 import {
   executionStopRisk,
@@ -135,6 +136,7 @@ export async function assessRuntimeRisk(
   let reservedStopRisk = 0;
   let stopRiskValid = true;
   let marketReady = true;
+  let fundingReady = true;
   if (
     positions.length > 0 &&
     (await tx.runtimeCursor.findFirst({
@@ -162,6 +164,26 @@ export async function assessRuntimeRisk(
     const price = Number(fresh ? quote.price : (position.markPrice ?? position.entryPrice));
     const quantity = Number(position.remainingQuantity ?? position.quantity);
     const entryFee = Number(position.remainingEntryFee ?? position.entryFee);
+    if (position.fundingPolicy) {
+      const state = readPositionFundingState(position.fundingState),
+        market = await tx.fundingMarketState.findUnique({ where: { symbol: position.symbol } });
+      if (
+        !state ||
+        !fundingCovers(
+          state,
+          position.closedAt ?? position.managedThroughAt ?? position.openedAt,
+        ) ||
+        !market ||
+        state.nextFundingAt !== market.nextFundingAt.toISOString() ||
+        +now - +market.observedAt > 120000 ||
+        +market.observedAt > +now + 1000
+      )
+        fundingReady = false;
+      if (quantity === 0 && position.closedAt) {
+        equity += Number(position.realizedPnl);
+        continue;
+      }
+    }
     const pnl =
       (price - Number(position.entryPrice)) * quantity * (position.side === "BUY" ? 1 : -1);
     const costs = readRiskConfig(position.strategyVersion.config);
@@ -238,15 +260,17 @@ export async function assessRuntimeRisk(
       : null;
   const reason =
     forceCloseReason ??
-    (!configured || !stopRiskValid
-      ? "INVALID_RISK_CONFIG"
-      : !marketReady
-        ? "MARKET_RECOVERY_REQUIRED"
-        : strategyDailyPnl <= -strategyLossLimit
-          ? "STRATEGY_DAILY_LOSS_LIMIT"
-          : remainingStopRisk <= 0
-            ? "MAX_ACCOUNT_STOP_RISK"
-            : null);
+    (!fundingReady
+      ? "FUNDING_DATA_UNAVAILABLE"
+      : !configured || !stopRiskValid
+        ? "INVALID_RISK_CONFIG"
+        : !marketReady
+          ? "MARKET_RECOVERY_REQUIRED"
+          : strategyDailyPnl <= -strategyLossLimit
+            ? "STRATEGY_DAILY_LOSS_LIMIT"
+            : remainingStopRisk <= 0
+              ? "MAX_ACCOUNT_STOP_RISK"
+              : null);
   return {
     reason,
     forceCloseReason,

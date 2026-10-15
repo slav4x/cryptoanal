@@ -1,3 +1,9 @@
+import {
+  verifyFundingRecord,
+  verifyFundingAllocation,
+  type FundingReplayBalance,
+} from "../packages/persistence/src/funding-proof";
+import { readPositionFundingState } from "../packages/persistence/src/funding-repository";
 import "dotenv/config";
 import { Client } from "pg";
 import { writeFile } from "node:fs/promises";
@@ -5,6 +11,7 @@ import { hashTracePayload } from "../packages/persistence/src/position-trace";
 import {
   verifyLiquidityExitFill,
   verifyLiquidityExitStep,
+  type LiquidityExitStep,
 } from "../packages/persistence/src/liquidity-exit-proof";
 import {
   exitDecimal,
@@ -68,6 +75,7 @@ try {
         ...(stored.instrumentRules
           ? { instrumentRules: readExecutionInstrumentRules(stored.instrumentRules)! }
           : {}),
+        ...(stored.fundingPolicy ? { fundingPaid: Number(stored.fundingRemaining) } : {}),
         symbol: stored.symbol,
         side: stored.side === "BUY" ? "long" : "short",
         openedAt: stored.openedAt,
@@ -267,12 +275,33 @@ try {
         !entries.eq(p.quantity) ||
         !exits.add(p.remainingQuantity).eq(p.quantity) ||
         !allocated.add(p.remainingEntryFee).eq(p.entryFee) ||
-        !net.eq(p.realizedPnl) ||
+        !net.sub(p.fundingAccrued ?? 0).eq(p.realizedPnl) ||
         open !== (p.exitState?.order ? 1 : 0) ||
-        (p.status === "CLOSED") !== exitDecimal(p.remainingQuantity).eq(0)
+        (p.status === "CLOSED" && !exitDecimal(p.remainingQuantity).eq(0)) ||
+        (p.status === "OPEN" &&
+          exitDecimal(p.remainingQuantity).eq(0) &&
+          (!p.fundingPolicy ||
+            !p.closedAt ||
+            p.exitState?.waitingReason !== "EXIT_WAITING_FUNDING"))
       )
         throw new Error("Position partial balance mismatch");
-      if (p.exitState) {
+      if (p.fundingPolicy || p.exitState) {
+        const header = (
+          await client.query(
+            'SELECT snapshot FROM "PositionExecutionTrace" WHERE "positionId"=$1',
+            [p.id],
+          )
+        ).rows[0]?.snapshot;
+        let funding: FundingReplayBalance | null = p.fundingPolicy
+          ? {
+              state: readPositionFundingState(header.funding.state)!,
+              accrued: header.funding.accrued,
+              remaining: header.funding.remaining,
+              paid: {},
+            }
+          : null;
+        const fundingExits: Array<{ quantity: string; filledAt: string }> = [];
+        const checkedPayments = new Set<string>();
         let state: LiquidityExitState | null = null;
         for (const r of (
           await client.query(
@@ -281,7 +310,59 @@ try {
           )
         ).rows) {
           if (hashTracePayload(r.payload) !== r.payloadHash) throw new Error("Trace hash mismatch");
-          if (r.kind === "liquidity-trigger") {
+          if (r.kind === "funding") {
+            if (!funding) throw new Error("Unexpected funding trace");
+            funding = await verifyFundingRecord(
+              r.payload,
+              {
+                id: p.id,
+                symbol: p.symbol,
+                side: p.side,
+                quantity: basis.quantity,
+                openedAt: p.openedAt.toISOString(),
+              },
+              funding,
+              fundingExits,
+              async (id) =>
+                (
+                  await client.query(
+                    'SELECT payload,"payloadHash" FROM "FundingHistorySnapshot" WHERE id=$1',
+                    [id],
+                  )
+                ).rows[0] ?? null,
+            );
+            for (const payment of r.payload.payments) {
+              const row = (
+                await client.query(
+                  'SELECT * FROM "PositionFundingPayment" WHERE "positionId"=$1 AND "settledAt"=$2',
+                  [p.id, payment.event.settledAt],
+                )
+              ).rows[0];
+              if (
+                !row ||
+                checkedPayments.has(row.id) ||
+                hashTracePayload(row.execution.payload) !== row.execution.hash ||
+                row.execution.payload.positionId !== p.id ||
+                hashTracePayload(row.execution.payload.event) !== hashTracePayload(payment.event) ||
+                !exitDecimal(row.quantity).eq(payment.quantity) ||
+                !exitDecimal(row.amount).eq(payment.amount) ||
+                !exitDecimal(row.rate).eq(payment.event.rate) ||
+                !exitDecimal(row.markPrice).eq(payment.event.markPrice)
+              )
+                throw new Error("Funding receipt mismatch");
+              checkedPayments.add(row.id);
+            }
+          } else if (r.kind === "liquidity-finalize") {
+            if (
+              !state ||
+              !funding ||
+              hashTracePayload(r.payload.before) !== hashTracePayload(state) ||
+              hashTracePayload(r.payload.after) !==
+                hashTracePayload({ ...state, waitingReason: null })
+            )
+              throw new Error("Funding finalization mismatch");
+            state = r.payload.after;
+          } else if (r.kind === "liquidity-trigger") {
             if (state || hashTracePayload(r.payload.basis) !== hashTracePayload(basis))
               throw new Error("Trigger basis mismatch");
             state = initialLiquidityExitState(basis, r.payload.state.intent);
@@ -289,21 +370,58 @@ try {
               throw new Error("Initial exit balance mismatch");
           } else if (r.kind === "liquidity-step") {
             if (!state) throw new Error("Missing exit intent");
-            state = verifyLiquidityExitStep(r.payload, config, basis, state).state;
+            const step = r.payload as LiquidityExitStep;
+            if (step.action.kind === "fill" && step.action.result.kind === "fill") {
+              if (funding) {
+                const allocation = verifyFundingAllocation(
+                  step.fundingAllocation,
+                  funding.remaining,
+                  step.action.result.quantity,
+                  remainingExitQuantity(state),
+                );
+                funding = { ...funding, remaining: allocation.remaining };
+              }
+              fundingExits.push({
+                quantity: step.action.result.quantity,
+                filledAt: step.event.observedAt,
+              });
+            }
+            state = verifyLiquidityExitStep(step, config, basis, state).state;
           }
         }
+        if (funding) {
+          if (
+            !exitDecimal(funding.accrued).eq(p.fundingAccrued) ||
+            !exitDecimal(funding.remaining).eq(p.fundingRemaining) ||
+            hashTracePayload(funding.state) !== hashTracePayload(p.fundingState) ||
+            (
+              await client.query(
+                'SELECT count(*)::int AS count FROM "PositionFundingPayment" WHERE "positionId"=$1',
+                [p.id],
+              )
+            ).rows[0].count !== checkedPayments.size
+          )
+            throw new Error("Funding persisted balance mismatch");
+        }
         if (
-          !state ||
-          hashTracePayload(state) !== hashTracePayload(p.exitState) ||
-          !exitDecimal(remainingExitQuantity(state)).eq(p.remainingQuantity) ||
-          !exitDecimal(remainingExitEntryFee(state)).eq(p.remainingEntryFee)
+          p.exitState &&
+          (!state ||
+            hashTracePayload(state) !== hashTracePayload(p.exitState) ||
+            !exitDecimal(remainingExitQuantity(state)).eq(p.remainingQuantity) ||
+            !exitDecimal(remainingExitEntryFee(state)).eq(p.remainingEntryFee))
         )
           throw new Error("Stored exit state mismatch");
       }
       if (p.status === "CLOSED") {
         const t = (await client.query('SELECT * FROM "Trade" WHERE "positionId"=$1', [p.id]))
           .rows[0];
-        if (!t || !net.eq(t.netPnl) || !gross.eq(t.grossPnl) || !fees.eq(t.fees))
+        if (
+          !t ||
+          !net.sub(p.fundingAccrued ?? 0).eq(t.netPnl) ||
+          !exitDecimal(t.funding).eq(p.fundingAccrued ?? 0) ||
+          !gross.eq(t.grossPnl) ||
+          !fees.eq(t.fees)
+        )
           throw new Error("Aggregate trade mismatch");
       }
     } catch (error) {
@@ -316,6 +434,11 @@ try {
   }
   const summary = {
     liquidityExits,
+    funding:
+      await one(`SELECT count(*)::int AS positions,count(*) FILTER(WHERE "fundingState"->>'status'='pending')::int AS pending,
+      count(*) FILTER(WHERE status='OPEN' AND "remainingQuantity"=0)::int AS financialPending,
+      (SELECT count(*)::int FROM "PositionFundingPayment") AS payments,
+      (SELECT coalesce(sum(amount),0)::text FROM "PositionFundingPayment") AS signedCost FROM "Position" WHERE "fundingPolicy" IS NOT NULL`),
     exitExecution: { ...exitExecution, ...missingExitReceipts },
     entryExecution: { ...entryExecution, ...sourceUse },
     instrumentCompliance,
@@ -404,7 +527,7 @@ try {
       count(*) FILTER(WHERE p."trailingPrice" IS NOT NULL)::int AS trailing,
       count(*) FILTER(WHERE e."streamId" IS DISTINCT FROM p."priceStreamId")::int AS "streamMismatch"
       FROM "Position" p LEFT JOIN LATERAL (SELECT "observedAt","streamId" FROM "MarketPriceEvent" WHERE symbol=p.symbol ORDER BY id DESC LIMIT 1) e ON true
-      WHERE p.status='OPEN' GROUP BY 1 ORDER BY 1`),
+      WHERE p.status='OPEN' AND coalesce(p."remainingQuantity",p.quantity)>0 GROUP BY 1 ORDER BY 1`),
     cursorFailures: await rows(
       'SELECT "lastFailureCode", count(*)::int AS count, max("consecutiveFailures") AS consecutive FROM "RuntimeCursor" GROUP BY 1',
     ),

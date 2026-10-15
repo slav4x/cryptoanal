@@ -93,6 +93,7 @@ export async function ensurePositionTrace(
       entryFee: true,
       entrySlippage: true,
       executionPolicy: true,
+      recoveryModel: true,
       fundingPolicy: true,
       fundingState: true,
       fundingAccrued: true,
@@ -107,6 +108,9 @@ export async function ensurePositionTrace(
     ? executionPolicy.payload.settings.profitProtection
     : input.options.profitProtectionPolicy;
   const snapshot = {
+    ...(persisted.recoveryModel
+      ? { recoveryModel: readExecutionRecoveryModel(persisted.recoveryModel) }
+      : {}),
     ...(executionPolicy ? { executionPolicy } : {}),
     version: 1,
     positionId: input.positionId,
@@ -218,3 +222,4 @@ export async function closePositionTrace(
     },
   });
 }
+import { readExecutionRecoveryModel } from "../../application/src/execution-recovery-policy";

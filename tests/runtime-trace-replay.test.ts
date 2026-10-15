@@ -17,6 +17,7 @@ import {
 } from "../apps/worker/src/runtime-price-processor";
 import { runtimeTraceInputs, type RuntimeTraceRecovery } from "../apps/worker/src/runtime-trace";
 import { recoverRuntimeGap } from "../apps/worker/src/runtime-recovery";
+import { recoverCausalRuntimeGap } from "../apps/worker/src/causal-recovery";
 
 const at = new Date("2026-10-14T00:00:00Z");
 const config = strategyConfigSchema.parse({
@@ -46,6 +47,7 @@ async function trace(
   protection: ExecutionProfitProtectionPolicy | null = policy,
   signals: RuntimeSignalEvent[] = [],
   instrumentRules?: ExecutionInstrumentRules,
+  causal = false,
 ) {
   const position: ExecutionPosition = {
     ...(instrumentRules ? { instrumentRules } : {}),
@@ -86,7 +88,9 @@ async function trace(
   const records: Array<{ eventId: bigint; kind: string; payload: unknown; payloadHash: string }> =
     [];
   const recoveries: RuntimeTraceRecovery[] = [];
+  let historyIncomplete = false;
   await processRuntimePriceEvents({
+    protectBeforeRecovery: causal,
     position,
     through: at,
     streamId: "same",
@@ -95,7 +99,7 @@ async function trace(
     profitProtection: { policy: protection, state: null },
     signalIntervalMs: 900000,
     loadSignals: async () => signals,
-    recover: async (p, since, quote) => {
+    recover: async (p, since, quote, protectionState) => {
       const minutes = [0, 60000].map((offset) => ({
         symbol: "BTCUSDT",
         openTime: new Date(+at + offset),
@@ -105,16 +109,53 @@ async function trace(
         close: 100,
         turnover: 1,
       }));
+      if (causal) {
+        const source = {
+          strictMinutes: true,
+          anchorTradeId: "start",
+          quoteTradeId: "end",
+          recent: {
+            sampledAt: quote.observedAt.toISOString(),
+            trades: [
+              { tradeId: "start", symbol: p.symbol, price: "100", observedAt: since.toISOString() },
+              {
+                tradeId: "peak",
+                symbol: p.symbol,
+                price: side === "long" ? "104" : "96",
+                observedAt: new Date(+since + 1000).toISOString(),
+              },
+              {
+                tradeId: "end",
+                symbol: p.symbol,
+                price: String(quote.price),
+                observedAt: quote.observedAt.toISOString(),
+              },
+            ],
+          },
+        };
+        recoveries.push({ eventId: quote.id, since, quote, minutes: [], causal: source });
+        return recoverCausalRuntimeGap({
+          position: p,
+          since,
+          quote,
+          minutes: [],
+          config: configured,
+          protection: protectionState,
+          ...source,
+        });
+      }
       recoveries.push({ eventId: quote.id, since, quote, minutes });
       return recoverRuntimeGap({ position: p, since, quote, minutes, config: configured });
     },
     checkpoint: async (checkpoint) => {
+      historyIncomplete ||= checkpoint.historyIncomplete ?? false;
       const payload = {
         quotePrice: String(checkpoint.markPrice),
         quoteAt: checkpoint.through.toISOString(),
         signalCandleAt: checkpoint.signalCandleAt?.toISOString() ?? null,
         profitProtectionState: checkpoint.profitProtectionState ?? null,
         inputs: runtimeTraceInputs({
+          protectBeforeRecovery: causal,
           firstEventId: quotes[0]!.id,
           policy: protection,
           signals,
@@ -162,15 +203,50 @@ async function trace(
     fullFromEntry: true,
     startEventId: 1n,
     endEventId: records.at(-1)!.eventId,
-    expectedEventCount: BigInt(
-      quotes.filter((quote) => quote.id <= records.at(-1)!.eventId).length,
-    ),
+    expectedEventCount: historyIncomplete
+      ? null
+      : BigInt(quotes.filter((quote) => quote.id <= records.at(-1)!.eventId).length),
     records,
     loadEvents: async (cursor: bigint, through: bigint) =>
       events.filter((e) => e.id > cursor && e.id <= through),
     trade: null,
   };
 }
+test("new recovery replays the original public trades and restored protection across restart", async () => {
+  for (const side of ["long", "short"] as const) {
+    const value = side === "long" ? 104 : 96;
+    const input = await trace(
+      side,
+      [event(2, value, 10000, "new"), event(3, 100, 11000, "new")],
+      config,
+      policy,
+      [],
+      undefined,
+      true,
+    );
+    const result = await replayRuntimeTrace(input);
+    assert.equal(result.status, "matched");
+    assert.deepEqual(result.differences, []);
+    assert.equal(result.recoveries, 1);
+    assert.deepEqual(result.recoverySources, { "recent-public-trades": 1 });
+    assert.equal(result.continuity, "recorded-public-trade-recovery");
+    assert.ok(result.limits.every((limit) => !limit.includes("minute OHLC")));
+  }
+});
+test("a protective exit before recovery remains explicitly incomplete in replay", async () => {
+  const value = await trace(
+    "long",
+    [event(2, 96, 10000, "new")],
+    config,
+    policy,
+    [],
+    undefined,
+    true,
+  );
+  const result = await replayRuntimeTrace(value);
+  assert.equal(result.status, "incomplete");
+  assert.ok(result.gaps.some((g) => g.includes("coverage count")));
+});
 for (const side of ["long", "short"] as const)
   test(`${side}: replay preserves profit-protection peaks and exact first exit from immutable records`, async () => {
     const input = await trace(side, [
@@ -194,6 +270,7 @@ test("replay uses original recovery minutes and explicitly labels unknown intrab
   assert.equal(result.status, "matched");
   assert.equal(result.recoveries, 1);
   assert.equal(result.continuity, "recorded-ohlc-recovery");
+  assert.deepEqual(result.recoverySources, { "minute-ohlc": 1 });
   assert.ok(result.limits.length);
 });
 test("missing original gap inputs cannot be declared a successful replay", async () => {

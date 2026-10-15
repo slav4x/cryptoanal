@@ -668,6 +668,7 @@ model ExecutionRun {
 }
 
 model Position {
+  recoveryModel     String?
   executionPolicy   Json?
   fundingPolicy     Json?
   fundingState      Json?
@@ -1227,6 +1228,24 @@ model MarketStreamLease {
   id        String   @id
   owner     String
   expiresAt DateTime @db.Timestamptz(3)
+}
+
+model MarketStreamSegment {
+  id               String    @id
+  writerId         String
+  previousStreamId String?
+  cause            String
+  startedAt        DateTime  @db.Timestamptz(3)
+  interruptedAt    DateTime? @db.Timestamptz(3)
+  endedAt          DateTime? @db.Timestamptz(3)
+  disconnectCode   Int?
+  disconnectReason String?
+  firstEventId     BigInt?
+  lastEventId      BigInt?
+  firstObservedAt  DateTime? @db.Timestamptz(3)
+  lastObservedAt   DateTime? @db.Timestamptz(3)
+
+  @@index([startedAt])
 }
 
 model RuntimeRiskDay {

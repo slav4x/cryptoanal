@@ -14,6 +14,7 @@ import {
 import type { RuntimeRecoveryEvidence } from "./runtime-recovery";
 
 export type RuntimePriceEvent = ExecutionQuote & {
+  eventKey?: string;
   id: bigint;
   streamId: string;
   receivedAt: Date;
@@ -24,6 +25,7 @@ export type RuntimeSignalEvent = {
   availableAt: Date;
 };
 export type RuntimePriceCheckpoint = {
+  historyIncomplete?: boolean;
   profitProtectionState?: ExecutionProfitProtectionState | null;
   position: ExecutionPosition;
   event: RuntimePriceEvent;
@@ -57,6 +59,9 @@ export async function forEachConcurrent<T>(
 }
 
 export async function processRuntimePriceEvents(input: {
+  protectBeforeRecovery?: boolean;
+  cursorEventId?: bigint | null;
+  latestProtectiveEvent?: RuntimePriceEvent;
   position: ExecutionPosition;
   through: Date;
   profitProtection?: {
@@ -74,14 +79,21 @@ export async function processRuntimePriceEvents(input: {
     position: ExecutionPosition,
     since: Date,
     quote: RuntimePriceEvent,
+    protection: {
+      policy: ExecutionProfitProtectionPolicy | null;
+      state: ExecutionProfitProtectionState | null;
+      anchorEventId: bigint | null;
+    },
   ) => Promise<{
     position: ExecutionPosition;
     settlement: ExecutionSettlement | null;
     evidence?: RuntimeRecoveryEvidence;
+    profitProtectionState?: ExecutionProfitProtectionState | null;
   }>;
   checkpoint: (state: RuntimePriceCheckpoint) => Promise<boolean>;
 }) {
   let profitProtectionState = input.profitProtection?.state ?? null;
+  let anchorEventId = input.cursorEventId ?? null;
   let position = input.position;
   let through = input.through;
   let streamId = input.streamId;
@@ -112,15 +124,60 @@ export async function processRuntimePriceEvents(input: {
     }
     const quote = { ...event, observedAt: new Date(Math.max(+event.observedAt, +through)) };
     let settlement: ExecutionSettlement | null = null;
-    if (streamId !== event.streamId) {
+    if (streamId !== event.streamId && input.protectBeforeRecovery) {
+      const candidates = input.events.filter((e) => e.id >= event.id);
+      if (
+        input.latestProtectiveEvent &&
+        input.latestProtectiveEvent.id > (candidates.at(-1)?.id ?? event.id)
+      )
+        candidates.push(input.latestProtectiveEvent);
+      for (const candidate of candidates) {
+        if (candidate.observedAt < through || candidate.observedAt < position.openedAt) continue;
+        const exit = evaluateExecutionPriceExit(
+          position,
+          { ...candidate, source: candidate.source ?? "LastPrice" },
+          input.config,
+        );
+        if (!exit) continue;
+        await input.checkpoint({
+          position,
+          event: candidate,
+          through: candidate.observedAt,
+          streamId: candidate.streamId,
+          markPrice: candidate.price,
+          settlement: exit,
+          recovered: true,
+          historyIncomplete: true,
+          recovery: {
+            reason: streamId === null ? "unconfirmed-stream" : "stream-change",
+            fromAt: through.toISOString(),
+            toAt: candidate.observedAt.toISOString(),
+            source: "journal-protection",
+            quality: "incomplete",
+            ambiguity: "unreconstructed-gap",
+          },
+          signalCandleAt,
+          signalExit,
+          ...(input.profitProtection ? { profitProtectionState } : {}),
+        });
+        return;
+      }
+    }
+    if (streamId !== event.streamId && !settlement) {
       // Commit the known prefix before waiting for an independent recovery source.
       if (pending && !(await input.checkpoint(pending))) return;
       pending = null;
-      const result = await input.recover(position, through, quote);
+      const result = await input.recover(position, through, quote, {
+        policy: input.profitProtection?.policy ?? null,
+        state: profitProtectionState,
+        anchorEventId,
+      });
       recovery = result.evidence
         ? { ...result.evidence, reason: streamId === null ? "unconfirmed-stream" : "stream-change" }
         : null;
       position = result.position;
+      if ("profitProtectionState" in result)
+        profitProtectionState = result.profitProtectionState ?? null;
       settlement = result.settlement;
       recovered = true;
     }
@@ -177,6 +234,7 @@ export async function processRuntimePriceEvents(input: {
       profitProtectionState = protection.state;
     }
     through = quote.observedAt;
+    anchorEventId = event.id;
     streamId = event.streamId;
     markPrice = quote.price;
     pending = {

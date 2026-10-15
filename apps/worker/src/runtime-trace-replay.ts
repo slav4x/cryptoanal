@@ -25,6 +25,9 @@ import { strategyConfigSchema } from "@cryptoanal/contracts";
 import { hashTracePayload, type ArchivedPriceEvent } from "@cryptoanal/persistence";
 import { processRuntimePriceEvents, type RuntimeSignalEvent } from "./runtime-price-processor";
 import { recoverRuntimeGap } from "./runtime-recovery";
+import { recoverCausalRuntimeGap } from "./causal-recovery";
+import { readExecutionRecoveryModel } from "@cryptoanal/application";
+import type { RuntimeTraceRecovery } from "./runtime-trace";
 
 type Snapshot = {
   version: 1;
@@ -42,6 +45,15 @@ type Snapshot = {
   funding: { status: string; state?: unknown; accrued?: string; remaining?: string };
 };
 type TraceInputs = {
+  latestProtectiveEvent?: {
+    id: string;
+    symbol: string;
+    price: number;
+    streamId: string;
+    observedAt: string;
+    receivedAt: string;
+  };
+  protectBeforeRecovery?: boolean;
   version: 1;
   mode: string;
   firstEventId: string;
@@ -52,6 +64,7 @@ type TraceInputs = {
     availableAt: string;
   }>;
   recoveries: Array<{
+    causal?: RuntimeTraceRecovery["causal"];
     eventId: string;
     since: string;
     minutes: Array<Omit<ExecutionCandle, "openTime"> & { openTime: string }>;
@@ -115,9 +128,11 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
     throw new Error("Trace snapshot checksum mismatch");
   const snapshot = input.snapshot as Snapshot;
   readPinnedExecutionPolicy((input.snapshot as { executionPolicy?: unknown }).executionPolicy);
+  readExecutionRecoveryModel((input.snapshot as { recoveryModel?: unknown }).recoveryModel);
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.10.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.9.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.8.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.7.0" &&
@@ -208,6 +223,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   let signalCandleAt = snapshot.signalCandleAt ? date(snapshot.signalCandleAt) : null;
   let policy = snapshot.profitProtectionPolicy;
   let signals: RuntimeSignalEvent[] = [];
+  const recoverySources: Record<string, number> = {};
   let settlement: ExecutionSettlement | null = null;
   let count = 0,
     recoveries = 0,
@@ -282,6 +298,19 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
         }
         try {
           await processRuntimePriceEvents({
+            protectBeforeRecovery: inputs?.protectBeforeRecovery ?? false,
+            cursorEventId: cursor,
+            ...(inputs?.latestProtectiveEvent
+              ? {
+                  latestProtectiveEvent: {
+                    ...inputs.latestProtectiveEvent,
+                    id: BigInt(inputs.latestProtectiveEvent.id),
+                    observedAt: date(inputs.latestProtectiveEvent.observedAt),
+                    receivedAt: date(inputs.latestProtectiveEvent.receivedAt),
+                    source: "LastPrice" as const,
+                  },
+                }
+              : {}),
             position,
             through,
             streamId,
@@ -297,23 +326,36 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
             (config.signal.family === "ema-crossover" && config.exit.exitOnSignalReversal)
               ? { loadSignals: async () => signals }
               : {}),
-            recover: async (p, since, quote) => {
+            recover: async (p, since, quote, protection) => {
               const recovery = recordedRecoveries.find((item) => item.eventId === String(quote.id));
               if (!recovery || +date(recovery.since) !== +since)
                 throw new RuntimeTraceIncompleteError(
                   `Missing original recovery input at ${quote.id}`,
                 );
               recoveries++;
-              return recoverRuntimeGap({
-                position: p,
-                since,
-                quote,
-                minutes: recovery.minutes.map((candle) => ({
-                  ...candle,
-                  openTime: date(candle.openTime),
-                })),
-                config,
-              });
+              const recovered = recovery.causal
+                ? recoverCausalRuntimeGap({
+                    position: p,
+                    since,
+                    quote,
+                    config,
+                    protection,
+                    ...recovery.causal,
+                    minutes: recovery.minutes.map((c) => ({ ...c, openTime: date(c.openTime) })),
+                  })
+                : recoverRuntimeGap({
+                    position: p,
+                    since,
+                    quote,
+                    minutes: recovery.minutes.map((candle) => ({
+                      ...candle,
+                      openTime: date(candle.openTime),
+                    })),
+                    config,
+                  });
+              const source = recovered.evidence.source;
+              recoverySources[source] = (recoverySources[source] ?? 0) + 1;
+              return recovered;
             },
             checkpoint: async (checkpoint) => {
               count += segment.filter(
@@ -434,18 +476,32 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
     availableEvents,
     checkpoints,
     recoveries,
+    recoverySources,
     throughEventId: String(cursor),
     differences,
     gaps,
     settlement: result,
-    continuity: gaps.length ? "incomplete" : recoveries ? "recorded-ohlc-recovery" : "continuous",
+    continuity: gaps.length
+      ? "incomplete"
+      : recoverySources["recent-public-trades"]
+        ? recoverySources["minute-ohlc"]
+          ? "recorded-mixed-recovery"
+          : "recorded-public-trade-recovery"
+        : recoveries
+          ? "recorded-ohlc-recovery"
+          : "continuous",
     limits: [
       ...(input.fullFromEntry
         ? []
         : ["Price history before the initial checkpoint was not retained"]),
-      ...(recoveries
+      ...(recoverySources["minute-ohlc"]
         ? [
             "Missing trade intervals use original recorded minute OHLC; intrabar order remains unknown",
+          ]
+        : []),
+      ...(recoverySources["recent-public-trades"]
+        ? [
+            "Missing intervals use bounded recorded public trades; historical L1 fills remain unknown",
           ]
         : []),
     ],

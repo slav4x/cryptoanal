@@ -12,6 +12,38 @@ const klineResult = {
   list: [["1767225600000", "100", "101", "99", "100", "1", "100"]],
 };
 
+test("recent public trade recovery is capped, abortable and validates every source record", async (t) => {
+  let trades = [
+    {
+      execId: "anchor",
+      symbol: "BTCUSDT",
+      price: "100",
+      size: "1",
+      side: "Buy",
+      time: "1767225600000",
+    },
+  ];
+  t.mock.method(globalThis, "fetch", async (url: URL, init: RequestInit) => {
+    assert.equal(url.pathname, "/v5/market/recent-trade");
+    assert.equal(url.searchParams.get("limit"), "1000");
+    assert.ok(init.signal);
+    return Response.json({
+      retCode: 0,
+      retMsg: "OK",
+      time: 1767225601000,
+      result: { category: "linear", list: trades },
+    });
+  });
+  const client = new BybitPublicMarketClient("https://example.invalid");
+  assert.equal((await client.getLinearRecentTrades("BTCUSDT")).trades[0]!.tradeId, "anchor");
+  trades = [{ ...trades[0]!, symbol: "ETHUSDT" }];
+  await assert.rejects(client.getLinearRecentTrades("BTCUSDT"), /Invalid recent/);
+  trades = [{ ...trades[0]!, symbol: "BTCUSDT", time: "1767225609000" }];
+  await assert.rejects(client.getLinearRecentTrades("BTCUSDT"), /Invalid recent/);
+  trades = [{ ...trades[0]!, time: "1767225600000", price: "0" }];
+  await assert.rejects(client.getLinearRecentTrades("BTCUSDT"), /Invalid recent/);
+});
+
 for (const endpoint of ["kline", "tickers", "instruments"] as const) {
   test(`Bybit ${endpoint} preserves API rejection before parsing result`, async (t) => {
     t.mock.method(globalThis, "fetch", async () =>

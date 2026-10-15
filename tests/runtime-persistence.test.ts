@@ -3,6 +3,7 @@ import {
   readPinnedExecutionPolicy,
   pinExecutionPolicy,
 } from "../packages/persistence/src/execution-policy-repository";
+import { causalRecoveryModel } from "../packages/application/src/execution-recovery-policy";
 import {
   assessExecutionAccount,
   defaultExecutionAccountSafety,
@@ -489,6 +490,16 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         const result = await archive.archiveAndPrune(new Date(Date.now() + 10000));
         assert.equal(result.archived, 3);
         assert.equal(await prisma.marketPriceEvent.count({ where: { symbol: context.symbol } }), 0);
+        assert.deepEqual(
+          (
+            await new PriceEventRepository(prisma).afterWithArchive(
+              context.symbol,
+              first.id,
+              first.observedAt,
+            )
+          ).map((e) => e.id),
+          [extra.id],
+        );
         const restarted = new PriceArchiveRepository(prisma),
           trade = trace.position.trade!;
         assert.deepEqual(
@@ -2989,6 +3000,12 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         await prisma.marketStreamLease.deleteMany();
         assert.equal(await journal.claimWriter(owner), true);
         assert.equal(await journal.claimWriter("other"), false);
+        await journal.recordStream({
+          id: owner,
+          writerId: owner,
+          cause: "worker-start",
+          startedAt: quoteAt,
+        });
         const events = [97, 100].map((price) => ({
           eventKey: randomUUID(),
           symbol: owner,
@@ -3006,6 +3023,10 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           ] as StoredExecutionMarketData,
         }));
         const first = await journal.append(events, owner);
+        const segment = await journal.streamSegment(owner);
+        assert.equal(segment!.firstEventId, first[0]!.id);
+        assert.equal(segment!.lastEventId, first.at(-1)!.id);
+        assert.equal(segment!.cause, "worker-start");
         const restarted = new PriceEventRepository(prisma);
         assert.deepEqual(
           (await restarted.append(events, owner)).map((row) => row.id),
@@ -3025,6 +3046,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         );
         assert.deepEqual(repeated[0]!.executionData, original.executionData);
         assert.equal(+repeated[0]!.receivedAt, +original.receivedAt);
+        assert.equal((await journal.streamSegment(owner))!.lastEventId, first.at(-1)!.id);
         const unique = { ...events[1]!, eventKey: randomUUID() };
         await assert.rejects(
           restarted.append([unique, { ...events[0]!, price: "98" }], owner),
@@ -3052,6 +3074,25 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           [100],
         );
         await assert.rejects(journal.append(events, "other"), /lease lost/);
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION reject_stream_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'stream receipt unavailable'; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER reject_stream_receipt BEFORE UPDATE ON "MarketStreamSegment" FOR EACH ROW EXECUTE FUNCTION reject_stream_receipt()`,
+        );
+        try {
+          await assert.rejects(journal.append([unique], owner), /stream receipt unavailable/);
+          assert.equal(
+            await prisma.marketPriceEvent.count({ where: { eventKey: unique.eventKey } }),
+            0,
+          );
+          assert.equal((await journal.streamSegment(owner))!.lastEventId, first.at(-1)!.id);
+        } finally {
+          await prisma.$executeRawUnsafe(
+            'DROP TRIGGER reject_stream_receipt ON "MarketStreamSegment"',
+          );
+          await prisma.$executeRawUnsafe("DROP FUNCTION reject_stream_receipt()");
+        }
       },
     );
     async function realizedTrade(
@@ -3852,6 +3893,8 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           { ttlMs: 120000, maxDeviationBps: 100 },
           undefined,
           defaultLiquidityExitPolicy,
+          undefined,
+          causalRecoveryModel,
         );
         const c = await liquiditySetup(false, false, "0", repo, settings);
         const run = await prisma.executionRun.findUniqueOrThrow({ where: { id: c.run.id } }),
@@ -3867,10 +3910,16 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         const { input } = await liquidityFill(c);
         assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
         const p = await prisma.position.findFirstOrThrow({ where: { executionRunId: c.run.id } });
+        assert.equal(c.snapshot.recoveryModel, causalRecoveryModel);
+        assert.equal(p.recoveryModel, causalRecoveryModel);
         assert.deepEqual(readPinnedExecutionPolicy(p.executionPolicy), pinned);
         const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
           where: { positionId: p.id },
         });
+        assert.equal(
+          (trace.snapshot as { recoveryModel: string }).recoveryModel,
+          causalRecoveryModel,
+        );
         assert.deepEqual(
           (trace.snapshot as { executionPolicy: unknown }).executionPolicy,
           JSON.parse(JSON.stringify(pinned)),

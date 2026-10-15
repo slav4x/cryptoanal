@@ -9,6 +9,7 @@ import { Client } from "pg";
 import { writeFile } from "node:fs/promises";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
 import { readPinnedExecutionPolicy } from "../packages/persistence/src/execution-policy-repository";
+import { readExecutionRecoveryModel } from "../packages/application/src/execution-recovery-policy";
 import {
   verifyLiquidityExitFill,
   verifyLiquidityExitStep,
@@ -118,6 +119,19 @@ try {
     }
   }
   const openProtection = { checked: 0, invalidOpenProtection: 0, protectionMismatch: 0 };
+  const recoveryPolicies = { checked: 0, invalidRecoveryPolicyBindings: 0 };
+  for (const row of await rows(
+    `SELECT p.id,p."recoveryModel",o.execution->'snapshot'->>'recoveryModel' AS "orderModel",t.snapshot->>'recoveryModel' AS "traceModel" FROM "Position" p LEFT JOIN "Order" o ON o."positionId"=p.id AND o.side=p.side LEFT JOIN "PositionExecutionTrace" t ON t."positionId"=p.id WHERE p."recoveryModel" IS NOT NULL OR o.execution->'snapshot'->>'recoveryModel' IS NOT NULL OR t.snapshot->>'recoveryModel' IS NOT NULL`,
+  )) {
+    recoveryPolicies.checked++;
+    try {
+      const model = readExecutionRecoveryModel(row.recoveryModel);
+      if (!model || model !== row.orderModel || model !== row.traceModel)
+        throw Error("Recovery binding mismatch");
+    } catch {
+      recoveryPolicies.invalidRecoveryPolicyBindings++;
+    }
+  }
   const instrumentCompliance = {
     checked: 0,
     legacyOpenPositions: 0,
@@ -494,6 +508,7 @@ try {
     }
   }
   const summary = {
+    recoveryPolicies,
     executionPolicies,
     liquidityExits,
     funding:
@@ -608,6 +623,7 @@ try {
     summary.exitExecution,
     summary.liquidityExits,
     summary.executionPolicies,
+    summary.recoveryPolicies,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)

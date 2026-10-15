@@ -15,11 +15,27 @@ import {
 export class RuntimeRecoveryIncompleteError extends Error {}
 
 export type RuntimeRecoveryEvidence = {
+  streamCause?: string;
+  interruptedAt?: string;
+  sourceFailure?: string;
   fromAt: string;
   toAt: string;
-  source: "minute-ohlc";
-  quality: "complete-minutes" | "bounded-partial-minutes" | "ambiguous";
-  ambiguity: "partial-protection-touch" | "partial-protection-change" | "intrabar-order" | null;
+  source: "minute-ohlc" | "recent-public-trades" | "journal-protection";
+  quality:
+    | "complete-minutes"
+    | "bounded-partial-minutes"
+    | "ambiguous"
+    | "bounded-public-trades"
+    | "incomplete";
+  ambiguity:
+    | "partial-protection-touch"
+    | "partial-protection-change"
+    | "intrabar-order"
+    | "unobserved-partial-minute"
+    | "same-timestamp-order"
+    | "historical-trigger-without-fill"
+    | "unreconstructed-gap"
+    | null;
 };
 
 export function runtimeRecoveryMinuteRange(since: Date, through: Date) {

@@ -417,6 +417,64 @@ export class BybitPrivateClient {
 }
 
 export class BybitPublicMarketClient {
+  public async getLinearRecentTrades(symbol: string, signal?: AbortSignal) {
+    const url = new URL("/v5/market/recent-trade", this.baseUrl);
+    url.searchParams.set("category", "linear");
+    url.searchParams.set("symbol", symbol);
+    url.searchParams.set("limit", "1000");
+    const response = await this.fetchImpl(url, {
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+        : AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(`Recent public trades HTTP ${response.status}`);
+    const parsed = parsePublicResponse(
+      await response.json(),
+      z.object({
+        retCode: z.number(),
+        retMsg: z.string(),
+        time: z.number().int().nonnegative(),
+        result: z.object({
+          category: z.literal("linear"),
+          list: z
+            .array(
+              z.object({
+                execId: z.string().min(1),
+                symbol: z.string(),
+                price: z.string(),
+                size: z.string(),
+                side: z.enum(["Buy", "Sell"]),
+                time: z.string().regex(/^\d+$/),
+              }),
+            )
+            .max(1000),
+        }),
+      }),
+      "recent trades",
+    );
+    const ids = new Set<string>();
+    const trades = parsed.result.list.map((t) => {
+      if (
+        t.symbol !== symbol ||
+        ids.has(t.execId) ||
+        !new Decimal(t.price).isFinite() ||
+        !new Decimal(t.price).gt(0) ||
+        !new Decimal(t.size).isFinite() ||
+        !new Decimal(t.size).gt(0) ||
+        !Number.isSafeInteger(Number(t.time)) ||
+        Number(t.time) > parsed.time + 1000
+      )
+        throw new Error("Invalid recent public trade");
+      ids.add(t.execId);
+      return {
+        tradeId: t.execId,
+        symbol: t.symbol,
+        price: t.price,
+        observedAt: new Date(Number(t.time)).toISOString(),
+      };
+    });
+    return { sampledAt: new Date(parsed.time).toISOString(), trades };
+  }
   private readonly fetchImpl: BybitFetch;
 
   public constructor(

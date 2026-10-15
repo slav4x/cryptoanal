@@ -216,6 +216,7 @@ export class RuntimeRepository {
     private readonly traceOptions: PositionTraceOptions = defaultPositionTraceOptions,
     private readonly exitPolicy: ExecutionExitPolicy = defaultExecutionExitPolicy,
     private readonly fundingPolicy?: ExecutionFundingPolicy,
+    private readonly recoveryModel?: ExecutionRecoveryModel,
   ) {
     if (fundingPolicy && !isLiquidityExitPolicy(exitPolicy))
       throw new Error("Funding requires liquidity exits");
@@ -296,6 +297,7 @@ export class RuntimeRepository {
           instrumentRules: true,
           exitPolicy: true,
           executionPolicy: true,
+          recoveryModel: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -430,6 +432,7 @@ export class RuntimeRepository {
         instrumentRules: true,
         exitPolicy: true,
         executionPolicy: true,
+        recoveryModel: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -500,6 +503,7 @@ export class RuntimeRepository {
           instrumentRules: true,
           exitPolicy: true,
           executionPolicy: true,
+          recoveryModel: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -982,6 +986,9 @@ export class RuntimeRepository {
           return { applied: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
       }
       const snapshot: ExecutionEntryOrder = {
+        ...(this.recoveryModel
+          ? { recoveryModel: readExecutionRecoveryModel(this.recoveryModel)! }
+          : {}),
         version: entryLiquidityVersion,
         ...(pinned ? { executionPolicy: pinned } : {}),
         ...(fundingPolicy
@@ -1568,6 +1575,9 @@ export class RuntimeRepository {
         return { applied: false, capacityReached: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
       const position = await transaction.position.create({
         data: {
+          ...(entryProof?.snapshot.recoveryModel
+            ? { recoveryModel: entryProof.snapshot.recoveryModel }
+            : {}),
           workspaceId: input.workspaceId,
           ...(entryProof?.snapshot.executionPolicy
             ? {
@@ -2494,6 +2504,7 @@ export class RuntimeRepository {
             side: true,
             exitPolicy: true,
             executionPolicy: true,
+            recoveryModel: true,
             fundingPolicy: true,
             fundingState: true,
             fundingAccrued: true,
@@ -2786,6 +2797,7 @@ export class RuntimeRepository {
         instrumentRules: true,
         exitPolicy: true,
         executionPolicy: true,
+        recoveryModel: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -3005,6 +3017,7 @@ export class RuntimeRepository {
           id: true,
           exitPolicy: true,
           executionPolicy: true,
+          recoveryModel: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -3373,3 +3386,7 @@ function parseManualCloseReceipt(
   if (!tradeId) throw new RuntimeIdempotencyConflictError();
   return { positionId, tradeId, replayed: true };
 }
+import {
+  readExecutionRecoveryModel,
+  type ExecutionRecoveryModel,
+} from "../../application/src/execution-recovery-policy";

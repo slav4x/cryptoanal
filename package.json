@@ -25,6 +25,7 @@
     "runtime:ledger": "tsx scripts/verify-execution-ledger.ts",
     "runtime:market-data": "tsx scripts/inspect-execution-market-data.ts",
     "runtime:replay-trace": "tsx scripts/replay-execution-trace.ts",
+    "runtime:recovery": "tsx scripts/inspect-runtime-recovery.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

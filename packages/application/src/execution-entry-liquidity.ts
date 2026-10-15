@@ -34,6 +34,7 @@ export type EntryExecutionMarker = {
   requestedQuantity: string;
 };
 export type ExecutionEntryOrder = {
+  recoveryModel?: ExecutionRecoveryModel;
   executionPolicy?: PinnedExecutionPolicy;
   fundingPolicy?: ExecutionFundingPolicy;
   fundingNextAt?: string;
@@ -133,6 +134,7 @@ export function readExecutionEntryOrder(value: unknown): ExecutionEntryOrder {
   readExecutionExitPolicy(order.exitPolicy);
   readExecutionFundingPolicy(order.fundingPolicy);
   if (order.executionPolicy) readExecutionPolicy(order.executionPolicy.payload);
+  readExecutionRecoveryModel(order.recoveryModel);
   if (
     order.fundingPolicy &&
     (!order.fundingNextAt || !Number.isFinite(Date.parse(order.fundingNextAt)))
@@ -251,3 +253,7 @@ export function evaluateExecutionEntryOrder(
     sourceCapacity: capacity,
   };
 }
+import {
+  readExecutionRecoveryModel,
+  type ExecutionRecoveryModel,
+} from "./execution-recovery-policy";

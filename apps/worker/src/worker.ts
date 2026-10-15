@@ -1,4 +1,10 @@
 import { executionPolicySettingsFromConfig } from "./execution-policy-settings";
+import {
+  recoverCausalRuntimeGap,
+  selectRecoveryTrades,
+  type RecoveryTradeSnapshot,
+} from "./causal-recovery";
+import { causalRecoveryModel, readExecutionRecoveryModel } from "@cryptoanal/application";
 import { ExecutionPolicyRepository, readPinnedExecutionPolicy } from "@cryptoanal/persistence";
 import { enabledFundingPolicy, type ExecutionFundingDataset } from "@cryptoanal/application";
 import { FundingRepository, hashTracePayload } from "@cryptoanal/persistence";
@@ -116,11 +122,7 @@ import {
 } from "./runtime-indicator-seed";
 import { restoreRevisedIndicators } from "./runtime-indicator-revision";
 import { signalAvailabilityTimes } from "./runtime-signal-order";
-import {
-  recoverRuntimeGap,
-  runtimeRecoveryMinuteRange,
-  RuntimeRecoveryIncompleteError,
-} from "./runtime-recovery";
+import { runtimeRecoveryMinuteRange, RuntimeRecoveryIncompleteError } from "./runtime-recovery";
 
 const heartbeatIntervalMs = 15_000;
 const workerId = `worker-${randomUUID()}`;
@@ -179,6 +181,7 @@ const runtimeRepository = new RuntimeRepository(
     orderTtlMs: config.RUNTIME_EXIT_ORDER_TTL_MS,
   },
   enabledFundingPolicy,
+  causalRecoveryModel,
 );
 const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
 const decisionRepository = new DecisionRepository(prisma);
@@ -206,6 +209,38 @@ const recoveryRequests = new RecoveryRequestCache<
 >();
 let streamSession = randomUUID();
 let streamConnected = false;
+let streamContext = {
+  id: streamSession,
+  writerId: workerId,
+  cause: "worker-start",
+  startedAt: new Date(),
+} as Parameters<PriceEventRepository["recordStream"]>[0];
+let streamRecord = Promise.resolve<unknown>(null);
+let everConnected = false;
+let lastDisconnect: { at: Date; code?: number; reason: string } | null = null;
+let nextStreamCause = "worker-start";
+function beginStream(cause: string) {
+  const previousStreamId = streamSession;
+  streamSession = randomUUID();
+  streamContext = {
+    id: streamSession,
+    writerId: workerId,
+    cause,
+    ...(everConnected ? { previousStreamId } : {}),
+    startedAt: new Date(),
+    ...(lastDisconnect
+      ? {
+          interruptedAt: lastDisconnect.at,
+          ...(lastDisconnect.code === undefined ? {} : { disconnectCode: lastDisconnect.code }),
+          disconnectReason: lastDisconnect.reason.slice(0, 500),
+        }
+      : {}),
+  };
+  streamRecord = priceEventRepository
+    .recordStream(streamContext)
+    .catch((err) => logger.warn({ err }, "Stream segment metadata unavailable"));
+}
+const recentRecoveryCache = new RecoveryRequestCache<RecoveryTradeSnapshot>();
 const priceJournal = new OrderedPriceJournal<PriceEventInput>(async (events) => {
   const saved = await priceEventRepository.append(events, workerId);
   for (const event of saved) {
@@ -413,9 +448,15 @@ async function marketStreamLoop() {
         void priceEventRepository
           .claimWriter(workerId)
           .then((owned) => {
-            if (!owned) leaseAbort.abort();
+            if (!owned) {
+              nextStreamCause = "writer-lease-lost";
+              leaseAbort.abort();
+            }
           })
-          .catch(() => leaseAbort.abort());
+          .catch(() => {
+            nextStreamCause = "writer-lease-unavailable";
+            leaseAbort.abort();
+          });
       }, 5000);
       await marketStreamClient.run(
         {
@@ -475,9 +516,23 @@ async function marketStreamLoop() {
                     : null,
                 }),
                 streamId: streamSession,
+                streamContext,
               })
             ) {
-              streamSession = randomUUID();
+              const overflowStream = streamSession,
+                overflowAt = new Date();
+              void streamRecord
+                .then(() =>
+                  priceEventRepository.closeStream(
+                    overflowStream,
+                    overflowAt,
+                    undefined,
+                    "journal-overflow",
+                  ),
+                )
+                .catch((err) => logger.warn({ err }, "Stream overflow metadata unavailable"));
+              lastDisconnect = { at: overflowAt, reason: "journal-overflow" };
+              beginStream("journal-overflow");
               latestQuotes.clear();
               logger.error("Market price journal overflow; recovery required");
             }
@@ -486,13 +541,23 @@ async function marketStreamLoop() {
             await marketDataRepository.saveCandles([candle]);
           },
           onConnected: () => {
-            streamSession = randomUUID();
+            beginStream(everConnected ? nextStreamCause : "worker-start");
+            nextStreamCause = "reconnect";
+            everConnected = true;
             streamConnected = true;
             latestQuotes.clear();
             logger.info("Bybit public market stream connected");
           },
           onDisconnected: (code, reason) => {
             streamConnected = false;
+            const interruptedAt = new Date();
+            lastDisconnect = { at: interruptedAt, code, reason };
+            const closedStream = streamSession;
+            void streamRecord
+              .then(() =>
+                priceEventRepository.closeStream(closedStream, interruptedAt, code, reason),
+              )
+              .catch((err) => logger.warn({ err }, "Disconnect metadata unavailable"));
             logger.warn({ code, reason }, "Bybit public market stream disconnected");
           },
           onError: (error) => logger.warn({ err: error }, "Bybit public market stream error"),
@@ -1015,11 +1080,21 @@ async function processRealtimePosition(
     : runtimeProfitProtectionPolicy;
   const strategyConfig = strategyConfigSchema.parse(target.strategyVersion.config);
   const signalIntervalMs = timeframeMinutes[strategyConfig.universe.timeframe] * 60_000;
-  const events = await priceEventRepository.after(
+  const events = await priceEventRepository.afterWithArchive(
     target.symbol,
     target.priceEventId,
     target.managedThroughAt ?? target.openedAt,
   );
+  const latestProtection = await priceEventRepository.latest(target.symbol);
+  const quoteAgeLimit =
+    pinnedPolicy?.payload.settings.accountSafety.maxQuoteAgeMs ?? config.RUNTIME_QUOTE_MAX_AGE_MS;
+  const latestProtectiveEvent =
+    latestProtection &&
+    Date.now() - +latestProtection.receivedAt <= quoteAgeLimit &&
+    Date.now() - +latestProtection.observedAt <= quoteAgeLimit &&
+    +latestProtection.observedAt <= Date.now() + 1000
+      ? { ...latestProtection, price: Number(latestProtection.price) }
+      : undefined;
   let signalReplay: ReturnType<typeof replayPositionIndicators> | null = null;
   let traceSignals: RuntimeSignalEvent[] = [];
   const traceRecoveries: RuntimeTraceRecovery[] = [];
@@ -1103,6 +1178,9 @@ async function processRealtimePosition(
   let version = target.runtimeVersion;
   let traceEventCursor = target.priceEventId ?? 0n;
   await processRuntimePriceEvents({
+    protectBeforeRecovery: true,
+    cursorEventId: target.priceEventId,
+    ...(latestProtectiveEvent ? { latestProtectiveEvent } : {}),
     position: deserializeExecutionPosition(target),
     profitProtection: {
       policy: protectionPolicy,
@@ -1144,7 +1222,7 @@ async function processRealtimePosition(
         }
       : {}),
     config: strategyConfig,
-    recover: async (position, through, quote) => {
+    recover: async (position, through, quote, protection) => {
       if (+quote.observedAt - +through > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000) {
         throw new RuntimeRecoveryIncompleteError(
           "Recovery window exceeds configured limit; manual position review required",
@@ -1154,9 +1232,69 @@ async function processRealtimePosition(
         marketStreamAbortController.signal,
         AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
       ]);
+      const strictMinutes = readExecutionRecoveryModel(target.recoveryModel) !== null;
+      let recent: RecoveryTradeSnapshot | undefined,
+        anchorTradeId: string | undefined,
+        anchorPrice: string | undefined,
+        quoteTradeId: string | undefined,
+        fallbackReason: string | undefined;
+      if (protection.anchorEventId && quote.eventKey) {
+        const [anchor] = await priceArchiveRepository.after(
+          target.symbol,
+          protection.anchorEventId - 1n,
+          protection.anchorEventId,
+          1,
+        );
+        const prefix = `bybit-trade:${target.symbol}:`;
+        if (anchor?.eventKey.startsWith(prefix) && quote.eventKey.startsWith(prefix)) {
+          anchorTradeId = anchor.eventKey.slice(prefix.length);
+          anchorPrice = anchor.price;
+          quoteTradeId = quote.eventKey.slice(prefix.length);
+          try {
+            const loaded = await recentRecoveryCache.get(`${target.symbol}:${quote.id}`, () =>
+              marketClient.getLinearRecentTrades(
+                target.symbol,
+                AbortSignal.any([deadline, AbortSignal.timeout(1500)]),
+              ),
+            );
+            recent = {
+              sampledAt: loaded.sampledAt,
+              trades: loaded.trades.filter(
+                (t) =>
+                  Date.parse(t.observedAt) >= +through &&
+                  Date.parse(t.observedAt) <= +quote.observedAt,
+              ),
+            };
+          } catch {
+            fallbackReason = "RECENT_TRADES_UNAVAILABLE";
+          }
+        }
+      }
+      const causal = {
+        strictMinutes,
+        ...(recent ? { recent } : {}),
+        ...(anchorTradeId ? { anchorTradeId } : {}),
+        ...(anchorPrice ? { anchorPrice } : {}),
+        ...(quoteTradeId ? { quoteTradeId } : {}),
+        ...(fallbackReason ? { fallbackReason } : {}),
+      };
+      const base = {
+        position,
+        since: through,
+        quote,
+        config: strategyConfig,
+        protection,
+        ...causal,
+        minutes: [],
+      };
+      const covered = selectRecoveryTrades(base) !== null;
+      if (!covered && !causal.fallbackReason)
+        causal.fallbackReason = "RECENT_TRADES_BOUNDARIES_NOT_COVERED";
       const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
+      if (strictMinutes)
+        minuteRange.end = new Date(Math.floor(+quote.observedAt / 60000) * 60000 - 1);
       const minutes =
-        +quote.observedAt === +through
+        covered || +quote.observedAt === +through || +minuteRange.end < +minuteRange.start
           ? []
           : await loadRecoveryCandles(
               target.symbol,
@@ -1166,16 +1304,31 @@ async function processRealtimePosition(
               deadline,
             );
       const recoveryMinutes = minutes.map(toExecutionCandle);
-      traceRecoveries.push({ eventId: quote.id, since: through, quote, minutes: recoveryMinutes });
-      return recoverRuntimeGap({
-        position,
+      traceRecoveries.push({
+        eventId: quote.id,
         since: through,
         quote,
         minutes: recoveryMinutes,
-        config: strategyConfig,
+        causal,
       });
+      const recovered = recoverCausalRuntimeGap({ ...base, minutes: recoveryMinutes });
+      const segment = await priceEventRepository.streamSegment(quote.streamId);
+      recovered.evidence = {
+        ...recovered.evidence,
+        ...(segment
+          ? {
+              streamCause: segment.cause,
+              ...(segment.interruptedAt
+                ? { interruptedAt: segment.interruptedAt.toISOString() }
+                : {}),
+            }
+          : {}),
+        ...(causal.fallbackReason ? { sourceFailure: causal.fallbackReason } : {}),
+      };
+      return recovered;
     },
     checkpoint: async ({
+      historyIncomplete,
       profitProtectionState,
       position,
       event,
@@ -1193,10 +1346,16 @@ async function processRealtimePosition(
         ? signalReplay?.checkpointThrough(signalCandleAt)
         : null;
       const result = await runtimeRepository.persistRealtimeQuote({
-        processedEventCount: events.filter(
-          (price) => price.id > traceEventCursor && price.id <= event.id,
-        ).length,
+        ...(historyIncomplete
+          ? {}
+          : {
+              processedEventCount: events.filter(
+                (price) => price.id > traceEventCursor && price.id <= event.id,
+              ).length,
+            }),
         traceInputs: runtimeTraceInputs({
+          protectBeforeRecovery: true,
+          ...(latestProtectiveEvent ? { latestProtectiveEvent } : {}),
           firstEventId: events[0]!.id,
           policy: protectionPolicy,
           signals: traceSignals,
@@ -1218,7 +1377,14 @@ async function processRealtimePosition(
         decidedAt,
         ...(recovery ? { recoveryEvidence: recovery } : {}),
         factors: {
-          source: recovered ? "ohlc-recovery" : "durable-price-events",
+          source:
+            recovery?.source === "recent-public-trades"
+              ? "public-trade-recovery"
+              : recovery?.source === "journal-protection"
+                ? "current-quote-protection"
+                : recovered
+                  ? "ohlc-recovery"
+                  : "durable-price-events",
           lastEventId: String(event.id),
           recovered,
           ...(profitProtectionState

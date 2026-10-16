@@ -10,6 +10,9 @@
   недоступность источников и остановку процесса. Новые entry/exit/funding операции
   сохраняют исходные admission и cash/equity transitions в той же транзакции;
   отсутствующие исторические доказательства остаются unknown.
+  Monitor включён: 445 закрытий без пропусков/дубликатов в окне; полный путь цены
+  подтверждён только у двух. Очередь, создание Trade и ценовой fill учитываются отдельно.
+  [Результаты и ограничения N03](docs/trade-acceptance-n03-2026-10-17.md).
 
 - N02: read-only `runtime:audit-trades` — проверка Trade/fills/funding, entry/exit
   receipts и исходного processor replay; отдельные expected/actual, полнота пути

@@ -27,6 +27,7 @@
     "runtime:replay-trace": "tsx scripts/replay-execution-trace.ts",
     "runtime:recovery": "tsx scripts/inspect-runtime-recovery.ts",
     "runtime:latency": "tsx scripts/inspect-runtime-latency.ts",
+    "runtime:research-protection": "tsc --project scripts/protection-research.tsconfig.json && tsx scripts/research-profit-protection.ts",
     "runtime:load": "tsx --test tests/runtime-load.test.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",

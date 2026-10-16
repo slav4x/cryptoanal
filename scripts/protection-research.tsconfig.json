@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["./research-profit-protection.ts", "./lib/research-readonly.ts"]
+}

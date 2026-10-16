@@ -344,6 +344,22 @@ pnpm runtime:audit-trades --replay var/analysis/trade-audit-n02-2026-10-17.json 
 [Результат 441 сделки](docs/trade-acceptance-n02-2026-10-17.md) подтверждает доступные
 финансовые инварианты и только два полных непрерывных пути; рабочая приёмка не пройдена.
 
+Регулярная проверка новых закрытий и сохранение доказательств N03:
+
+```bash
+pnpm runtime:watch-trades development var/analysis/acceptance-n01-2026-10-16.json var/analysis/trade-monitor --once --seed var/analysis/trade-audit-n02-2026-10-17.json
+docker compose --profile audit build trade-auditor
+docker compose --profile audit up -d --no-deps trade-auditor
+pnpm runtime:audit-status var/analysis/trade-monitor
+```
+
+Отдельный read-only процесс сохраняет курсор, попытки, ошибки и исходные данные;
+повторный старт продолжает очередь. CPU/RAM ограничены независимо от торгового worker.
+Группы старых и новых сделок разделены; неполная история остаётся неполной.
+Новые admission/cash proofs записываются атомарно в API/worker после их обновления,
+старые сделки ими задним числом не дополняются. Миграций и новых зависимостей нет.
+[Порядок работы, ограничения и повтор без БД](docs/trade-audit-monitor-v1.md).
+
 ## Исследование параметров защиты
 
 ```bash

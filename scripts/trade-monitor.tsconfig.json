@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": [
+    "./watch-trade-audits.ts",
+    "./process-trade-audit.ts",
+    "./inspect-trade-audits.ts",
+    "./lib/trade-audit-monitor.ts",
+    "./lib/retained-audit-source.ts"
+  ]
+}

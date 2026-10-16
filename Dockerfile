@@ -29,6 +29,10 @@ FROM workspace AS worker
 
 CMD ["pnpm", "exec", "tsx", "apps/worker/src/worker.ts"]
 
+FROM workspace AS trade-auditor
+
+CMD ["node", "--max-old-space-size=256", "--import=tsx", "scripts/watch-trade-audits.ts", "development", "/audit/acceptance-n01-2026-10-16.json", "/audit/trade-monitor"]
+
 FROM public.ecr.aws/docker/library/nginx:1.27-alpine AS dashboard
 
 COPY infra/nginx.conf /etc/nginx/conf.d/default.conf

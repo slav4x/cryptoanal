@@ -1,4 +1,9 @@
 import {
+  captureRuntimeAccountState,
+  recordRuntimeAccountProof,
+  type AccountState,
+} from "./runtime-account-proof";
+import {
   evaluateExecutionHoldingExit,
   readExecutionPositionExitPolicy,
 } from "../../application/src/execution-position-exit";
@@ -301,6 +306,11 @@ export async function advanceLiquidityExit(
     if (!p.closedAt) throw new Error("Filled exit has no final fill timestamp");
     if (!(await fundingSettlementReady(tx, p, p.closedAt)))
       return { applied: false, closed: false };
+    const accountBefore = await captureRuntimeAccountState(tx, {
+      workspaceId: p.workspaceId,
+      executionRunId: p.executionRunId,
+      positionId: p.id,
+    });
     const after = { ...state, waitingReason: null };
     const payload = {
       version: liquidityExitVersion,
@@ -330,7 +340,13 @@ export async function advanceLiquidityExit(
         runtimeVersion: { increment: 1 },
       },
     });
-    await completeLiquidityExit(tx, p, after, p.closedAt, now);
+    const tradeId = await completeLiquidityExit(tx, p, after, p.closedAt, now);
+    await recordRuntimeAccountProof(tx, {
+      before: accountBefore,
+      positionId: p.id,
+      kind: "settlement",
+      sourceIds: [`Trade:${tradeId}`],
+    });
     return { applied: true, closed: true };
   }
   const latest = await tx.marketPriceEvent.findFirst({
@@ -341,6 +357,8 @@ export async function advanceLiquidityExit(
   let event = latest,
     action: unknown,
     fill: ReturnType<typeof applyLiquidityExitFill> | null = null;
+  let accountBefore: AccountState | undefined;
+  let exitFillId: string | undefined;
   let own = "0",
     publicConsumed = "0",
     scanned = 0;
@@ -527,7 +545,12 @@ export async function advanceLiquidityExit(
           fill,
           ...(fundingAllocation ? { fundingAllocation } : {}),
         };
-        await tx.fill.create({
+        accountBefore = await captureRuntimeAccountState(tx, {
+          workspaceId: p.workspaceId,
+          executionRunId: p.executionRunId,
+          positionId: p.id,
+        });
+        const recordedFill = await tx.fill.create({
           data: {
             workspaceId: p.workspaceId,
             orderId: active.id,
@@ -543,6 +566,7 @@ export async function advanceLiquidityExit(
             execution: json({ payload, hash: hashTracePayload(payload) }),
           },
         });
+        exitFillId = recordedFill.id;
       }
     }
   }
@@ -604,8 +628,9 @@ export async function advanceLiquidityExit(
         : {}),
     },
   });
+  let completedTradeId: string | undefined;
   if (closed) {
-    await completeLiquidityExit(tx, p, state, event.observedAt, now);
+    completedTradeId = await completeLiquidityExit(tx, p, state, event.observedAt, now);
   } else if (fill)
     await tx.decision.create({
       data: {
@@ -639,6 +664,13 @@ export async function advanceLiquidityExit(
         correlationId: `exit-wait:${p.id}:${p.runtimeVersion}`,
         decidedAt: now,
       },
+    });
+  if (accountBefore && exitFillId)
+    await recordRuntimeAccountProof(tx, {
+      before: accountBefore,
+      positionId: p.id,
+      kind: "exit",
+      sourceIds: [`Fill:${exitFillId}`, ...(completedTradeId ? [`Trade:${completedTradeId}`] : [])],
     });
   return { applied: true, closed };
 }
@@ -702,6 +734,7 @@ async function completeLiquidityExit(
     where: { executionRunId: p.executionRunId, symbol: p.symbol },
     data: { lastFailureCode: null, lastFailureMessage: null, consecutiveFailures: 0 },
   });
+  return trade.id;
 }
 export function eventPayload(event: {
   id: bigint;

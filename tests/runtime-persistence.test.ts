@@ -1,3 +1,5 @@
+import { captureRetainedAuditSource } from "../scripts/lib/retained-audit-source";
+import { auditRetainedTrade } from "../apps/worker/src/retained-trade-audit";
 import {
   readExecutionPositionExitPolicy,
   evaluateExecutionHoldingExit,
@@ -105,6 +107,55 @@ import { runtimeTraceInputs } from "../apps/worker/src/runtime-trace";
 import { replayRuntimeTrace } from "../apps/worker/src/runtime-trace-replay";
 import { createApp } from "../apps/api/src/app";
 import { loadServerConfig } from "../packages/config/src/index";
+
+async function assertOriginalAccountProofs(
+  prisma: ReturnType<typeof createPrismaClient>,
+  workspaceId: string,
+  positionId: string,
+) {
+  const { source } = await captureRetainedAuditSource(prisma, workspaceId, positionId);
+  const archive = new PriceArchiveRepository(prisma);
+  const loaders = {
+    events: (cursor: bigint, through: bigint) =>
+      archive.after(source.position.symbol, cursor, through, 10000),
+    funding: (id: string) =>
+      prisma.fundingHistorySnapshot.findUnique({
+        where: { id },
+        select: { payload: true, payloadHash: true },
+      }),
+  };
+  const audit = await auditRetainedTrade(source, loaders);
+  for (const id of ["account-proof-integrity", "admission", "cash-equity"]) {
+    const check = audit.checks.find((c) => c.id === id)!;
+    assert.equal(check.outcome, "pass", JSON.stringify(check));
+  }
+  const corrupt = structuredClone(source),
+    first = corrupt.accountProofs![0]!,
+    metadata = first.metadata as { payload: { after: { cashPnl: string } }; hash: string };
+  metadata.payload.after.cashPnl = "123456";
+  metadata.hash = hashTracePayload(metadata.payload);
+  assert.equal(
+    (await auditRetainedTrade(corrupt, loaders)).checks.find(
+      (c) => c.id === "account-proof-integrity",
+    )!.outcome,
+    "fail",
+  );
+  const riskCorrupt = structuredClone(source),
+    entry = riskCorrupt.accountProofs!.find(
+      (p) => (p.metadata as { payload: { kind: string } }).payload.kind === "entry",
+    )!;
+  const envelope = entry.metadata as {
+    payload: { admission: { risk: { input: { policy: { maxOpenPositions: number } } } } };
+    hash: string;
+  };
+  envelope.payload.admission.risk.input.policy.maxOpenPositions = 0;
+  envelope.hash = hashTracePayload(envelope.payload);
+  assert.equal(
+    (await auditRetainedTrade(riskCorrupt, loaders)).checks.find((c) => c.id === "admission")!
+      .outcome,
+    "fail",
+  );
+}
 
 const databaseUrl = process.env.RUNTIME_TEST_DATABASE_URL;
 if (databaseUrl && !/^\/cryptoanal_runtime_test_[a-z0-9_]+$/.test(new URL(databaseUrl).pathname)) {
@@ -2907,6 +2958,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           }),
           1,
         );
+        await assertOriginalAccountProofs(prisma, context.workspace.id, context.position.id);
       },
     );
     await t.test(
@@ -5049,6 +5101,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(trade.funding.toFixed(), "0.04");
         assert.equal(await prisma.positionFundingPayment.count({ where: { positionId: p.id } }), 1);
         assert.equal((await replayExit(c)).status, "matched");
+        await assertOriginalAccountProofs(prisma, c.workspace.id, p.id);
       },
     );
     await t.test(
@@ -5258,6 +5311,7 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           }),
           "0.4572075",
         );
+        await assertOriginalAccountProofs(prisma, c.workspace.id, p.id);
       },
     );
     await t.test(
@@ -5292,6 +5346,55 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         assert.equal(
           await prisma.fill.count({ where: { order: { positionId: before.id, side: "SELL" } } }),
           1,
+        );
+      },
+    );
+    await t.test(
+      "account evidence failure rolls back exit fill, IOC terminal state and cash together",
+      async () => {
+        const c = await exitContext();
+        await latchExit(c);
+        await advanceExit(c);
+        await exitEvent(c);
+        const before = await prisma.position.findUniqueOrThrow({ where: { id: c.position.id } });
+        const initialProofs = await prisma.auditEvent.count({
+          where: { resourceId: c.position.id, action: "runtime.account.proof" },
+        });
+        const fn = `reject_account_${randomUUID().replaceAll("-", "")}`;
+        await prisma.$executeRawUnsafe(
+          `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='runtime.account.proof' THEN RAISE EXCEPTION 'account proof unavailable'; END IF; RETURN NEW; END $$`,
+        );
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER ${fn} BEFORE INSERT ON "AuditEvent" FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
+        );
+        try {
+          await assert.rejects(advanceExit(c), /account proof unavailable/);
+        } finally {
+          await prisma.$executeRawUnsafe(`DROP TRIGGER ${fn} ON "AuditEvent"`);
+          await prisma.$executeRawUnsafe(`DROP FUNCTION ${fn}()`);
+        }
+        const after = await prisma.position.findUniqueOrThrow({ where: { id: before.id } });
+        assert.deepEqual(after, before);
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: before.id, side: "SELL" } } }),
+          0,
+        );
+        assert.equal(
+          await prisma.auditEvent.count({
+            where: { resourceId: before.id, action: "runtime.account.proof" },
+          }),
+          initialProofs,
+        );
+        assert.equal((await advanceExit(c)).applied, true);
+        assert.equal(
+          await prisma.fill.count({ where: { order: { positionId: before.id, side: "SELL" } } }),
+          1,
+        );
+        assert.equal(
+          await prisma.auditEvent.count({
+            where: { resourceId: before.id, action: "runtime.account.proof" },
+          }),
+          initialProofs + 1,
         );
       },
     );

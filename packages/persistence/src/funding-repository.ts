@@ -1,4 +1,9 @@
 import {
+  captureRuntimeAccountState,
+  recordRuntimeAccountProof,
+  type AccountState,
+} from "./runtime-account-proof";
+import {
   enabledFundingPolicy,
   readExecutionFundingPolicy,
   fundingAmount,
@@ -156,6 +161,8 @@ export class FundingRepository {
         remainingApplied: string;
         closedAllocation: string;
       }> = [];
+      let accountBefore: AccountState | undefined;
+      const paymentIds: string[] = [];
       let snapshotId: string | null = null,
         snapshotHash: string | null = null;
       const appliedAt = (
@@ -257,7 +264,12 @@ export class FundingRepository {
             snapshotId,
             snapshotHash,
           };
-          await tx.positionFundingPayment.create({
+          accountBefore ??= await captureRuntimeAccountState(tx, {
+            workspaceId: p.workspaceId,
+            executionRunId: p.executionRunId,
+            positionId: p.id,
+          });
+          const savedPayment = await tx.positionFundingPayment.create({
             data: {
               positionId: p.id,
               workspaceId: p.workspaceId,
@@ -270,6 +282,7 @@ export class FundingRepository {
               execution: json({ payload, hash: hashTracePayload(payload) }),
             },
           });
+          paymentIds.push(`FundingPayment:${savedPayment.id}`);
           payments.push({
             event,
             quantity,
@@ -332,6 +345,13 @@ export class FundingRepository {
           runtimeVersion: { increment: 1 },
         },
       });
+      if (accountBefore)
+        await recordRuntimeAccountProof(tx, {
+          before: accountBefore,
+          positionId: p.id,
+          kind: "funding",
+          sourceIds: paymentIds,
+        });
       return { applied: true, payments: payments.length };
     });
   }

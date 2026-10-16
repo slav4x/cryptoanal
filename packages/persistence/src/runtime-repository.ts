@@ -1,4 +1,9 @@
 import {
+  captureRuntimeAccountState,
+  recordRuntimeAccountProof,
+  type AdmissionProof,
+} from "./runtime-account-proof";
+import {
   readExecutionPositionExitPolicy,
   makeExecutionPositionExitPolicy,
   type ExecutionPositionExitPolicy,
@@ -1550,7 +1555,9 @@ export class RuntimeRepository {
           publicConsumedQuantity: publicConsumed.toFixed(),
         };
       }
+      const admission: AdmissionProof = {};
       const riskFailure = await checkRuntimeEntry(transaction, {
+        proof: admission,
         workspaceId: input.workspaceId,
         exchangeAccountId: deployment.exchangeAccountId,
         strategyConfig: executionRun.strategyVersion.config,
@@ -1573,6 +1580,12 @@ export class RuntimeRepository {
         return { applied: false, capacityReached: true };
       }
 
+      const accountBefore = await captureRuntimeAccountState(transaction, {
+        workspaceId: input.workspaceId,
+        executionRunId: input.executionRunId,
+        initialBalance: (admission.risk as { result: { policy: { initialBalance: number } } })
+          .result.policy.initialBalance,
+      });
       const fillAt = (
         await transaction.$queryRaw<Array<{ fillAt: Date }>>`SELECT clock_timestamp() AS "fillAt"`
       )[0]!.fillAt;
@@ -1692,6 +1705,7 @@ export class RuntimeRepository {
         },
         select: { id: true },
       });
+      let entryFillId: string;
       if (entryProof) {
         const cancelled = new Prisma.Decimal(entryProof.snapshot.quantity).minus(
           input.position.quantity,
@@ -1743,7 +1757,7 @@ export class RuntimeRepository {
             .toDecimalPlaces(18)
             .toFixed(),
         };
-        await transaction.fill.create({
+        const recordedFill = await transaction.fill.create({
           data: {
             workspaceId: input.workspaceId,
             orderId: entryProof.orderId,
@@ -1755,8 +1769,9 @@ export class RuntimeRepository {
             execution: { payload, hash: hashTracePayload(payload) },
           },
         });
-      } else
-        await createFilledOrder(transaction, {
+        entryFillId = recordedFill.id;
+      } else {
+        const recordedFill = await createFilledOrder(transaction, {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
           positionId: position.id,
@@ -1769,6 +1784,15 @@ export class RuntimeRepository {
           fee: input.position.entryFee,
           filledAt: input.position.openedAt,
         });
+        entryFillId = recordedFill.id;
+      }
+      await recordRuntimeAccountProof(transaction, {
+        before: accountBefore,
+        positionId: position.id,
+        kind: "entry",
+        sourceIds: [`Fill:${entryFillId}`],
+        admission,
+      });
       await ensurePositionTrace(transaction, {
         positionId: position.id,
         workspaceId: input.workspaceId,
@@ -2372,8 +2396,10 @@ export class RuntimeRepository {
         }
       }
 
+      const admission: AdmissionProof = {};
       if (action.kind === "open") {
         const riskFailure = await checkRuntimeEntry(transaction, {
+          proof: admission,
           workspaceId: input.workspaceId,
           exchangeAccountId: deployment.exchangeAccountId,
           strategyConfig: executionRun.strategyVersion.config,
@@ -2456,6 +2482,12 @@ export class RuntimeRepository {
         const entryEvent = await transaction.marketPriceEvent.findUniqueOrThrow({
           where: { id: input.entryPriceEventId! },
         });
+        const accountBefore = await captureRuntimeAccountState(transaction, {
+          workspaceId: input.workspaceId,
+          executionRunId: input.executionRunId,
+          initialBalance: (admission.risk as { result: { policy: { initialBalance: number } } })
+            .result.policy.initialBalance,
+        });
         const position = await transaction.position.create({
           data: {
             workspaceId: input.workspaceId,
@@ -2510,7 +2542,7 @@ export class RuntimeRepository {
           marketEntryPolicy: this.marketEntryPolicy,
           options: this.traceOptions,
         });
-        await createFilledOrder(transaction, {
+        const entryFill = await createFilledOrder(transaction, {
           workspaceId: input.workspaceId,
           executionRunId: input.executionRunId,
           positionId: position.id,
@@ -2522,6 +2554,13 @@ export class RuntimeRepository {
           price: action.position.entryPrice,
           fee: action.position.entryFee,
           filledAt: action.position.openedAt,
+        });
+        await recordRuntimeAccountProof(transaction, {
+          before: accountBefore,
+          positionId: position.id,
+          kind: "entry",
+          sourceIds: [`Fill:${entryFill.id}`],
+          admission,
         });
         if (action.immediateSettlement) {
           const trade = await persistClosedPosition(
@@ -3310,7 +3349,7 @@ async function createFilledOrder(
     },
     select: { id: true },
   });
-  await transaction.fill.create({
+  return transaction.fill.create({
     data: {
       workspaceId: input.workspaceId,
       orderId: order.id,
@@ -3346,11 +3385,16 @@ async function persistClosedPosition(
   settlement: RuntimeCycleSettlement,
   exitProof?: ReturnType<typeof buildExitTriggerProof>,
 ) {
+  const beforeAccount = await captureRuntimeAccountState(transaction, {
+    workspaceId: position.workspaceId,
+    executionRunId: position.executionRunId,
+    positionId: position.positionId,
+  });
   const exitFee = Prisma.Decimal.max(
     new Prisma.Decimal(settlement.fees).sub(position.entryFee),
     0,
   ).toFixed();
-  await createFilledOrder(transaction, {
+  const exitFill = await createFilledOrder(transaction, {
     workspaceId: position.workspaceId,
     executionRunId: position.executionRunId,
     positionId: position.positionId,
@@ -3375,7 +3419,7 @@ async function persistClosedPosition(
     },
   });
   await closePositionTrace(transaction, position.positionId, settlement);
-  return transaction.trade.create({
+  const trade = await transaction.trade.create({
     data: {
       workspaceId: position.workspaceId,
       positionId: position.positionId,
@@ -3400,6 +3444,13 @@ async function persistClosedPosition(
     },
     select: { id: true },
   });
+  await recordRuntimeAccountProof(transaction, {
+    before: beforeAccount,
+    positionId: position.positionId,
+    kind: "exit",
+    sourceIds: [`Fill:${exitFill.id}`, `Trade:${trade.id}`],
+  });
+  return trade;
 }
 
 function runtimeCorrelationId(input: PersistRuntimeCycleInput) {

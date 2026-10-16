@@ -1,6 +1,7 @@
 import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import { fundingCovers, readPositionFundingState } from "./funding-repository";
 import { realizedCashPnl } from "./realized-cash";
+import type { AdmissionProof } from "./runtime-account-proof";
 import {
   assessExecutionAccount,
   executionAccountEntryFailure,
@@ -46,6 +47,7 @@ export async function assessRuntimeRisk(
     strategyConfig: Prisma.JsonValue;
     policy: RuntimeRiskPolicy;
     now?: Date;
+    proof?: AdmissionProof;
   },
 ) {
   const runs = await tx.executionRun.findMany({
@@ -195,6 +197,26 @@ export async function assessRuntimeRisk(
   const halt = await tx.runtimeRiskDay.findUnique({
     where: { workspaceId_exchangeAccountId_day: key },
   });
+  if (input.proof)
+    input.proof.risk = {
+      input: {
+        policy: input.policy,
+        config: input.strategyConfig,
+        now: now.toISOString(),
+        realizedNetPnl: Number(realized._sum.netPnl ?? 0),
+        utcCashPnl: Number(today),
+        strategyCashPnl: strategyDailyPnl,
+        positions: normalized,
+        marketReady,
+        fundingReady,
+        killSwitch: settings?.runtimeKillSwitch ?? false,
+        utcHalted: !!halt,
+      },
+      result:
+        halt && !settings?.runtimeKillSwitch
+          ? { ...risk, reason: "daily-loss-limit", forceCloseReason: "daily-loss-limit" }
+          : risk,
+    };
   return halt && !settings?.runtimeKillSwitch
     ? { ...risk, reason: "daily-loss-limit", forceCloseReason: "daily-loss-limit" as const }
     : risk;
@@ -210,6 +232,7 @@ export async function checkRuntimeEntry(
     eventId: bigint | undefined;
     signalAvailableAt?: Date;
     partialFill?: boolean;
+    proof?: AdmissionProof;
     position: {
       instrumentRules?: unknown;
       symbol: string;
@@ -289,7 +312,7 @@ export async function checkRuntimeEntry(
     },
     select: { symbol: true, side: true, remainingQuantity: true, quantity: true },
   });
-  return executionAccountEntryFailure(
+  const failure = executionAccountEntryFailure(
     risk,
     {
       symbol: input.position.symbol,
@@ -306,6 +329,31 @@ export async function checkRuntimeEntry(
       quantity: Number(p.remainingQuantity ?? p.quantity),
     })),
   );
+  if (input.proof && !failure)
+    input.proof.entry = {
+      candidate: {
+        symbol: input.position.symbol,
+        side: input.position.side === "BUY" ? "long" : "short",
+        quantity: Number(input.position.quantity),
+        entryPrice: Number(input.position.entryPrice),
+        stopPrice: Number(input.position.stopPrice),
+        entryFee: Number(input.position.entryFee),
+        tickSize: rules.tickSize,
+      },
+      conflicts: conflicting.map((p) => ({
+        symbol: p.symbol,
+        side: p.side === "BUY" ? "long" : "short",
+        quantity: Number(p.remainingQuantity ?? p.quantity),
+      })),
+      eventId: String(event.id),
+      receivedAt: event.receivedAt.toISOString(),
+      observedAt: event.observedAt.toISOString(),
+      checkedAt: new Date(now).toISOString(),
+      signalAvailableAt: input.signalAvailableAt?.toISOString() ?? null,
+      instrumentRules: rules,
+      failure: null,
+    };
+  return failure;
 }
 
 export class RuntimeRiskRepository {

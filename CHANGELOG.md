@@ -4,6 +4,13 @@
 
 ### Added
 
+- N03: отдельный read-only monitor закрытий, устойчивый курсор и история попыток,
+  retry после сбоя, контроль retention/checksums и разделение исходных/новых групп.
+  Compose-профиль `audit` ограничивает CPU/RAM; локальный отчёт отличает очередь,
+  недоступность источников и остановку процесса. Новые entry/exit/funding операции
+  сохраняют исходные admission и cash/equity transitions в той же транзакции;
+  отсутствующие исторические доказательства остаются unknown.
+
 - N02: read-only `runtime:audit-trades` — проверка Trade/fills/funding, entry/exit
   receipts и исходного processor replay; отдельные expected/actual, полнота пути
   и стадии выхода. Сохранённые gzip/JSON доказательства позволяют повтор без БД;

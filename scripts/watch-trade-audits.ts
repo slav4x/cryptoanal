@@ -353,10 +353,15 @@ try {
       if (due) {
         phase = "verifying-storage";
         try {
-          await verifyRetainedEvidence(
-            resolve(root, due.latest!.result!.resultPath, "..", "evidence"),
-            due.latest!.result!.evidenceHash,
+          const verified = await loadSummary(
+            due,
+            resolve(root, due.latest!.result!.resultPath, ".."),
           );
+          if (
+            verified.resultHash !== due.latest!.result!.resultHash ||
+            verified.evidenceHash !== due.latest!.result!.evidenceHash
+          )
+            throw new Error("Retained outcome changed after receipt commit");
           await monitor.markEvidenceVerified(due);
         } catch (e) {
           await monitor.start(due);

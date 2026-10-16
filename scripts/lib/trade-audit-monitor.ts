@@ -462,13 +462,29 @@ export class TradeAuditMonitor {
           if ((await stat(path)).size > 32 * 1024 * 1024)
             throw new Error("Result byte budget exceeded");
           const saved = JSON.parse(await readFile(path, "utf8"));
-          summariseRetainedResult(
+          const verified = summariseRetainedResult(
             saved,
             resolve(path, ".."),
             job,
             this.state.implementationHash,
             this.state.baselineHash,
           );
+          if (
+            verified.resultHash !== result.resultHash ||
+            verified.evidenceHash !== result.evidenceHash
+          )
+            throw new Error("Retained outcome changed after receipt commit");
+          const receipt = await readMonitorJson<AttemptReceipt>(
+            join(
+              this.options.root,
+              "attempts",
+              hashTracePayload(job.id),
+              String(job.latest!.number),
+              "receipt.json",
+            ),
+          );
+          if (hashTracePayload(receipt) !== hashTracePayload(job.latest))
+            throw new Error("Retained receipt/index mismatch");
           await verifyRetainedEvidence(resolve(path, "..", "evidence"), result.evidenceHash);
           job.evidenceVerifiedAt = this.now().toISOString();
         } catch (error) {

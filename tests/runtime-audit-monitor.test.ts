@@ -383,3 +383,19 @@ test("the nearest retention deadline precedes older work and expires visibly", a
   x.advance(101);
   assert.equal(x.monitor.report().totals.expiredUncaptured, 1);
 });
+
+test("a changed result cannot replace the outcome pinned by its immutable receipt", async (t) => {
+  const x = await fixture(t),
+    job = await x.monitor.addClosure(closure("a"));
+  await x.monitor.runOne((j, dir) => savedResult(dir, j));
+  const path = join(x.options.root, job.latest!.result!.resultPath),
+    saved = JSON.parse(await readFile(path, "utf8"));
+  saved.payload.result.status = "confirmed";
+  saved.payload.resultHash = hashTracePayload(saved.payload.result);
+  saved.hash = hashTracePayload(saved.payload);
+  await writeFile(path, JSON.stringify(saved));
+  await x.monitor.verifyLatest();
+  assert.equal(x.monitor.report().totals.confirmed, 0);
+  assert.equal(x.monitor.report().totals.sourceErrors, 1);
+  assert.match(job.latest!.error!, /changed after receipt commit/);
+});

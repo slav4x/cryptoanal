@@ -7,7 +7,7 @@ import { join, resolve, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { hashTracePayload } from "../packages/persistence/src/position-trace";
-import { auditJson } from "../apps/worker/src/closed-trade-audit";
+import { auditJson, auditObject } from "../apps/worker/src/closed-trade-audit";
 import { extendAccountAudit } from "../apps/worker/src/retained-trade-audit";
 import { researchReadOnlyUrl } from "./lib/research-readonly";
 import {
@@ -201,10 +201,13 @@ async function importSeed(reportPath: string) {
         hashTracePayload(source) !== base.sourceHash
       )
         throw new Error("Seed source binding mismatch");
+      const createdAt = auditObject(source.trade).createdAt;
+      if (typeof createdAt !== "string" || !Number.isFinite(Date.parse(createdAt)))
+        throw new Error("Original Trade creation timestamp missing");
       const job = await monitor!.addClosure({
         id: item.tradeId,
         positionId: item.positionId,
-        createdAt: source.position.createdAt,
+        createdAt,
         closedAt: source.trade.closedAt,
         retainUntil: source.trace?.retainUntil ?? null,
       });

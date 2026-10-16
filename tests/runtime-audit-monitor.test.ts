@@ -399,3 +399,43 @@ test("a changed result cannot replace the outcome pinned by its immutable receip
   assert.equal(x.monitor.report().totals.sourceErrors, 1);
   assert.match(job.latest!.error!, /changed after receipt commit/);
 });
+
+test("a delayed settlement does not become hours of audit queue lag", async (t) => {
+  const x = await fixture(t);
+  await x.monitor.addClosure({
+    ...closure("late"),
+    closedAt: new Date(+at - 6 * 3600000).toISOString(),
+  });
+  x.advance(1000);
+  const report = x.monitor.report();
+  assert.equal(report.oldestPendingAgeMs, 1000);
+  assert.equal(report.oldestSourceClosureAgeMs, 1000);
+  assert.equal(report.oldestFillAgeMs, 6 * 3600000 + 1000);
+});
+test("old seed entry timestamps are corrected once from the actual closure inventory", async (t) => {
+  const x = await fixture(t),
+    row = closure("old"),
+    job = await x.monitor.addClosure(row);
+  delete job.sourceCreatedAtVerified;
+  job.createdAt = new Date(+at - 3600000).toISOString();
+  await writeMonitorJson(join(x.options.root, "state.json"), x.monitor.state);
+  const restored = await TradeAuditMonitor.open(x.options);
+  await restored.discover(async () => ({
+    asOf: at.toISOString(),
+    rows: [row],
+    total: 1,
+    done: true,
+  }));
+  assert.equal(restored.state.jobs.old!.createdAt, row.createdAt);
+  assert.equal(restored.state.jobs.old!.sourceCreatedAtVerified, true);
+  assert.equal(restored.state.jobs.old!.attempts, 0);
+  await assert.rejects(
+    restored.discover(async () => ({
+      asOf: at.toISOString(),
+      rows: [{ ...row, createdAt: new Date(+at - 1000).toISOString() }],
+      total: 1,
+      done: true,
+    })),
+    /creation timestamp changed/,
+  );
+});

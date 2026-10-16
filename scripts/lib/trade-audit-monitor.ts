@@ -34,6 +34,8 @@ export type AttemptReceipt = {
 };
 export type AuditJob = Closure & {
   lastSeenScan?: string;
+  sourceCreatedAtVerified?: true;
+  createdAtCorrectedFrom?: string;
   discoveredAt: string;
   evidenceVerifiedAt?: string;
   attempts: number;
@@ -237,12 +239,20 @@ export class TradeAuditMonitor {
     if (prior) {
       if (prior.positionId !== row.positionId || prior.closedAt !== row.closedAt)
         throw new Error("Closed Trade identity changed after discovery");
+      if (prior.createdAt !== row.createdAt) {
+        if (prior.sourceCreatedAtVerified)
+          throw new Error("Closed Trade creation timestamp changed after discovery");
+        prior.createdAtCorrectedFrom = prior.createdAt;
+        prior.createdAt = row.createdAt;
+      }
+      prior.sourceCreatedAtVerified = true;
       return prior;
     }
     if (Object.keys(this.state.jobs).length >= (this.options.maxJobs ?? 10000))
       throw new Error("MONITOR_JOB_BUDGET_EXCEEDED");
     const job: AuditJob = {
       ...row,
+      sourceCreatedAtVerified: true,
       discoveredAt: this.now().toISOString(),
       attempts: 0,
       active: null,
@@ -621,8 +631,23 @@ export class TradeAuditMonitor {
       },
       totals,
       oldestPendingAgeMs: waiting.length
+        ? Math.max(...waiting.map((j) => Math.max(0, +now - Date.parse(j.discoveredAt))))
+        : 0,
+      oldestSourceClosureAgeMs: waiting.length
+        ? Math.max(...waiting.map((j) => Math.max(0, +now - Date.parse(j.createdAt))))
+        : 0,
+      oldestFillAgeMs: waiting.length
         ? Math.max(...waiting.map((j) => Math.max(0, +now - Date.parse(j.closedAt))))
         : 0,
+      recentClosures: [...jobs]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 10)
+        .map((j) => ({
+          tradeId: j.id,
+          priceFilledAt: j.closedAt,
+          recordCreatedAt: j.createdAt,
+          firstDiscoveredAt: j.discoveredAt,
+        })),
       seedErrors: Object.entries(this.state.seedErrors ?? {}).map(([tradeId, error]) => ({
         tradeId,
         error,

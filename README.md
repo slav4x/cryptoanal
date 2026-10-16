@@ -9,7 +9,7 @@ CryptoAnal — dashboard-first платформа для исследовани�
 Завершённые девять направлений и результаты — в
 [списке задач по качеству сделок](docs/trade-quality-tasks-2026-10-14.md).
 Следующий этап: [приёмка новых сделок, проверка стратегий и Bybit Demo](docs/trade-acceptance-tasks-2026-10-16.md).
-Пул запланирован; реализации Demo и запуска биржевых заявок пока нет.
+Начат N01: контракт и исходный read-only срез. Реализации Demo и запуска биржевых заявок пока нет.
 
 ## Структура
 
@@ -314,6 +314,17 @@ Execution 0.13.0 добавляет явные `exit.signalExitModel: "family-in
 OHLC выполняет внутрисвечной срок по close в существующем adverse-first сценарии;
 это сценарий, который не воспроизводит точное время public trades.
 [Правила, совместимость и результаты проверки](docs/position-exits-2026-10-16.md).
+
+## Исходный срез для приёмки сделок
+
+```bash
+pnpm runtime:acceptance-snapshot development var/analysis/acceptance-n01-2026-10-16.json
+pnpm runtime:acceptance-snapshot --verify var/analysis/acceptance-n01-2026-10-16.json
+```
+
+Команда создаёт новый read-only снимок с IDs, версиями, checksum и матрицей покрытия;
+`--verify` повторяет классификацию по файлу без обращения к БД. Инвентаризация событий
+не считается подтверждённой проверкой каждой сделки. [Контракт v1](docs/trade-acceptance-contract-v1.md).
 
 ## Исследование параметров защиты
 

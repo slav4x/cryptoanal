@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["./capture-trade-acceptance.ts", "./lib/research-readonly.ts"]
+}

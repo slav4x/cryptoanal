@@ -4,6 +4,11 @@
 
 ### Added
 
+- N02: read-only `runtime:audit-trades` — проверка Trade/fills/funding, entry/exit
+  receipts и исходного processor replay; отдельные expected/actual, полнота пути
+  и стадии выхода. Сохранённые gzip/JSON доказательства позволяют повтор без БД;
+  неполная история и неизвестный admission/cash ledger не объявляются подтверждёнными.
+
 - N01: версионированный контракт приёмки, четыре статуса доказанности и 28 пар
   «случай × сторона». Read-only `runtime:acceptance-snapshot` закрепляет исходные
   IDs/версии/источники и повторяет классификацию по checksum без обращения к БД.

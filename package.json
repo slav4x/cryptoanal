@@ -29,6 +29,7 @@
     "runtime:latency": "tsx scripts/inspect-runtime-latency.ts",
     "runtime:research-protection": "tsc --project scripts/protection-research.tsconfig.json && tsx scripts/research-profit-protection.ts",
     "runtime:acceptance-snapshot": "tsc --project scripts/acceptance-snapshot.tsconfig.json && tsx scripts/capture-trade-acceptance.ts",
+    "runtime:audit-trades": "tsc --project scripts/trade-audit.tsconfig.json && tsx scripts/audit-closed-trades.ts",
     "runtime:load": "tsx --test tests/runtime-load.test.ts",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",

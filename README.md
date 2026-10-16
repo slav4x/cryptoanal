@@ -319,6 +319,16 @@ OHLC выполняет внутрисвечной срок по close в сущ
 
 ## Исходный срез для приёмки сделок
 
+Автоматический разбор закрытых сделок по закреплённой границе N01:
+
+```bash
+pnpm runtime:audit-trades development var/analysis/acceptance-n01-2026-10-16.json var/analysis/trade-audit-n02-2026-10-17.json
+pnpm runtime:audit-trades --replay var/analysis/trade-audit-n02-2026-10-17.json <position-id>
+```
+
+Команда только читает БД, сохраняет отчёт и отдельные исходные доказательства;
+повтор выполняется без рабочей БД. [Проверки, статусы и ограничения N02](docs/closed-trade-audit-v1.md).
+
 ```bash
 pnpm runtime:acceptance-snapshot development var/analysis/acceptance-n01-2026-10-16.json
 pnpm runtime:acceptance-snapshot --verify var/analysis/acceptance-n01-2026-10-16.json

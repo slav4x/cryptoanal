@@ -1,3 +1,7 @@
+import {
+  readExecutionPositionExitPolicy,
+  executionSignalExitEnabled,
+} from "@cryptoanal/application";
 import { readPinnedExecutionPolicy } from "@cryptoanal/persistence";
 import {
   executionEngineVersion,
@@ -132,6 +136,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.12.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.11.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.10.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.9.0" &&
@@ -193,6 +198,9 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   };
   let position: ExecutionPosition = {
     ...(fundingBalance ? { fundingPaid: Number(fundingBalance.remaining) } : {}),
+    ...(stored.positionExitPolicy
+      ? { positionExitPolicy: readExecutionPositionExitPolicy(stored.positionExitPolicy)! }
+      : {}),
     ...(stored.exitPolicy ? { exitPolicy: readExecutionExitPolicy(stored.exitPolicy)! } : {}),
     ...(stored.entryExecution
       ? { entryExecution: readEntryExecutionMarker(stored.entryExecution)! }
@@ -323,8 +331,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
             signalIntervalMs:
               { "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240 }[config.universe.timeframe] *
               60000,
-            ...(config.signal.family === "mean-reversion" ||
-            (config.signal.family === "ema-crossover" && config.exit.exitOnSignalReversal)
+            ...(executionSignalExitEnabled(position, config)
               ? { loadSignals: async () => signals }
               : {}),
             recover: async (p, since, quote, protection) => {

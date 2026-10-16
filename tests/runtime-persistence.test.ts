@@ -1,4 +1,8 @@
 import {
+  readExecutionPositionExitPolicy,
+  evaluateExecutionHoldingExit,
+} from "../packages/application/src/execution-position-exit";
+import {
   ExecutionPolicyRepository,
   readPinnedExecutionPolicy,
   pinExecutionPolicy,
@@ -3808,8 +3812,31 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       minimumNotional = "0",
       repository = runtime,
       policySettings?: ExecutionPolicySettings,
+      strategyConfig?: ReturnType<typeof strategyConfigSchema.parse>,
     ) {
       const context = await setup();
+      if (strategyConfig) {
+        await prisma.strategyVersion.update({
+          where: { id: context.entry.strategyVersionId },
+          data: { config: strategyConfig },
+        });
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+        });
+        await prisma.runtimeCursor.update({
+          where: {
+            executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+          },
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as Prisma.InputJsonObject),
+              breakoutLevel: 99,
+            },
+          },
+        });
+      }
       if (policySettings)
         await new ExecutionPolicyRepository(prisma).pinRun(context.run.id, policySettings);
       if (limit)
@@ -3909,7 +3936,13 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         ).config,
       );
       const p = openExecutionPositionAtFill({
-        signal: { side: "long", signalPrice: 100 },
+        signal: {
+          side: "long",
+          signalPrice: 100,
+          ...(context.snapshot.positionExitPolicy?.breakoutLevel == null
+            ? {}
+            : { breakoutLevel: context.snapshot.positionExitPolicy.breakoutLevel }),
+        },
         quote: { symbol: context.symbol, price: Number(price), observedAt: time },
         entryRegime: "neutral",
         equity: 10000,
@@ -3934,6 +3967,9 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         quotePrice: price,
         position: {
           ...context.entry.position,
+          ...(context.snapshot.positionExitPolicy
+            ? { positionExitPolicy: context.snapshot.positionExitPolicy }
+            : {}),
           ...(context.snapshot.exitPolicy ? { exitPolicy: context.snapshot.exitPolicy } : {}),
           ...(context.snapshot.fundingPolicy
             ? { fundingPolicy: context.snapshot.fundingPolicy }
@@ -4635,39 +4671,45 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         },
       });
     }
-    async function latchExit(context: Awaited<ReturnType<typeof exitContext>>) {
-      const event = await exitEvent(context),
+    async function latchExit(context: Awaited<ReturnType<typeof exitContext>>, timed = false) {
+      const event = await exitEvent(context, timed ? "100" : "97"),
         p = context.position;
-      const settlement = evaluateExecutionPriceExit(
-        {
-          ...context.entry.position,
-          exitPolicy: context.snapshot.exitPolicy!,
-          entryExecution: {
-            version: entryLiquidityVersion,
-            orderId: context.stored.id,
-            requestedQuantity: "1",
-          },
-          side: "long",
-          entryRegime: "neutral",
-          entrySession: "europe",
-          entryPrice: Number(p.entryPrice),
-          quantity: Number(p.quantity),
-          ...(p.fundingPolicy ? { fundingPaid: p.fundingRemaining!.toNumber() } : {}),
-          stopPrice: Number(p.stopPrice),
-          takePrice: Number(p.takePrice),
-          trailingPrice: null,
-          bestPrice: Number(p.bestPrice),
-          entryFee: Number(p.entryFee),
-          entrySlippage: Number(p.entrySlippage),
+      const pos = {
+        ...context.entry.position,
+        ...(p.positionExitPolicy
+          ? { positionExitPolicy: readExecutionPositionExitPolicy(p.positionExitPolicy)! }
+          : {}),
+        exitPolicy: context.snapshot.exitPolicy!,
+        entryExecution: {
+          version: entryLiquidityVersion,
+          orderId: context.stored.id,
+          requestedQuantity: "1",
         },
-        {
-          symbol: p.symbol,
-          price: Number(event.price),
-          observedAt: event.observedAt,
-          source: "LastPrice",
-        },
-        strategyConfigSchema.parse(fixture.config),
-      )!;
+        side: "long",
+        entryRegime: "neutral",
+        entrySession: "europe",
+        entryPrice: Number(p.entryPrice),
+        quantity: Number(p.quantity),
+        ...(p.fundingPolicy ? { fundingPaid: p.fundingRemaining!.toNumber() } : {}),
+        stopPrice: Number(p.stopPrice),
+        takePrice: Number(p.takePrice),
+        trailingPrice: null,
+        bestPrice: Number(p.bestPrice),
+        entryFee: Number(p.entryFee),
+        entrySlippage: Number(p.entrySlippage),
+      } satisfies ExecutionPosition;
+      const quote = {
+        symbol: p.symbol,
+        price: Number(event.price),
+        observedAt: event.observedAt,
+        source: "LastPrice" as const,
+      };
+      const cfg = strategyConfigSchema.parse(
+        (await prisma.strategyVersion.findUniqueOrThrow({ where: { id: p.strategyVersionId } }))
+          .config,
+      );
+      const settlement = (evaluateExecutionPriceExit(pos, quote, cfg) ??
+        evaluateExecutionHoldingExit(pos, quote, cfg))!;
       const request: PersistRuntimeQuoteInput = {
         workspaceId: p.workspaceId,
         deploymentId: context.deployment.id,
@@ -4782,6 +4824,105 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
           : null,
       });
     }
+    await t.test(
+      "entry order, position and trace retain the versioned breakout policy and reject caller changes",
+      async () => {
+        const cfg = strategyConfigSchema.parse({
+          ...fixture.config,
+          signal: { ...fixture.config.signal, family: "breakout" },
+          exit: {
+            ...fixture.config.exit,
+            signalExitModel: "family-invalidation@1",
+            exitOnSignalReversal: true,
+            maxHoldingMinutes: 60,
+          },
+        });
+        const context = await liquiditySetup(false, false, "0", runtime, undefined, cfg);
+        assert.equal(context.snapshot.positionExitPolicy!.breakoutLevel, 99);
+        const { input } = await liquidityFill(context);
+        assert.equal(
+          (
+            await runtime.persistRealtimeEntry({
+              ...input,
+              position: {
+                ...input.position,
+                positionExitPolicy: { ...input.position.positionExitPolicy!, maxHoldingMs: 1 },
+              },
+            })
+          ).riskFailure,
+          "INVALID_ENTRY_EXECUTION_PROOF",
+        );
+        assert.equal(
+          (await new RuntimeRepository(prisma).persistRealtimeEntry(input)).applied,
+          true,
+        );
+        const p = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        const trace = await prisma.positionExecutionTrace.findUniqueOrThrow({
+          where: { positionId: p.id },
+        });
+        assert.deepEqual(p.positionExitPolicy, context.snapshot.positionExitPolicy);
+        assert.deepEqual(
+          (trace.snapshot as { position: { positionExitPolicy: unknown } }).position
+            .positionExitPolicy,
+          p.positionExitPolicy,
+        );
+        assert.equal(readExecutionPositionExitPolicy(p.positionExitPolicy)!.maxHoldingMs, 3600000);
+        const progress = await new HealthRepository(prisma).getRuntimeProgress(p.workspaceId);
+        assert.equal(
+          +progress.find((r) => r.positionId === p.id)!.holdingDeadlineAt!,
+          +p.openedAt + 3600000,
+        );
+      },
+    );
+    await t.test(
+      "holding deadline survives restart, partial IOC fills and concurrent completion with one trade",
+      async () => {
+        const cfg = strategyConfigSchema.parse({
+          ...fixture.config,
+          exit: { ...fixture.config.exit, maxHoldingMinutes: 1 },
+        });
+        const repo = exitRepository(),
+          context = await liquiditySetup(false, false, "0", repo, undefined, cfg);
+        const { input } = await liquidityFill(context);
+        assert.equal((await repo.persistRealtimeEntry(input)).applied, true);
+        const position = await prisma.position.findFirstOrThrow({
+          where: { executionRunId: context.run.id },
+        });
+        const c = { ...context, repo, position };
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(0, +position.openedAt + 60010 - Date.now())),
+        );
+        await latchExit(c, true);
+        await advanceExit(c, exitRepository());
+        await exitEvent(c, "100", "0.15");
+        await advanceExit(c, exitRepository());
+        let current = await prisma.position.findUniqueOrThrow({ where: { id: position.id } });
+        assert.equal(current.remainingQuantity!.toFixed(), "0.25");
+        assert.equal(readLiquidityExitState(current.exitState)!.intent.reason, "holding-timeout");
+        await advanceExit(c, exitRepository());
+        await exitEvent(c, "100", "0.25");
+        current = await prisma.position.findUniqueOrThrow({ where: { id: position.id } });
+        const close = {
+          workspaceId: current.workspaceId,
+          executionRunId: current.executionRunId,
+          positionId: current.id,
+          expectedPositionVersion: current.runtimeVersion,
+        };
+        const results = await Promise.all([
+          exitRepository().advanceLiquidityPosition(close),
+          exitRepository().advanceLiquidityPosition(close),
+        ]);
+        assert.equal(results.filter((r) => r.closed).length, 1);
+        assert.equal(await prisma.trade.count({ where: { positionId: position.id } }), 1);
+        assert.equal(
+          (await prisma.trade.findUniqueOrThrow({ where: { positionId: position.id } })).exitReason,
+          "holding-timeout",
+        );
+        assert.equal((await replayExit(c)).status, "matched");
+      },
+    );
     async function fundingContext() {
       const c = await exitContext(true),
         settledAt = new Date(Math.floor(Date.now() / 60000) * 60000),

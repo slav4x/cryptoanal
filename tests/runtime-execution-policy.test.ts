@@ -391,3 +391,22 @@ test("a funding loss latches UTC safety for the day and resets on a later UTC da
     ),
   );
 });
+
+test("versioned holding rule uses the same pinned policy in validation and replay", () => {
+  const c = {
+    ...config,
+    exit: {
+      ...config.exit,
+      maxHoldingMinutes: 1,
+      signalExitModel: "family-invalidation@1" as const,
+      exitOnSignalReversal: true,
+    },
+  };
+  const p = makeExecutionPolicy(c, { ...settings, profitProtection: null }, "ohlc-adverse-first@1");
+  const input = { config: c, candles, instrumentRules, initialCapital: 10000, executionPolicy: p };
+  const a = runValidationEngine({ ...input, kind: "backtest", walkForward: null }),
+    b = runRuntimeReplay(input);
+  assert.ok(a.trades.some((t) => t.exitReason === "holding-timeout"));
+  assert.deepEqual(a.trades, b.trades);
+  assert.equal(a.metrics.netPnl, b.metrics.netPnl);
+});

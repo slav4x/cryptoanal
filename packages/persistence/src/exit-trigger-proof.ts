@@ -1,4 +1,8 @@
 import {
+  evaluateExecutionHoldingExit,
+  readExecutionPositionExitPolicy,
+} from "../../application/src/execution-position-exit";
+import {
   evaluateExecutionPriceExit,
   executionProtectionLevel,
   type ExecutionPosition,
@@ -40,16 +44,29 @@ export function buildExitTriggerProof(input: {
   if (!position.exitPolicy) throw new Error("Exit policy is required");
   if (settlement.closedAt < event.observedAt)
     throw new Error("Exit timestamp precedes its trigger event");
-  const expected = evaluateExecutionPriceExit(
-    position,
-    {
-      symbol: event.symbol,
-      price: Number(event.price.toFixed()),
-      observedAt: settlement.closedAt,
-      source: "LastPrice",
-    },
-    input.config,
-  );
+  const expected =
+    evaluateExecutionPriceExit(
+      position,
+      {
+        symbol: event.symbol,
+        price: Number(event.price.toFixed()),
+        observedAt: settlement.closedAt,
+        source: "LastPrice",
+      },
+      input.config,
+    ) ??
+    (settlement.exitReason === "holding-timeout"
+      ? evaluateExecutionHoldingExit(
+          position,
+          {
+            symbol: event.symbol,
+            price: Number(event.price.toFixed()),
+            observedAt: event.observedAt,
+            source: "LastPrice",
+          },
+          input.config,
+        )
+      : null);
   if (!expected || expected.exitReason !== settlement.exitReason)
     throw new Error("Exit trigger does not match the position protection");
   for (const key of ["exitPrice", "grossPnl", "netPnl", "fees", "slippage"] as const)
@@ -61,9 +78,11 @@ export function buildExitTriggerProof(input: {
     role: "taker",
     triggerSource: position.exitPolicy.triggerSource,
     triggerLevel:
-      expected.exitReason === "take-profit"
-        ? String(position.takePrice)
-        : String(executionProtectionLevel(position).price),
+      expected.exitReason === "holding-timeout"
+        ? null
+        : expected.exitReason === "take-profit"
+          ? String(position.takePrice)
+          : String(executionProtectionLevel(position).price),
     triggerPrice: event.price.toFixed(),
     fillReferencePrice: event.price.toFixed(),
     position: { ...position, openedAt: position.openedAt.toISOString() },
@@ -108,6 +127,11 @@ export function verifyExitTriggerProof(
     throw new Error("Exit trigger provenance mismatch");
   const position: ExecutionPosition = {
     ...payload.position,
+    ...(payload.position.positionExitPolicy
+      ? {
+          positionExitPolicy: readExecutionPositionExitPolicy(payload.position.positionExitPolicy)!,
+        }
+      : {}),
     openedAt: new Date(payload.position.openedAt),
     ...(payload.position.instrumentRules
       ? { instrumentRules: readExecutionInstrumentRules(payload.position.instrumentRules)! }

@@ -1,3 +1,4 @@
+import { readExecutionPositionExitPolicy } from "../../application/src/execution-position-exit";
 import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import { createHash } from "node:crypto";
 import {
@@ -94,6 +95,7 @@ export async function ensurePositionTrace(
       entrySlippage: true,
       executionPolicy: true,
       recoveryModel: true,
+      positionExitPolicy: true,
       fundingPolicy: true,
       fundingState: true,
       fundingAccrued: true,
@@ -118,6 +120,9 @@ export async function ensurePositionTrace(
     config: version.config,
     configHash: version.configHash,
     position: {
+      ...(persisted.positionExitPolicy
+        ? { positionExitPolicy: readExecutionPositionExitPolicy(persisted.positionExitPolicy)! }
+        : {}),
       ...(input.position.exitPolicy ? { exitPolicy: input.position.exitPolicy } : {}),
       ...(input.position.entryExecution ? { entryExecution: input.position.entryExecution } : {}),
       ...(input.position.instrumentRules

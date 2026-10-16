@@ -668,59 +668,60 @@ model ExecutionRun {
 }
 
 model Position {
-  recoveryModel     String?
-  executionPolicy   Json?
-  fundingPolicy     Json?
-  fundingState      Json?
-  fundingAccrued    Decimal?                 @db.Decimal(38, 18)
-  fundingRemaining  Decimal?                 @db.Decimal(38, 18)
-  fundingPayments   PositionFundingPayment[]
-  remainingQuantity Decimal?                 @db.Decimal(38, 18)
-  remainingEntryFee Decimal?                 @db.Decimal(38, 18)
-  exitState         Json?
-  exitPolicy        Json?
-  entryExecution    Json?
-  instrumentRules   Json?
-  profitProtection  Json?
-  indicatorState    Json?
-  signalCandleAt    DateTime?                @db.Timestamptz(3)
-  priceEventId      BigInt?
-  priceStreamId     String?
-  managedThroughAt  DateTime?                @db.Timestamptz(3)
-  runtimeVersion    Int                      @default(0)
-  id                String                   @id @default(uuid())
-  workspaceId       String
-  executionRunId    String
-  strategyVersionId String
-  symbol            String
-  environment       TradingEnvironment
-  side              OrderSide
-  entryRegime       MarketRegime             @default(UNKNOWN)
-  entrySession      TradingSession           @default(UNKNOWN)
-  status            PositionStatus           @default(OPEN)
-  quantity          Decimal                  @db.Decimal(38, 18)
-  entryPrice        Decimal                  @db.Decimal(38, 18)
-  stopPrice         Decimal                  @db.Decimal(38, 18)
-  takePrice         Decimal                  @db.Decimal(38, 18)
-  trailingPrice     Decimal?                 @db.Decimal(38, 18)
-  bestPrice         Decimal                  @db.Decimal(38, 18)
-  entryFee          Decimal                  @default(0) @db.Decimal(38, 18)
-  entrySlippage     Decimal                  @default(0) @db.Decimal(38, 18)
-  markPrice         Decimal?                 @db.Decimal(38, 18)
-  realizedPnl       Decimal                  @default(0) @db.Decimal(38, 18)
-  unrealizedPnl     Decimal                  @default(0) @db.Decimal(38, 18)
-  openedAt          DateTime                 @db.Timestamptz(3)
-  closedAt          DateTime?                @db.Timestamptz(3)
-  createdAt         DateTime                 @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime                 @updatedAt @db.Timestamptz(3)
-  workspace         Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  executionRun      ExecutionRun             @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
-  strategyVersion   StrategyVersion          @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
-  instrument        MarketInstrument         @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
-  orders            Order[]
-  trade             Trade?
-  executionTrace    PositionExecutionTrace?
-  decisions         Decision[]
+  positionExitPolicy Json?
+  recoveryModel      String?
+  executionPolicy    Json?
+  fundingPolicy      Json?
+  fundingState       Json?
+  fundingAccrued     Decimal?                 @db.Decimal(38, 18)
+  fundingRemaining   Decimal?                 @db.Decimal(38, 18)
+  fundingPayments    PositionFundingPayment[]
+  remainingQuantity  Decimal?                 @db.Decimal(38, 18)
+  remainingEntryFee  Decimal?                 @db.Decimal(38, 18)
+  exitState          Json?
+  exitPolicy         Json?
+  entryExecution     Json?
+  instrumentRules    Json?
+  profitProtection   Json?
+  indicatorState     Json?
+  signalCandleAt     DateTime?                @db.Timestamptz(3)
+  priceEventId       BigInt?
+  priceStreamId      String?
+  managedThroughAt   DateTime?                @db.Timestamptz(3)
+  runtimeVersion     Int                      @default(0)
+  id                 String                   @id @default(uuid())
+  workspaceId        String
+  executionRunId     String
+  strategyVersionId  String
+  symbol             String
+  environment        TradingEnvironment
+  side               OrderSide
+  entryRegime        MarketRegime             @default(UNKNOWN)
+  entrySession       TradingSession           @default(UNKNOWN)
+  status             PositionStatus           @default(OPEN)
+  quantity           Decimal                  @db.Decimal(38, 18)
+  entryPrice         Decimal                  @db.Decimal(38, 18)
+  stopPrice          Decimal                  @db.Decimal(38, 18)
+  takePrice          Decimal                  @db.Decimal(38, 18)
+  trailingPrice      Decimal?                 @db.Decimal(38, 18)
+  bestPrice          Decimal                  @db.Decimal(38, 18)
+  entryFee           Decimal                  @default(0) @db.Decimal(38, 18)
+  entrySlippage      Decimal                  @default(0) @db.Decimal(38, 18)
+  markPrice          Decimal?                 @db.Decimal(38, 18)
+  realizedPnl        Decimal                  @default(0) @db.Decimal(38, 18)
+  unrealizedPnl      Decimal                  @default(0) @db.Decimal(38, 18)
+  openedAt           DateTime                 @db.Timestamptz(3)
+  closedAt           DateTime?                @db.Timestamptz(3)
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @db.Timestamptz(3)
+  workspace          Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executionRun       ExecutionRun             @relation(fields: [executionRunId], references: [id], onDelete: Restrict)
+  strategyVersion    StrategyVersion          @relation(fields: [strategyVersionId], references: [id], onDelete: Restrict)
+  instrument         MarketInstrument         @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
+  orders             Order[]
+  trade              Trade?
+  executionTrace     PositionExecutionTrace?
+  decisions          Decision[]
 
   @@index([workspaceId, status, openedAt])
   @@index([workspaceId, symbol, status])

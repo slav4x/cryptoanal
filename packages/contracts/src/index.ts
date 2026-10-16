@@ -712,6 +712,8 @@ export const strategyConfigSchema = z
       breakEvenActivationR: z.number().min(0).max(10).default(0),
       trailingActivationR: z.number().min(0).max(10).default(0),
       exitOnSignalReversal: z.boolean().default(false),
+      signalExitModel: z.literal("family-invalidation@1").optional(),
+      maxHoldingMinutes: z.number().int().min(1).max(525600).optional(),
     }),
     costs: z.object({
       makerFeeBps: z.number().min(0).max(100),
@@ -906,6 +908,7 @@ export const validationTradeResultSchema = z.object({
     "take-profit",
     "trailing-stop",
     "signal-exit",
+    "holding-timeout",
     "end-of-data",
     "daily-loss-limit",
     "kill-switch",

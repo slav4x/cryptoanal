@@ -3,6 +3,8 @@ export type HealthLevel = "healthy" | "degraded" | "critical" | "unknown";
 export type IncidentSeverity = "warning" | "critical";
 
 export type RuntimeProgress = {
+  holdingDeadlineAt?: Date | null;
+  maxQuoteAgeMs?: number;
   positionId: string;
   executionRunId: string;
   symbol: string;
@@ -259,6 +261,38 @@ export function evaluateHealth(input: HealthMonitorInput) {
 
   const stalePriceSymbols = new Set<string>();
   for (const progress of input.runtimeProgress) {
+    const deadline = progress.holdingDeadlineAt;
+    if (
+      deadline &&
+      +input.now >= +deadline &&
+      +input.now - +deadline > (progress.maxQuoteAgeMs ?? input.thresholds.runtimeLagMs)
+    ) {
+      const ageLimit = progress.maxQuoteAgeMs ?? input.thresholds.runtimeLagMs;
+      const noPrice =
+        !progress.latestEventAt ||
+        !progress.latestReceivedAt ||
+        progress.latestEventAt < deadline ||
+        age(input.now, progress.latestEventAt) > ageLimit ||
+        age(input.now, progress.latestReceivedAt) > ageLimit;
+      conditions.push({
+        fingerprint: `position:${progress.positionId}:holding-deadline`,
+        domain: "execution",
+        code: noPrice ? "RUNTIME_HOLDING_PRICE_UNAVAILABLE" : "RUNTIME_HOLDING_EXIT_OVERDUE",
+        severity: "critical",
+        title: `Истёк срок удержания ${progress.symbol}`,
+        description: noPrice
+          ? "После истечения срока нет свежей цены; исторический fill на границе срока не создаётся."
+          : "Срок удержания истёк; проверьте исполнение выхода, доступную ликвидность и задержку сопровождения.",
+        resourceType: "position",
+        resourceId: progress.positionId,
+        metadata: {
+          symbol: progress.symbol,
+          deadlineAt: deadline.toISOString(),
+          overdueMs: +input.now - +deadline,
+          latestEventAt: progress.latestEventAt?.toISOString() ?? null,
+        },
+      });
+    }
     const metadata = {
       symbol: progress.symbol,
       ...runtimeProgressMetrics(progress, input.now),

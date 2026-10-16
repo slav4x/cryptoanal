@@ -736,8 +736,26 @@ function configRows(config: StrategyConfigDto) {
     row(
       "exit.exitOnSignalReversal",
       "Exit",
-      "Обратный EMA-сигнал",
-      config.exit.exitOnSignalReversal ? "Закрывать" : "Игнорировать",
+      "Сигнальный выход",
+      !config.exit.signalExitModel && config.signal.family === "mean-reversion"
+        ? "Возврат к среднему (всегда)"
+        : config.exit.exitOnSignalReversal
+          ? "Закрывать"
+          : "Игнорировать",
+    ),
+    row(
+      "exit.signalExitModel",
+      "Exit",
+      "Правила сигнального выхода",
+      config.exit.signalExitModel ? "Отмена идеи по семейству" : "Прежние правила",
+    ),
+    row(
+      "exit.maxHoldingMinutes",
+      "Exit",
+      "Максимальное удержание",
+      config.exit.maxHoldingMinutes === undefined
+        ? "Без ограничения"
+        : `${config.exit.maxHoldingMinutes} мин от входа`,
     ),
     row("costs.makerFeeBps", "Costs", "Maker fee", `${config.costs.makerFeeBps} bps`),
     row("costs.takerFeeBps", "Costs", "Taker fee", `${config.costs.takerFeeBps} bps`),

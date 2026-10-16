@@ -29,7 +29,7 @@ import {
 } from "./execution-instrument";
 
 export const metricProvenanceSchemaVersion = 1 as const;
-export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.9.1";
+export const runtimeReplayEngineVersion = "cryptoanal-runtime-replay@1.10.0";
 export const fundingPolicy = {
   version: "cryptoanal-funding@disabled-v1",
   status: "disabled",
@@ -56,7 +56,13 @@ export type RuntimeReplayTrade = {
   netPnl: number;
   fees: number;
   funding?: number;
-  exitReason: "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "end-of-data";
+  exitReason:
+    | "stop-loss"
+    | "take-profit"
+    | "trailing-stop"
+    | "signal-exit"
+    | "holding-timeout"
+    | "end-of-data";
 };
 
 export function runRuntimeReplay(input: {

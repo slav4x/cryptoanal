@@ -59,6 +59,15 @@ export function readExecutionPolicy(value: unknown): ExecutionPolicySnapshot {
     p.calendar.latch !== "until-next-utc-day@1"
   )
     throw new Error("Invalid execution policy snapshot");
+  const exit = p.strategy.exit;
+  if (
+    (exit.signalExitModel !== undefined && exit.signalExitModel !== "family-invalidation@1") ||
+    (exit.maxHoldingMinutes !== undefined &&
+      (!Number.isInteger(exit.maxHoldingMinutes) ||
+        exit.maxHoldingMinutes < 1 ||
+        exit.maxHoldingMinutes > 525600))
+  )
+    throw new Error("Invalid position exit configuration");
   const s = p.settings,
     a = s?.accountSafety;
   if (

@@ -1,3 +1,4 @@
+import { evaluateExecutionHoldingExit, executionFamilySignalExit } from "@cryptoanal/application";
 import { advanceExecutionQuoteProtection } from "@cryptoanal/application";
 import {
   type ExecutionProfitProtectionState,
@@ -41,6 +42,7 @@ export type RuntimePriceCheckpoint = {
     | null;
   signalCandleAt: Date | null;
   signalExit: {
+    reason?: string;
     candleAt: string;
     closedAt: string;
     availableAt: string;
@@ -137,11 +139,17 @@ export async function processRuntimePriceEvents(input: {
         candidates.push(input.latestProtectiveEvent);
       for (const candidate of candidates) {
         if (candidate.observedAt < through || candidate.observedAt < position.openedAt) continue;
-        const exit = evaluateExecutionPriceExit(
-          position,
-          { ...candidate, source: candidate.source ?? "LastPrice" },
-          input.config,
-        );
+        const exit =
+          evaluateExecutionPriceExit(
+            position,
+            { ...candidate, source: candidate.source ?? "LastPrice" },
+            input.config,
+          ) ??
+          evaluateExecutionHoldingExit(
+            position,
+            { ...candidate, source: candidate.source ?? "LastPrice" },
+            input.config,
+          );
         if (!exit) continue;
         await input.checkpoint({
           position,
@@ -186,6 +194,7 @@ export async function processRuntimePriceEvents(input: {
       recovered = true;
     }
     settlement ??= evaluateExecutionPriceExit(position, quote, input.config);
+    settlement ??= evaluateExecutionHoldingExit(position, quote, input.config);
     if (!settlement && input.loadSignals && input.signalIntervalMs) {
       const lastClosed =
         Math.floor(+quote.observedAt / input.signalIntervalMs) * input.signalIntervalMs -
@@ -206,9 +215,26 @@ export async function processRuntimePriceEvents(input: {
           if (+signal.candle.openTime > lastClosed || signal.availableAt > event.receivedAt) break;
           signalCandleAt = signal.candle.openTime;
           if (signal.closedAt <= position.openedAt) continue;
+          if (
+            position.positionExitPolicy &&
+            (signal.candle.symbol !== position.symbol ||
+              +signal.closedAt !== +signal.candle.openTime + input.signalIntervalMs ||
+              signal.availableAt < signal.closedAt ||
+              signal.closedAt > quote.observedAt)
+          )
+            throw new Error("Invalid closed signal candle");
           if (!evaluateExecutionSignalExit(position, signal.candle, input.config, signal.closedAt))
             continue;
           signalExit = {
+            ...(position.positionExitPolicy
+              ? {
+                  reason:
+                    executionFamilySignalExit(position, signal.candle) ??
+                    (input.config.signal.family === "mean-reversion"
+                      ? "mean-return"
+                      : "ema-reversal"),
+                }
+              : {}),
             candleAt: signal.candle.openTime.toISOString(),
             closedAt: signal.closedAt.toISOString(),
             availableAt: signal.availableAt.toISOString(),

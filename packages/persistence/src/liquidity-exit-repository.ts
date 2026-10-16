@@ -1,3 +1,7 @@
+import {
+  evaluateExecutionHoldingExit,
+  readExecutionPositionExitPolicy,
+} from "../../application/src/execution-position-exit";
 import { allocateFunding } from "../../application/src/execution-funding";
 import { fundingSettlementReady } from "./funding-repository";
 import type { Prisma, Position } from "./generated/prisma/client";
@@ -91,6 +95,9 @@ export async function latchLiquidityExit(
   ).config as unknown as ExecutionStrategyConfig;
   const protection = input.action.protection;
   const pos: ExecutionPosition = {
+    ...(p.positionExitPolicy
+      ? { positionExitPolicy: readExecutionPositionExitPolicy(p.positionExitPolicy)! }
+      : {}),
     ...(p.fundingPolicy ? { fundingPaid: p.fundingRemaining?.toNumber() ?? 0 } : {}),
     ...liquidityExitBasis(p),
     exitPolicy: liquidityExitBasis(p).policy,
@@ -114,17 +121,34 @@ export async function latchLiquidityExit(
       .toLowerCase()
       .replaceAll("_", "-") as ExecutionPosition["entrySession"],
   };
-  if (["stop-loss", "take-profit", "trailing-stop"].includes(input.action.settlement.exitReason)) {
-    const trigger = evaluateExecutionPriceExit(
-      pos,
-      {
-        symbol: p.symbol,
-        price: Number(event.price),
-        observedAt: input.quoteAt,
-        source: "LastPrice",
-      },
-      config,
-    );
+  if (
+    ["stop-loss", "take-profit", "trailing-stop", "holding-timeout"].includes(
+      input.action.settlement.exitReason,
+    )
+  ) {
+    const trigger =
+      evaluateExecutionPriceExit(
+        pos,
+        {
+          symbol: p.symbol,
+          price: Number(event.price),
+          observedAt: input.quoteAt,
+          source: "LastPrice",
+        },
+        config,
+      ) ??
+      (input.action.settlement.exitReason === "holding-timeout"
+        ? evaluateExecutionHoldingExit(
+            pos,
+            {
+              symbol: p.symbol,
+              price: Number(event.price),
+              observedAt: event.observedAt,
+              source: "LastPrice",
+            },
+            config,
+          )
+        : null);
     if (trigger?.exitReason !== input.action.settlement.exitReason)
       throw new Error("Liquidity exit trigger mismatch");
   }

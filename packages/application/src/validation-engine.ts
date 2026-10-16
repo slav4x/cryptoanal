@@ -30,7 +30,7 @@ import {
 
 export type ValidationCandle = ExecutionCandle;
 
-export const validationEngineVersion = "cryptoanal-validation@0.15.1";
+export const validationEngineVersion = "cryptoanal-validation@0.16.0";
 export const validationDatasetSource = "bybit-public-linear-klines";
 
 export type ValidationStrategyConfig = ExecutionStrategyConfig;
@@ -63,6 +63,7 @@ export type ValidationTrade = {
     | "take-profit"
     | "trailing-stop"
     | "signal-exit"
+    | "holding-timeout"
     | "end-of-data"
     | "daily-loss-limit"
     | "kill-switch";

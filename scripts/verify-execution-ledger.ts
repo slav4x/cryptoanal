@@ -1,4 +1,8 @@
 import {
+  readExecutionPositionExitPolicy,
+  makeExecutionPositionExitPolicy,
+} from "../packages/application/src/execution-position-exit";
+import {
   verifyFundingRecord,
   verifyFundingAllocation,
   type FundingReplayBalance,
@@ -130,6 +134,40 @@ try {
         throw Error("Recovery binding mismatch");
     } catch {
       recoveryPolicies.invalidRecoveryPolicyBindings++;
+    }
+  }
+  const positionExitPolicies = { checked: 0, orders: 0, invalidPositionExitBindings: 0 };
+  for (const row of await rows(
+    `SELECT id,execution->'snapshot'->'positionExitPolicy' AS policy FROM "Order" WHERE execution->'snapshot'->'positionExitPolicy' IS NOT NULL`,
+  )) {
+    positionExitPolicies.orders++;
+    try {
+      readExecutionPositionExitPolicy(row.policy);
+    } catch {
+      positionExitPolicies.invalidPositionExitBindings++;
+    }
+  }
+  for (const row of await rows(
+    `SELECT p.id,p.side,p."positionExitPolicy" AS policy,v.config,o.execution->'snapshot'->'positionExitPolicy' AS "orderPolicy",t.snapshot->'position'->'positionExitPolicy' AS "tracePolicy" FROM "Position" p JOIN "StrategyVersion" v ON v.id=p."strategyVersionId" LEFT JOIN "Order" o ON o."positionId"=p.id AND o.side=p.side LEFT JOIN "PositionExecutionTrace" t ON t."positionId"=p.id WHERE p."positionExitPolicy" IS NOT NULL OR o.execution->'snapshot'->'positionExitPolicy' IS NOT NULL OR t.snapshot->'position'->'positionExitPolicy' IS NOT NULL`,
+  )) {
+    positionExitPolicies.checked++;
+    try {
+      const policy = readExecutionPositionExitPolicy(row.policy);
+      if (
+        !policy ||
+        hashTracePayload(policy) !== hashTracePayload(row.orderPolicy) ||
+        hashTracePayload(policy) !== hashTracePayload(row.tracePolicy)
+      )
+        throw new Error("Position exit binding mismatch");
+      const expected = makeExecutionPositionExitPolicy(strategyConfigSchema.parse(row.config), {
+        side: row.side === "BUY" ? "long" : "short",
+        signalPrice: 1,
+        ...(policy.breakoutLevel === null ? {} : { breakoutLevel: policy.breakoutLevel }),
+      });
+      if (hashTracePayload(policy) !== hashTracePayload(expected))
+        throw new Error("Position exit config mismatch");
+    } catch {
+      positionExitPolicies.invalidPositionExitBindings++;
     }
   }
   const instrumentCompliance = {
@@ -509,6 +547,7 @@ try {
   }
   const summary = {
     recoveryPolicies,
+    positionExitPolicies,
     executionPolicies,
     liquidityExits,
     funding:
@@ -624,6 +663,7 @@ try {
     summary.liquidityExits,
     summary.executionPolicies,
     summary.recoveryPolicies,
+    summary.positionExitPolicies,
   ];
   const failures = checks.flatMap((section) =>
     Object.entries(section)

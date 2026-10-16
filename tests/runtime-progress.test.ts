@@ -482,3 +482,22 @@ test("missing runtime timestamps stay unknown; out-of-order times cannot produce
     oldestPendingAgeMs: 0,
   });
 });
+
+test("overdue holding reports missing fresh price separately from pending execution", () => {
+  const input = healthInput(),
+    p = input.runtimeProgress[0]!;
+  p.holdingDeadlineAt = new Date(+input.now - 60000);
+  p.maxQuoteAgeMs = 2000;
+  p.latestEventAt = new Date(+input.now - 70000);
+  const missing = evaluateHealth(input).conditions.find(
+    (c) => c.code === "RUNTIME_HOLDING_PRICE_UNAVAILABLE",
+  );
+  assert.equal(missing?.resourceId, p.positionId);
+  p.latestEventAt = input.now;
+  p.latestReceivedAt = input.now;
+  assert.ok(
+    evaluateHealth(input).conditions.some((c) => c.code === "RUNTIME_HOLDING_EXIT_OVERDUE"),
+  );
+  p.holdingDeadlineAt = null;
+  assert.ok(!evaluateHealth(input).conditions.some((c) => c.code.startsWith("RUNTIME_HOLDING")));
+});

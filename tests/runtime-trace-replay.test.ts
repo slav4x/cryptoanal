@@ -1,3 +1,4 @@
+import { makeExecutionPositionExitPolicy } from "../packages/application/src/execution-position-exit";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import fixture from "../research/golden/v1/momentum-reversal.json";
@@ -49,7 +50,13 @@ async function trace(
   instrumentRules?: ExecutionInstrumentRules,
   causal = false,
 ) {
+  const positionExitPolicy = makeExecutionPositionExitPolicy(configured, {
+    side,
+    signalPrice: 100,
+    breakoutLevel: 100,
+  });
   const position: ExecutionPosition = {
+    ...(positionExitPolicy ? { positionExitPolicy } : {}),
     ...(instrumentRules ? { instrumentRules } : {}),
     symbol: "BTCUSDT",
     side,
@@ -402,3 +409,53 @@ test("replay compares original settlement and profit-protection state without a 
   assert.match(result.differences.join(" "), /Settlement netPnl mismatch/);
   assert.match(result.differences.join(" "), /Protection state/);
 });
+
+for (const side of ["long", "short"] as const) {
+  test(`${side}: holding deadline and versioned breakout level replay from the original snapshot`, async () => {
+    const timed = { ...config, exit: { ...config.exit, maxHoldingMinutes: 1 } };
+    const value = await replayRuntimeTrace(
+      await trace(side, [event(2, 100, 59999), event(3, 100, 90000)], timed, null),
+    );
+    assert.equal(value.status, "matched");
+    assert.equal(value.settlement?.exitReason, "holding-timeout");
+    assert.equal(value.settlement?.closedAt, new Date(+at + 90000).toISOString());
+    const family = strategyConfigSchema.parse({
+      ...config,
+      signal: { ...config.signal, family: "breakout" },
+      exit: {
+        ...config.exit,
+        signalExitModel: "family-invalidation@1",
+        exitOnSignalReversal: true,
+      },
+    });
+    const candle = {
+      ...fixture.candles[0]!,
+      symbol: "BTCUSDT",
+      openTime: at,
+      emaFast: null,
+      emaSlow: null,
+      previousEmaFast: null,
+      previousEmaSlow: null,
+      rsi: null,
+      previousRsi: null,
+      atrPercent: null,
+      volume24h: null,
+      breakoutHigh: 110,
+      breakoutLow: 90,
+      meanReversionZScore: null,
+      previousMeanReversionZScore: null,
+      momentumPercent: null,
+      previousMomentumPercent: null,
+      close: 100,
+    };
+    const signals = [
+      { candle, closedAt: new Date(+at + 900000), availableAt: new Date(+at + 902000) },
+    ];
+    const result = await replayRuntimeTrace(
+      await trace(side, [event(2, 100, 901000), event(3, 100, 903000)], family, null, signals),
+    );
+    assert.equal(result.status, "matched");
+    assert.equal(result.settlement?.exitReason, "signal-exit");
+    assert.equal(result.settlement?.closedAt, new Date(+at + 903000).toISOString());
+  });
+}

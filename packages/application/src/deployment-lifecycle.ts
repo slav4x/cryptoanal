@@ -12,7 +12,7 @@ export type DeploymentLifecycleStatus = (typeof deploymentStatuses)[number];
 export const deploymentCommands = ["start", "pause", "resume", "stop"] as const;
 export type DeploymentCommand = (typeof deploymentCommands)[number];
 
-export const executionEngineVersion = "cryptoanal-execution@0.12.0";
+export const executionEngineVersion = "cryptoanal-execution@0.13.0";
 
 const allowedCommands: Record<DeploymentLifecycleStatus, readonly DeploymentCommand[]> = {
   draft: [],

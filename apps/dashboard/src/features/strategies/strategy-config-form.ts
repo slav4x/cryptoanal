@@ -31,6 +31,8 @@ export type StrategyConfigDraft = {
   breakEvenActivationR: string;
   trailingActivationR: string;
   exitOnSignalReversal: boolean;
+  signalExitModel: string;
+  maxHoldingMinutes: string;
   makerFeeBps: string;
   takerFeeBps: string;
   slippageBps: string;
@@ -67,6 +69,8 @@ export const defaultStrategyConfigDraft: StrategyConfigDraft = {
   breakEvenActivationR: "0",
   trailingActivationR: "0",
   exitOnSignalReversal: false,
+  signalExitModel: "family-invalidation@1",
+  maxHoldingMinutes: "",
   makerFeeBps: "2",
   takerFeeBps: "5.5",
   slippageBps: "3",
@@ -104,6 +108,9 @@ export function strategyConfigToDraft(config: StrategyConfigDto): StrategyConfig
     breakEvenActivationR: String(config.exit.breakEvenActivationR),
     trailingActivationR: String(config.exit.trailingActivationR),
     exitOnSignalReversal: config.exit.exitOnSignalReversal,
+    signalExitModel: config.exit.signalExitModel ?? "legacy",
+    maxHoldingMinutes:
+      config.exit.maxHoldingMinutes === undefined ? "" : String(config.exit.maxHoldingMinutes),
     makerFeeBps: String(config.costs.makerFeeBps),
     takerFeeBps: String(config.costs.takerFeeBps),
     slippageBps: String(config.costs.slippageBps),
@@ -154,6 +161,12 @@ export function draftToStrategyConfig(draft: StrategyConfigDraft): StrategyConfi
       breakEvenActivationR: toNumber(draft.breakEvenActivationR),
       trailingActivationR: toNumber(draft.trailingActivationR),
       exitOnSignalReversal: draft.exitOnSignalReversal,
+      ...(draft.signalExitModel === "family-invalidation@1"
+        ? { signalExitModel: "family-invalidation@1" as const }
+        : {}),
+      ...(draft.maxHoldingMinutes.trim() === ""
+        ? {}
+        : { maxHoldingMinutes: toNumber(draft.maxHoldingMinutes) }),
     },
     costs: {
       makerFeeBps: toNumber(draft.makerFeeBps),

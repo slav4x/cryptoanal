@@ -409,7 +409,8 @@ const environmentLabels: Record<AnalyticsEnvironment, string> = {
 };
 
 const exitReasonLabels: Record<string, string> = {
-  "signal-exit": "Сигнал возврата к средней",
+  "signal-exit": "Выход по сигналу",
+  "holding-timeout": "Срок удержания",
   TAKE_PROFIT: "Take profit",
   STOP_LOSS: "Stop loss",
   MANUAL: "Ручное закрытие",

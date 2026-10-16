@@ -576,6 +576,7 @@ const exitReasonLabels: Record<ValidationTradeResultDto["exitReason"], string> =
   "take-profit": "Take-profit",
   "trailing-stop": "Trailing stop",
   "signal-exit": "Выход по сигналу",
+  "holding-timeout": "Срок удержания",
   "end-of-data": "Конец данных",
   "daily-loss-limit": "Дневной лимит риска",
   "kill-switch": "Остановка риска",

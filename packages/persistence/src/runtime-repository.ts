@@ -1,3 +1,8 @@
+import {
+  readExecutionPositionExitPolicy,
+  makeExecutionPositionExitPolicy,
+  type ExecutionPositionExitPolicy,
+} from "../../application/src/execution-position-exit";
 import { lockRuntimeScope, withRuntimeLockRetry } from "./runtime-lock";
 import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import {
@@ -63,6 +68,7 @@ import {
 type RuntimeDeploymentStatus = "RUNNING" | "PAUSED";
 
 export type RuntimeCyclePosition = {
+  positionExitPolicy?: ExecutionPositionExitPolicy;
   fundingPolicy?: ExecutionFundingPolicy;
   exitPolicy?: ExecutionExitPolicy;
   entryExecution?: EntryExecutionMarker;
@@ -304,6 +310,7 @@ export class RuntimeRepository {
           exitPolicy: true,
           executionPolicy: true,
           recoveryModel: true,
+          positionExitPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -439,6 +446,7 @@ export class RuntimeRepository {
         exitPolicy: true,
         executionPolicy: true,
         recoveryModel: true,
+        positionExitPolicy: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -508,6 +516,7 @@ export class RuntimeRepository {
           exitPolicy: true,
           executionPolicy: true,
           recoveryModel: true,
+          positionExitPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,
@@ -567,7 +576,9 @@ export class RuntimeRepository {
       if (
         position.exitPolicy &&
         input.action.kind === "close" &&
-        ["stop-loss", "trailing-stop", "take-profit"].includes(input.action.settlement.exitReason)
+        ["stop-loss", "trailing-stop", "take-profit", "holding-timeout"].includes(
+          input.action.settlement.exitReason,
+        )
       ) {
         const event = await transaction.marketPriceEvent.findUniqueOrThrow({
           where: { id: input.processedPrice.eventId },
@@ -585,6 +596,9 @@ export class RuntimeRepository {
           throw new Error("Exit trigger does not match its durable price event");
         const protection = input.action.protection;
         const p: ExecutionPosition = {
+          ...(position.positionExitPolicy
+            ? { positionExitPolicy: readExecutionPositionExitPolicy(position.positionExitPolicy)! }
+            : {}),
           exitPolicy: readExecutionExitPolicy(position.exitPolicy)!,
           ...(position.instrumentRules
             ? { instrumentRules: position.instrumentRules as unknown as ExecutionInstrumentRules }
@@ -987,7 +1001,15 @@ export class RuntimeRepository {
         )
           return { applied: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
       }
+      const positionExitPolicy = makeExecutionPositionExitPolicy(strategy, {
+        side: pending.side as "long" | "short",
+        signalPrice: Number(pending.signalPrice),
+        ...(typeof pending.breakoutLevel === "number"
+          ? { breakoutLevel: pending.breakoutLevel }
+          : {}),
+      });
       const snapshot: ExecutionEntryOrder = {
+        ...(positionExitPolicy ? { positionExitPolicy } : {}),
         ...(this.recoveryModel
           ? { recoveryModel: readExecutionRecoveryModel(this.recoveryModel)! }
           : {}),
@@ -1487,6 +1509,8 @@ export class RuntimeRepository {
           ) ||
           hashTracePayload(input.position.fundingPolicy ?? null) !==
             hashTracePayload(snapshot.fundingPolicy ?? null) ||
+          hashTracePayload(input.position.positionExitPolicy ?? null) !==
+            hashTracePayload(snapshot.positionExitPolicy ?? null) ||
           hashTracePayload(input.position.exitPolicy ?? null) !==
             hashTracePayload(snapshot.exitPolicy ?? null) ||
           hashTracePayload(input.position.instrumentRules) !==
@@ -1569,8 +1593,38 @@ export class RuntimeRepository {
         (!fundingMarket || +now - +fundingMarket.observedAt > 120000)
       )
         return { applied: false, capacityReached: false, riskFailure: "FUNDING_DATA_UNAVAILABLE" };
+      const entryPositionPolicy = entryProof
+        ? (entryProof.snapshot.positionExitPolicy ?? null)
+        : makeExecutionPositionExitPolicy(
+            executionRun.strategyVersion.config as unknown as ExecutionStrategyConfig,
+            {
+              side: input.position.side === "BUY" ? "long" : "short",
+              signalPrice: Number(
+                (cursor?.pendingSignal as Record<string, unknown> | null)?.signalPrice,
+              ),
+              ...((cursor?.pendingSignal as Record<string, unknown> | null)?.breakoutLevel ===
+              undefined
+                ? {}
+                : {
+                    breakoutLevel: Number(
+                      (cursor!.pendingSignal as Record<string, unknown>).breakoutLevel,
+                    ),
+                  }),
+            },
+          );
+      if (
+        hashTracePayload(input.position.positionExitPolicy ?? null) !==
+        hashTracePayload(entryProof?.snapshot.positionExitPolicy ?? entryPositionPolicy)
+      )
+        throw new Error("Entry position exit policy mismatch");
       const position = await transaction.position.create({
         data: {
+          ...(!entryProof && entryPositionPolicy
+            ? { positionExitPolicy: entryPositionPolicy }
+            : {}),
+          ...(entryProof?.snapshot.positionExitPolicy
+            ? { positionExitPolicy: entryProof.snapshot.positionExitPolicy }
+            : {}),
           ...(entryProof?.snapshot.recoveryModel
             ? { recoveryModel: entryProof.snapshot.recoveryModel }
             : {}),
@@ -2414,6 +2468,9 @@ export class RuntimeRepository {
             managedThroughAt: entryEvent.observedAt,
             signalCandleAt: input.candleAt,
             ...(input.indicatorState === undefined ? {} : { indicatorState: input.indicatorState }),
+            ...(action.position.positionExitPolicy
+              ? { positionExitPolicy: action.position.positionExitPolicy }
+              : {}),
             side: action.position.side,
             entryRegime: action.position.entryRegime,
             entrySession: action.position.entrySession,
@@ -2497,6 +2554,7 @@ export class RuntimeRepository {
             exitPolicy: true,
             executionPolicy: true,
             recoveryModel: true,
+            positionExitPolicy: true,
             fundingPolicy: true,
             fundingState: true,
             fundingAccrued: true,
@@ -2790,6 +2848,7 @@ export class RuntimeRepository {
         exitPolicy: true,
         executionPolicy: true,
         recoveryModel: true,
+        positionExitPolicy: true,
         fundingPolicy: true,
         fundingState: true,
         fundingAccrued: true,
@@ -3006,6 +3065,7 @@ export class RuntimeRepository {
           exitPolicy: true,
           executionPolicy: true,
           recoveryModel: true,
+          positionExitPolicy: true,
           fundingPolicy: true,
           fundingState: true,
           fundingAccrued: true,

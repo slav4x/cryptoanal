@@ -1,3 +1,7 @@
+import {
+  readExecutionPositionExitPolicy,
+  type ExecutionPositionExitPolicy,
+} from "./execution-position-exit";
 import { readExecutionPolicy, type PinnedExecutionPolicy } from "./execution-policy";
 import { readExecutionFundingPolicy, type ExecutionFundingPolicy } from "./execution-funding";
 import {
@@ -34,6 +38,7 @@ export type EntryExecutionMarker = {
   requestedQuantity: string;
 };
 export type ExecutionEntryOrder = {
+  positionExitPolicy?: ExecutionPositionExitPolicy;
   recoveryModel?: ExecutionRecoveryModel;
   executionPolicy?: PinnedExecutionPolicy;
   fundingPolicy?: ExecutionFundingPolicy;
@@ -135,6 +140,7 @@ export function readExecutionEntryOrder(value: unknown): ExecutionEntryOrder {
   readExecutionFundingPolicy(order.fundingPolicy);
   if (order.executionPolicy) readExecutionPolicy(order.executionPolicy.payload);
   readExecutionRecoveryModel(order.recoveryModel);
+  readExecutionPositionExitPolicy(order.positionExitPolicy);
   if (
     order.fundingPolicy &&
     (!order.fundingNextAt || !Number.isFinite(Date.parse(order.fundingNextAt)))

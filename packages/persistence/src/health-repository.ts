@@ -234,6 +234,8 @@ export class HealthRepository {
   public async getRuntimeProgress(workspaceId: string) {
     const rows = await this.prisma.$queryRaw<
       Array<{
+        holdingDeadlineAt: Date | null;
+        maxQuoteAgeMs: number;
         positionId: string;
         executionRunId: string;
         symbol: string;
@@ -247,7 +249,9 @@ export class HealthRepository {
         pendingEvents: number;
       }>
     >(Prisma.sql`
-      SELECT p.id AS "positionId", p."executionRunId", p.symbol, p."managedThroughAt",
+      SELECT p."openedAt" + (p."positionExitPolicy"->>'maxHoldingMs')::double precision * interval '1 millisecond' AS "holdingDeadlineAt",
+        coalesce((p."executionPolicy"#>>'{payload,settings,accountSafety,maxQuoteAgeMs}')::int, 10000) AS "maxQuoteAgeMs",
+        p.id AS "positionId", p."executionRunId", p.symbol, p."managedThroughAt",
         p."priceEventId"::text, latest.id::text AS "latestEventId",
         latest."observedAt" AS "latestEventAt", latest."receivedAt" AS "latestReceivedAt",
         pending."oldestPendingReceivedAt", pending.count::int AS "pendingEvents",

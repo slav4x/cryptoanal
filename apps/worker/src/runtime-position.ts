@@ -1,3 +1,4 @@
+import { evaluateExecutionHoldingExit } from "@cryptoanal/application";
 import {
   evaluateExecutionExit,
   evaluateExecutionPriceExit,
@@ -29,6 +30,8 @@ export function evaluateRuntimeCandleExit(
   if (quote && quote.observedAt >= candleClosedAt && quote.observedAt >= position.openedAt) {
     const priceExit = evaluateExecutionPriceExit(position, quote, config);
     if (priceExit) return priceExit;
+    const timedExit = evaluateExecutionHoldingExit(position, quote, config);
+    if (timedExit) return timedExit;
     return evaluateExecutionSignalExit(position, candle, config)
       ? settleExecutionPosition(position, quote.price, quote.observedAt, "signal-exit", config)
       : null;

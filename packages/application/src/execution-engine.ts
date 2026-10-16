@@ -1,3 +1,10 @@
+import {
+  makeExecutionPositionExitPolicy,
+  evaluateExecutionHoldingExit,
+  executionSignalExitEnabled,
+  executionFamilySignalExit,
+  type ExecutionPositionExitPolicy,
+} from "./execution-position-exit";
 import { executionStopRisk } from "./execution-risk";
 import type { EntryExecutionMarker } from "./execution-entry-liquidity";
 import { assertExecutionExitQuote, type ExecutionExitPolicy } from "./execution-exit-policy";
@@ -59,6 +66,8 @@ export type ExecutionStrategyConfig = {
     breakEvenActivationR: number;
     trailingActivationR: number;
     exitOnSignalReversal: boolean;
+    signalExitModel?: "family-invalidation@1" | undefined;
+    maxHoldingMinutes?: number | undefined;
   };
   costs: { makerFeeBps: number; takerFeeBps: number; slippageBps: number };
   schedule: {
@@ -85,6 +94,7 @@ export type EnrichedExecutionCandle = ExecutionCandle & {
 };
 
 export type ExecutionPosition = {
+  positionExitPolicy?: ExecutionPositionExitPolicy;
   fundingPaid?: number;
   fundingThroughAt?: Date;
   exitPolicy?: ExecutionExitPolicy;
@@ -106,6 +116,7 @@ export type ExecutionPosition = {
 };
 
 export type PendingExecutionSignal = {
+  breakoutLevel?: number;
   side: "long" | "short";
   signalPrice: number;
 };
@@ -120,7 +131,8 @@ export type ExecutionQuote = {
 export type ExecutionMarketRegime = "bull" | "bear" | "neutral" | "unknown";
 export type ExecutionTradingSession = "asia" | "europe" | "us" | "off-hours" | "unknown";
 
-export type AutomaticExitReason = "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit";
+export type AutomaticExitReason =
+  "stop-loss" | "take-profit" | "trailing-stop" | "signal-exit" | "holding-timeout";
 export type ExecutionExitReason =
   | AutomaticExitReason
   | "end-of-data"
@@ -544,14 +556,22 @@ function getBreakoutSignal(
     candle.close > candle.breakoutHigh &&
     allowsDirection(config, "long")
   ) {
-    return { side: "long", signalPrice: candle.close };
+    return {
+      side: "long",
+      signalPrice: candle.close,
+      ...(config.exit.signalExitModel ? { breakoutLevel: candle.breakoutHigh } : {}),
+    };
   }
   if (
     candle.breakoutLow !== null &&
     candle.close < candle.breakoutLow &&
     allowsDirection(config, "short")
   ) {
-    return { side: "short", signalPrice: candle.close };
+    return {
+      side: "short",
+      signalPrice: candle.close,
+      ...(config.exit.signalExitModel ? { breakoutLevel: candle.breakoutLow } : {}),
+    };
   }
   return null;
 }
@@ -867,8 +887,10 @@ function createExecutionPosition({
     )
       return null;
   }
+  const positionExitPolicy = makeExecutionPositionExitPolicy(config, signal);
   return limitExecutionPositionRisk(
     {
+      ...(positionExitPolicy ? { positionExitPolicy } : {}),
       ...(entryExecution ? { entryExecution } : {}),
       ...(instrumentRules ? { instrumentRules } : {}),
       symbol,
@@ -1052,7 +1074,7 @@ export function evaluateExecutionPriceExit(
   position: ExecutionPosition,
   quote: ExecutionQuote,
   config: ExecutionStrategyConfig,
-): ExecutionSettlement<Exclude<AutomaticExitReason, "signal-exit">> | null {
+): ExecutionSettlement<Exclude<AutomaticExitReason, "signal-exit" | "holding-timeout">> | null {
   assertExecutionExitQuote(position, quote);
   const protection = executionProtectionLevel(position);
   const stopTouched =
@@ -1085,6 +1107,16 @@ export function advanceExecutionCandlePosition(
   candle: EnrichedExecutionCandle,
   config: ExecutionStrategyConfig,
 ) {
+  const openingQuote = {
+    symbol: candle.symbol,
+    price: candle.open,
+    observedAt: candle.openTime,
+    source: "LastPrice" as const,
+  };
+  const timedOpening =
+    evaluateExecutionPriceExit(position, openingQuote, config) ??
+    evaluateExecutionHoldingExit(position, openingQuote, config);
+  if (timedOpening) return { position, settlement: timedOpening };
   const initialExit = evaluateExecutionExit(position, candle, config);
   if (initialExit && initialExit.exitReason !== "signal-exit")
     return { position, settlement: initialExit };
@@ -1095,13 +1127,19 @@ export function advanceExecutionCandlePosition(
   // The close follows the favorable extreme, unlike the unknown intrabar adverse touch.
   const closeExit = evaluateExecutionPriceExit(
     updated,
-    { symbol: candle.symbol, price: candle.close, observedAt: closedAt },
+    { symbol: candle.symbol, price: candle.close, observedAt: closedAt, source: "LastPrice" },
     config,
   );
   return {
     position: updated,
     settlement:
-      closeExit ?? (initialExit ? { ...initialExit, closedAt: closedAt.toISOString() } : null),
+      closeExit ??
+      evaluateExecutionHoldingExit(
+        updated,
+        { symbol: candle.symbol, price: candle.close, observedAt: closedAt, source: "LastPrice" },
+        config,
+      ) ??
+      (initialExit ? { ...initialExit, closedAt: closedAt.toISOString() } : null),
   };
 }
 
@@ -1109,8 +1147,17 @@ export function evaluateExecutionSignalExit(
   position: ExecutionPosition,
   candle: EnrichedExecutionCandle,
   config: ExecutionStrategyConfig,
-  closedAt = candle.openTime,
+  closedAt = position.positionExitPolicy
+    ? new Date(+candle.openTime + timeframeMinutes[config.universe.timeframe] * 60000)
+    : candle.openTime,
 ): ExecutionSettlement<"signal-exit"> | null {
+  if (!executionSignalExitEnabled(position, config)) return null;
+  if (position.positionExitPolicy && closedAt <= position.openedAt) return null;
+  if (position.positionExitPolicy?.signalModel === "family-invalidation@1") {
+    if (executionFamilySignalExit(position, candle))
+      return settleExecutionPosition(position, candle.close, closedAt, "signal-exit", config);
+    if (config.signal.family !== "ema-crossover") return null;
+  }
   if (config.signal.family === "mean-reversion" && candle.meanReversionZScore !== null) {
     const returnedToMean =
       (position.side === "long" && candle.meanReversionZScore >= 0) ||
@@ -1122,7 +1169,6 @@ export function evaluateExecutionSignalExit(
 
   if (
     config.signal.family !== "ema-crossover" ||
-    !config.exit.exitOnSignalReversal ||
     candle.emaFast === null ||
     candle.emaSlow === null ||
     candle.previousEmaFast === null ||

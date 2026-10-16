@@ -1,3 +1,4 @@
+import { evaluateExecutionHoldingExit } from "./execution-position-exit";
 import {
   enrichExecutionCandles,
   getExecutionSignal,
@@ -233,7 +234,14 @@ export function runExecutionPolicySimulation(input: PolicySimulationInput) {
         { symbol: c.symbol, price: c.open, observedAt: openAt },
         config,
       );
-      if (exit) close(p, exit, openAt);
+      const settlement =
+        exit ??
+        evaluateExecutionHoldingExit(
+          p,
+          { symbol: c.symbol, price: c.open, observedAt: openAt },
+          config,
+        );
+      if (settlement) close(p, settlement, openAt);
     }
     force(openAt);
     for (const c of [...bars].sort((a, b) => a.symbol.localeCompare(b.symbol))) {
@@ -346,6 +354,7 @@ export function runExecutionPolicySimulation(input: PolicySimulationInput) {
       const quote = { symbol, price: c.close, observedAt: closeAt };
       const exit =
         evaluateExecutionPriceExit(p, quote, config) ??
+        evaluateExecutionHoldingExit(p, quote, config) ??
         (evaluateExecutionSignalExit(p, c, config, closeAt)
           ? settleExecutionPosition(p, c.close, closeAt, "signal-exit", config)
           : null);

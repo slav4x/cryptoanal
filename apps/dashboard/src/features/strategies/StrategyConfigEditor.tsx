@@ -157,20 +157,58 @@ export function StrategyConfigEditor({ value, onChange }: Props) {
           description="Защитный стоп, фиксация прибыли и сопровождение позиции."
         >
           <NumberGrid fields={exitFields} value={value} update={update} />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <SelectField
+              id="signal-exit-model"
+              label="Правила сигнального выхода"
+              value={value.signalExitModel}
+              onChange={(fieldValue) => update("signalExitModel", fieldValue)}
+              options={[
+                { value: "legacy", label: "Прежние правила" },
+                { value: "family-invalidation@1", label: "Отмена идеи по семейству" },
+              ]}
+            />
+            <NumberField
+              id="max-holding"
+              label="Максимальное удержание"
+              suffix="мин"
+              value={value.maxHoldingMinutes}
+              onChange={(fieldValue) => update("maxHoldingMinutes", fieldValue)}
+              min="1"
+              max="525600"
+              step="1"
+            />
+          </div>
+          <p className="mt-2 text-[11px] leading-4 text-stale">
+            Пустой срок — без ограничения. Отсчёт начинается с исполненного входа; закрытие требует
+            доступной цены и ликвидности.
+          </p>
           <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-[10px] border border-row-border p-3">
             <input
               type="checkbox"
               checked={value.exitOnSignalReversal}
               onChange={(event) => update("exitOnSignalReversal", event.target.checked)}
               className="mt-0.5 size-4 accent-primary"
-              disabled={value.signalFamily !== "ema-crossover"}
+              disabled={
+                value.signalExitModel === "legacy" && value.signalFamily !== "ema-crossover"
+              }
             />
             <span>
               <span className="block text-xs font-medium text-secondary-foreground">
-                Закрывать по обратному EMA-сигналу
+                {value.signalExitModel === "legacy"
+                  ? "Закрывать по обратному EMA-сигналу"
+                  : "Закрывать при отмене торговой идеи"}
               </span>
               <span className="mt-1 block text-[11px] leading-4 text-stale">
-                Позиция закрывается на завершённой свече при пересечении EMA против её стороны.
+                {value.signalExitModel === "legacy"
+                  ? "EMA: обратное пересечение. Возврат к среднему у mean-reversion действует всегда. Breakout и momentum сигнально не закрываются."
+                  : value.signalFamily === "breakout"
+                    ? "Закрытая свеча вернулась к уровню исходного пробоя или внутрь диапазона."
+                    : value.signalFamily === "momentum"
+                      ? "Импульс на закрытой свече стал нулевым или сменил знак."
+                      : value.signalFamily === "mean-reversion"
+                        ? "Z-score на закрытой свече достиг нуля или пересёк его."
+                        : "EMA пересеклись против стороны позиции на закрытой свече."}
               </span>
             </span>
           </label>

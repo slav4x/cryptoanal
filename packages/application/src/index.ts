@@ -31,3 +31,5 @@ export * from "./execution-policy";
 export * from "./execution-position-policy";
 export * from "./execution-policy-simulation";
 export * from "./execution-recovery-policy";
+
+export * from "./execution-position-exit";

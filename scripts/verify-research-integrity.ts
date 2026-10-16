@@ -53,10 +53,19 @@ for (const fixturePath of fixturePaths) {
   }));
   const datasetHash = createHash("sha256").update(JSON.stringify(fixture.candles)).digest("hex");
   strictEqual(datasetHash, fixture.datasetHash, `${fixture.id}: dataset hash drift`);
-  strictEqual(fixture.engineVersion, validationEngineVersion, `${fixture.id}: engine drift`);
+  const legacyExitCompatible =
+    fixture.engineVersion === "cryptoanal-validation@0.15.1" &&
+    fixture.runtimeEngineVersion === "cryptoanal-runtime-replay@1.9.1" &&
+    fixture.config.exit.signalExitModel === undefined &&
+    fixture.config.exit.maxHoldingMinutes === undefined;
+  strictEqual(
+    fixture.engineVersion,
+    legacyExitCompatible ? "cryptoanal-validation@0.15.1" : validationEngineVersion,
+    `${fixture.id}: engine drift`,
+  );
   strictEqual(
     fixture.runtimeEngineVersion,
-    runtimeReplayEngineVersion,
+    legacyExitCompatible ? "cryptoanal-runtime-replay@1.9.1" : runtimeReplayEngineVersion,
     `${fixture.id}: runtime engine drift`,
   );
 
@@ -76,7 +85,7 @@ for (const fixturePath of fixturePaths) {
     candles,
     initialCapital: fixture.initialCapital,
   });
-  strictEqual(runtime.engineVersion, fixture.runtimeEngineVersion, `${fixture.id}: replay drift`);
+  strictEqual(runtime.engineVersion, runtimeReplayEngineVersion, `${fixture.id}: replay drift`);
   const validationTrades = validation.trades.map(normalizeTrade);
   const runtimeTrades = runtime.trades.map(normalizeTrade);
   deepStrictEqual(runtimeTrades, validationTrades, `${fixture.id}: runtime/backtest trades differ`);

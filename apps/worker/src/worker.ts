@@ -1,3 +1,8 @@
+import {
+  readExecutionPositionExitPolicy,
+  executionSignalExitEnabled,
+  executionHoldingDeadline,
+} from "@cryptoanal/application";
 import { runRuntimeLane } from "./runtime-lane";
 import { selectPriorityExit } from "./runtime-priority-exit";
 import { RuntimeLatency } from "./runtime-latency";
@@ -1074,6 +1079,8 @@ async function runtimeProtectionLoop() {
               expectedPositionVersion: position.runtimeVersion,
             });
           else if (
+            (executionHoldingDeadline(deserializeExecutionPosition(position))?.getTime() ??
+              Infinity) <= Date.now() ||
             protectionWatch.size > 0 ||
             latestQuotes.get(position.symbol)?.streamId !== position.priceStreamId
           )
@@ -1456,8 +1463,7 @@ async function processRealtimePosition(
     events: events.map((event) => ({ ...event, price: Number(event.price) })),
     signalCandleAt: target.signalCandleAt,
     signalIntervalMs,
-    ...(strategyConfig.signal.family === "mean-reversion" ||
-    (strategyConfig.signal.family === "ema-crossover" && strategyConfig.exit.exitOnSignalReversal)
+    ...(executionSignalExitEnabled(deserializeExecutionPosition(target), strategyConfig)
       ? {
           loadSignals: async () =>
             protectDuringWait(async (historySignal) => {
@@ -1673,6 +1679,15 @@ async function processRealtimePosition(
                     +decidedAt - +event.receivedAt > config.RUNTIME_QUOTE_MAX_AGE_MS
                       ? "journal-replay"
                       : "realtime",
+                },
+              }
+            : {}),
+          ...(settlement?.exitReason === "holding-timeout"
+            ? {
+                holdingExit: {
+                  deadlineAt: executionHoldingDeadline(position)!.toISOString(),
+                  quoteAt: event.observedAt.toISOString(),
+                  delayMs: +event.observedAt - +executionHoldingDeadline(position)!,
                 },
               }
             : {}),
@@ -3109,6 +3124,7 @@ function runtimeFailure(error: unknown): { code: string; message: string } {
 }
 
 function deserializeExecutionPosition(position: {
+  positionExitPolicy?: unknown;
   fundingPolicy?: unknown;
   fundingRemaining?: { toNumber(): number } | null;
   remainingQuantity?: { toNumber(): number } | null;
@@ -3131,6 +3147,9 @@ function deserializeExecutionPosition(position: {
   entrySlippage: { toNumber(): number };
 }): ExecutionPosition {
   return {
+    ...(position.positionExitPolicy
+      ? { positionExitPolicy: readExecutionPositionExitPolicy(position.positionExitPolicy)! }
+      : {}),
     ...(position.exitPolicy ? { exitPolicy: readExecutionExitPolicy(position.exitPolicy)! } : {}),
     ...(position.entryExecution
       ? { entryExecution: readEntryExecutionMarker(position.entryExecution)! }
@@ -3157,6 +3176,7 @@ function deserializeExecutionPosition(position: {
 
 function serializePosition(position: ExecutionPosition) {
   return {
+    ...(position.positionExitPolicy ? { positionExitPolicy: position.positionExitPolicy } : {}),
     ...(position.exitPolicy ? { exitPolicy: position.exitPolicy } : {}),
     ...(position.entryExecution ? { entryExecution: position.entryExecution } : {}),
     ...(position.instrumentRules ? { instrumentRules: position.instrumentRules } : {}),
@@ -3195,7 +3215,18 @@ function parsePendingSignal(value: unknown): PendingExecutionSignal | null {
   const signalPrice = value.signalPrice;
   if ((side !== "long" && side !== "short") || typeof signalPrice !== "number") return null;
   if (!Number.isFinite(signalPrice) || signalPrice <= 0) return null;
-  return { side, signalPrice };
+  if (
+    "breakoutLevel" in value &&
+    (typeof value.breakoutLevel !== "number" ||
+      !Number.isFinite(value.breakoutLevel) ||
+      value.breakoutLevel <= 0)
+  )
+    return null;
+  return {
+    side,
+    signalPrice,
+    ...("breakoutLevel" in value ? { breakoutLevel: value.breakoutLevel as number } : {}),
+  };
 }
 
 type RuntimePendingSignal = PendingExecutionSignal & {

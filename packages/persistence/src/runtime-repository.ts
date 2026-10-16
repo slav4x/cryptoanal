@@ -1,3 +1,4 @@
+import { lockRuntimeScope, withRuntimeLockRetry } from "./runtime-lock";
 import { readPinnedExecutionPolicy } from "./execution-policy-repository";
 import {
   readExecutionFundingPolicy,
@@ -209,6 +210,10 @@ export class RuntimeMarketPriceUnavailableError extends Error {}
 export class RuntimeIdempotencyConflictError extends Error {}
 
 export class RuntimeRepository {
+  private transaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>) {
+    return withRuntimeLockRetry(() => this.prisma.$transaction(work), this.nonBlockingLocks);
+  }
+
   public constructor(
     private readonly prisma: CryptoAnalPrismaClient,
     private readonly riskPolicy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
@@ -217,6 +222,7 @@ export class RuntimeRepository {
     private readonly exitPolicy: ExecutionExitPolicy = defaultExecutionExitPolicy,
     private readonly fundingPolicy?: ExecutionFundingPolicy,
     private readonly recoveryModel?: ExecutionRecoveryModel,
+    private readonly nonBlockingLocks = false,
   ) {
     if (fundingPolicy && !isLiquidityExitPolicy(exitPolicy))
       throw new Error("Funding requires liquidity exits");
@@ -481,11 +487,9 @@ export class RuntimeRepository {
         input.processedEventCount > 10_000)
     )
       throw new Error("Invalid trace event count");
-    return this.prisma.$transaction(async (transaction) => {
-      await lockRuntimeRisk(transaction, input.workspaceId);
-      await transaction.$executeRaw(Prisma.sql`
-        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
-      `);
+    return this.transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(transaction, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const position = await transaction.position.findFirst({
         where: {
           id: input.positionId,
@@ -866,11 +870,9 @@ export class RuntimeRepository {
     position: RuntimeCyclePosition;
     policy: ExecutionEntryLiquidityPolicy;
   }) {
-    return this.prisma.$transaction(async (tx) => {
-      await lockRuntimeRisk(tx, input.workspaceId);
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
-      );
+    return this.transaction(async (tx) => {
+      await lockRuntimeRisk(tx, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(tx, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const cursor = await tx.runtimeCursor.findUnique({
         where: {
           executionRunId_symbol: { executionRunId: input.executionRunId, symbol: input.symbol },
@@ -1127,10 +1129,8 @@ export class RuntimeRepository {
       select: { id: true, executionRunId: true, symbol: true },
     });
     for (const candidate of candidates)
-      await this.prisma.$transaction(async (tx) => {
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${candidate.executionRunId}`}))`,
-        );
+      await this.transaction(async (tx) => {
+        await lockRuntimeScope(tx, `runtime:${candidate.executionRunId}`, this.nonBlockingLocks);
         const order = await tx.order.findFirst({
           where: { id: candidate.id, status: "OPEN", positionId: null },
           include: {
@@ -1213,11 +1213,9 @@ export class RuntimeRepository {
     positionId: string;
     expectedPositionVersion: number;
   }) {
-    return this.prisma.$transaction(async (tx) => {
-      await lockRuntimeRisk(tx, input.workspaceId);
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
-      );
+    return this.transaction(async (tx) => {
+      await lockRuntimeRisk(tx, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(tx, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const p = await tx.position.findFirst({
         where: {
           id: input.positionId,
@@ -1242,11 +1240,9 @@ export class RuntimeRepository {
   }
 
   public async persistRealtimeEntry(input: PersistRealtimeEntryInput) {
-    return this.prisma.$transaction(async (transaction) => {
-      await lockRuntimeRisk(transaction, input.workspaceId);
-      await transaction.$executeRaw(Prisma.sql`
-        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
-      `);
+    return this.transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(transaction, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const [deployment, executionRun, cursor, currentPosition, instrument] = await Promise.all([
         transaction.deployment.findFirst({
           where: { id: input.deploymentId, workspaceId: input.workspaceId },
@@ -1933,10 +1929,8 @@ export class RuntimeRepository {
     rejectionReason?: string;
     waitingReason?: RuntimeEntryWaitReason;
   }) {
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
-      );
+    return this.transaction(async (tx) => {
+      await lockRuntimeScope(tx, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const cursor = await tx.runtimeCursor.findUnique({
         where: {
           executionRunId_symbol: { executionRunId: input.executionRunId, symbol: input.symbol },
@@ -2172,11 +2166,9 @@ export class RuntimeRepository {
   }
 
   public async persistCycle(input: PersistRuntimeCycleInput) {
-    return this.prisma.$transaction(async (transaction) => {
-      await lockRuntimeRisk(transaction, input.workspaceId);
-      await transaction.$executeRaw(Prisma.sql`
-        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
-      `);
+    return this.transaction(async (transaction) => {
+      await lockRuntimeRisk(transaction, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(transaction, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
 
       const correlationId = runtimeCorrelationId(input);
       const existingDecision = await transaction.decision.findUnique({
@@ -2860,14 +2852,12 @@ export class RuntimeRepository {
     idempotencyKey: string;
     reason: string;
   }) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`command:${input.workspaceId}:${input.idempotencyKey}`}))`,
       );
-      await lockRuntimeRisk(tx, input.workspaceId);
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))`,
-      );
+      await lockRuntimeRisk(tx, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(tx, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const receipt = await tx.commandReceipt.findUnique({
         where: {
           workspaceId_idempotencyKey: {
@@ -2981,14 +2971,12 @@ export class RuntimeRepository {
     maximumQuoteAgeMs: number;
     settlement: RuntimeCycleSettlement;
   }) {
-    return this.prisma.$transaction(async (transaction) => {
+    return this.transaction(async (transaction) => {
       await transaction.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtext(${`command:${input.workspaceId}:${input.idempotencyKey}`}))
       `);
-      await lockRuntimeRisk(transaction, input.workspaceId);
-      await transaction.$executeRaw(Prisma.sql`
-        SELECT pg_advisory_xact_lock(hashtext(${`runtime:${input.executionRunId}`}))
-      `);
+      await lockRuntimeRisk(transaction, input.workspaceId, this.nonBlockingLocks);
+      await lockRuntimeScope(transaction, `runtime:${input.executionRunId}`, this.nonBlockingLocks);
       const receipt = await transaction.commandReceipt.findUnique({
         where: {
           workspaceId_idempotencyKey: {

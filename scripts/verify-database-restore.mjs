@@ -36,6 +36,10 @@ try {
     "-d",
     "--name",
     containerName,
+    "--cpus",
+    "1",
+    "--memory",
+    "768m",
     "-e",
     "POSTGRES_DB=restore_check",
     "-e",
@@ -81,6 +85,7 @@ try {
     migrations: { total: manifest.schema.migrations.length, failed: failedMigrations },
     result: "passed",
     isolation: "ephemeral container and volume; source database was not connected",
+    resources: { cpus: 1, memoryMiB: 768 },
   };
   const reportPath = path.join(
     path.dirname(manifestPath),

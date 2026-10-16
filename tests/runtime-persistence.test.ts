@@ -2077,6 +2077,70 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
       },
     );
     await t.test(
+      "worker lock retries recheck the original TTL without extending the signal",
+      async () => {
+        const context = await setup();
+        const detectedAt = new Date(Date.now() - 900);
+        const where = {
+          executionRunId_symbol: { executionRunId: context.run.id, symbol: context.symbol },
+        };
+        const cursor = await prisma.runtimeCursor.findUniqueOrThrow({ where });
+        await prisma.runtimeCursor.update({
+          where,
+          data: {
+            pendingSignal: {
+              ...(cursor.pendingSignal as object),
+              detectedAt: detectedAt.toISOString(),
+              availableAt: detectedAt.toISOString(),
+              expiresAt: new Date(+detectedAt + 900000).toISOString(),
+            },
+          },
+        });
+        await prisma.marketPriceEvent.update({
+          where: { id: context.entry.entryPriceEventId },
+          data: { observedAt: detectedAt, receivedAt: detectedAt },
+        });
+        const worker = new RuntimeRepository(
+          prisma,
+          defaultRuntimeRiskPolicy,
+          { ttlMs: 1000, maxDeviationBps: 50 },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true,
+        );
+        let unlock!: () => void, ready!: () => void;
+        const released = new Promise<void>((resolve) => {
+          unlock = resolve;
+        });
+        const locked = new Promise<void>((resolve) => {
+          ready = resolve;
+        });
+        const blocker = prisma.$transaction(async (tx) => {
+          await tx.$executeRaw(
+            Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`runtime:${context.run.id}`}))`,
+          );
+          ready();
+          await released;
+        });
+        await locked;
+        const attempt = worker.persistRealtimeEntry({
+          ...context.entry,
+          quoteAt: detectedAt,
+          position: { ...context.entry.position, openedAt: detectedAt },
+        });
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        } finally {
+          unlock();
+        }
+        await blocker;
+        assert.equal((await attempt).riskFailure, "ENTRY_SIGNAL_EXPIRED");
+        assert.equal(await prisma.position.count({ where: { executionRunId: context.run.id } }), 0);
+      },
+    );
+    await t.test(
       "limit pending retains its candle deadline when market TTL has passed",
       async () => {
         const context = await setup();
@@ -3000,6 +3064,13 @@ test("runtime persistence against isolated PostgreSQL", { skip: !databaseUrl }, 
         await prisma.marketStreamLease.deleteMany();
         assert.equal(await journal.claimWriter(owner), true);
         assert.equal(await journal.claimWriter("other"), false);
+        assert.equal((await journal.releaseWriter("other")).count, 0);
+        assert.equal((await journal.releaseWriter(owner)).count, 1);
+        assert.equal(await journal.claimWriter("successor"), true);
+        assert.equal((await journal.releaseWriter(owner)).count, 0);
+        assert.equal(await journal.claimWriter(owner), false);
+        assert.equal((await journal.releaseWriter("successor")).count, 1);
+        assert.equal(await journal.claimWriter(owner), true);
         await journal.recordStream({
           id: owner,
           writerId: owner,

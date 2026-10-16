@@ -132,6 +132,7 @@ export async function replayRuntimeTraceBase(input: RuntimeTraceReplayInput) {
   if (
     snapshot.version !== 1 ||
     (snapshot.executionEngineVersion !== executionEngineVersion &&
+      snapshot.executionEngineVersion !== "cryptoanal-execution@0.11.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.10.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.9.0" &&
       snapshot.executionEngineVersion !== "cryptoanal-execution@0.8.0" &&

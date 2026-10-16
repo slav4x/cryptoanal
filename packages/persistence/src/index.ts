@@ -167,3 +167,4 @@ export * from "./funding-repository";
 export * from "./funding-proof";
 
 export * from "./execution-policy-repository";
+export { RuntimeLockBusyError } from "./runtime-lock";

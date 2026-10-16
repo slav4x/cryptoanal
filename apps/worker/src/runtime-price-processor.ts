@@ -34,7 +34,11 @@ export type RuntimePriceCheckpoint = {
   markPrice: number;
   settlement: ExecutionSettlement | null;
   recovered: boolean;
-  recovery: (RuntimeRecoveryEvidence & { reason: "stream-change" | "unconfirmed-stream" }) | null;
+  recovery:
+    | (RuntimeRecoveryEvidence & {
+        reason: "stream-change" | "unconfirmed-stream" | "history-wait";
+      })
+    | null;
   signalCandleAt: Date | null;
   signalExit: {
     candleAt: string;

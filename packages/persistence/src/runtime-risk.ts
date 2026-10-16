@@ -12,6 +12,7 @@ import {
 } from "../../application/src/execution-account";
 import { Prisma } from "./generated/prisma/client";
 import type { CryptoAnalPrismaClient } from "./client";
+import { lockRuntimeScope, withRuntimeLockRetry } from "./runtime-lock";
 import {
   captureInstrumentRules,
   instrumentRulesSelect,
@@ -27,10 +28,12 @@ import {
 
 export type RuntimeRiskPolicy = ExecutionAccountSafety;
 export const defaultRuntimeRiskPolicy = defaultExecutionAccountSafety;
-export async function lockRuntimeRisk(tx: Prisma.TransactionClient, workspaceId: string) {
-  await tx.$executeRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`risk:${workspaceId}`}))`,
-  );
+export async function lockRuntimeRisk(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  nonBlocking = false,
+) {
+  await lockRuntimeScope(tx, `risk:${workspaceId}`, nonBlocking);
 }
 
 export const readRiskConfig = readExecutionRiskConfig;
@@ -309,18 +312,23 @@ export class RuntimeRiskRepository {
   public constructor(
     private readonly prisma: CryptoAnalPrismaClient,
     private readonly policy: RuntimeRiskPolicy = defaultRuntimeRiskPolicy,
+    private readonly nonBlockingLocks = false,
   ) {}
 
   public assess(workspaceId: string, exchangeAccountId: string, strategyConfig: Prisma.JsonValue) {
-    return this.prisma.$transaction(async (tx) => {
-      await lockRuntimeRisk(tx, workspaceId);
-      return assessRuntimeRisk(tx, {
-        workspaceId,
-        exchangeAccountId,
-        strategyConfig,
-        policy: this.policy,
-      });
-    });
+    return withRuntimeLockRetry(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await lockRuntimeRisk(tx, workspaceId, this.nonBlockingLocks);
+          return assessRuntimeRisk(tx, {
+            workspaceId,
+            exchangeAccountId,
+            strategyConfig,
+            policy: this.policy,
+          });
+        }),
+      this.nonBlockingLocks,
+    );
   }
 
   public async getControl(workspaceId: string) {

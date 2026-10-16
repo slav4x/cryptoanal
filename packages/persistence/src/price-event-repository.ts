@@ -1,5 +1,6 @@
 import { PriceArchiveRepository } from "./price-archive-repository";
 import type { CryptoAnalPrismaClient } from "./client";
+import { lockRuntimeScope } from "./runtime-lock";
 import {
   readExecutionMarketData,
   type StoredExecutionMarketData,
@@ -28,7 +29,10 @@ export type StreamSegmentInput = {
 };
 
 export class PriceEventRepository {
-  public constructor(private readonly prisma: CryptoAnalPrismaClient) {}
+  public constructor(
+    private readonly prisma: CryptoAnalPrismaClient,
+    private readonly nonBlockingLocks = false,
+  ) {}
 
   public recordStream(input: StreamSegmentInput) {
     return this.prisma.marketStreamSegment.upsert({
@@ -82,6 +86,9 @@ export class PriceEventRepository {
     `;
     return claimed.length === 1;
   }
+  public releaseWriter(owner: string) {
+    return this.prisma.marketStreamLease.deleteMany({ where: { id: "bybit", owner } });
+  }
 
   public async append(events: PriceEventInput[], owner: string) {
     if (events.length === 0) return [];
@@ -104,74 +111,77 @@ export class PriceEventRepository {
         throw new Error("Execution market data requires causal receive times");
     }
     // The transaction-level lock keeps ids in commit order across workers.
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('market-price-events'))`;
-      await tx.$queryRaw`SELECT id FROM "MarketStreamLease" WHERE id = 'bybit' FOR UPDATE`;
-      const lease = await tx.marketStreamLease.findUnique({ where: { id: "bybit" } });
-      if (lease?.owner !== owner || lease.expiresAt.getTime() <= Date.now())
-        throw new Error("Market writer lease lost");
-      await tx.marketPriceEvent.createMany({
-        data: events.map(({ streamContext: _context, ...event }) => event),
-        skipDuplicates: true,
-      });
-      const saved = await tx.marketPriceEvent.findMany({
-        where: { eventKey: { in: events.map((event) => event.eventKey) } },
-        orderBy: { id: "asc" },
-      });
-      const byKey = new Map(saved.map((event) => [event.eventKey, event]));
-      for (const event of events) {
-        const stored = byKey.get(event.eventKey)!;
-        if (
-          stored.symbol !== event.symbol ||
-          !stored.price.eq(event.price) ||
-          +stored.observedAt !== +event.observedAt ||
-          (stored.executionData &&
-            event.executionData &&
-            JSON.stringify(readExecutionMarketData(stored.executionData).trade) !==
-              JSON.stringify(readExecutionMarketData(event.executionData).trade))
-        )
-          throw new Error("Conflicting duplicate public trade");
-      }
-      for (const streamId of new Set(saved.map((e) => e.streamId))) {
-        const group = saved.filter((e) => e.streamId === streamId),
-          first = group[0]!,
-          last = group.at(-1)!;
-        const supplied = events.find((e) => e.streamId === streamId)?.streamContext;
-        const segment = await tx.marketStreamSegment.upsert({
-          where: { id: streamId },
-          create: {
-            ...(supplied ?? {
-              id: streamId,
-              writerId: owner,
-              cause: "legacy-unknown",
-              startedAt: first.receivedAt,
-            }),
-            firstEventId: first.id,
-            lastEventId: last.id,
-            firstObservedAt: first.observedAt,
-            lastObservedAt: last.observedAt,
-          },
-          update: {},
+    return this.prisma.$transaction(
+      async (tx) => {
+        await lockRuntimeScope(tx, "market-price-events", this.nonBlockingLocks);
+        await tx.$queryRaw`SELECT id FROM "MarketStreamLease" WHERE id = 'bybit' FOR UPDATE`;
+        const lease = await tx.marketStreamLease.findUnique({ where: { id: "bybit" } });
+        if (lease?.owner !== owner || lease.expiresAt.getTime() <= Date.now())
+          throw new Error("Market writer lease lost");
+        await tx.marketPriceEvent.createMany({
+          data: events.map(({ streamContext: _context, ...event }) => event),
+          skipDuplicates: true,
         });
-        if (
-          segment.firstEventId === null ||
-          segment.lastEventId === null ||
-          segment.lastEventId < last.id
-        )
-          await tx.marketStreamSegment.update({
+        const saved = await tx.marketPriceEvent.findMany({
+          where: { eventKey: { in: events.map((event) => event.eventKey) } },
+          orderBy: { id: "asc" },
+        });
+        const byKey = new Map(saved.map((event) => [event.eventKey, event]));
+        for (const event of events) {
+          const stored = byKey.get(event.eventKey)!;
+          if (
+            stored.symbol !== event.symbol ||
+            !stored.price.eq(event.price) ||
+            +stored.observedAt !== +event.observedAt ||
+            (stored.executionData &&
+              event.executionData &&
+              JSON.stringify(readExecutionMarketData(stored.executionData).trade) !==
+                JSON.stringify(readExecutionMarketData(event.executionData).trade))
+          )
+            throw new Error("Conflicting duplicate public trade");
+        }
+        for (const streamId of new Set(saved.map((e) => e.streamId))) {
+          const group = saved.filter((e) => e.streamId === streamId),
+            first = group[0]!,
+            last = group.at(-1)!;
+          const supplied = events.find((e) => e.streamId === streamId)?.streamContext;
+          const segment = await tx.marketStreamSegment.upsert({
             where: { id: streamId },
-            data: {
-              ...(segment.firstEventId === null
-                ? { firstEventId: first.id, firstObservedAt: first.observedAt }
-                : {}),
-              ...(segment.lastEventId === null || segment.lastEventId < last.id
-                ? { lastEventId: last.id, lastObservedAt: last.observedAt }
-                : {}),
+            create: {
+              ...(supplied ?? {
+                id: streamId,
+                writerId: owner,
+                cause: "legacy-unknown",
+                startedAt: first.receivedAt,
+              }),
+              firstEventId: first.id,
+              lastEventId: last.id,
+              firstObservedAt: first.observedAt,
+              lastObservedAt: last.observedAt,
             },
+            update: {},
           });
-      }
-      return saved;
-    });
+          if (
+            segment.firstEventId === null ||
+            segment.lastEventId === null ||
+            segment.lastEventId < last.id
+          )
+            await tx.marketStreamSegment.update({
+              where: { id: streamId },
+              data: {
+                ...(segment.firstEventId === null
+                  ? { firstEventId: first.id, firstObservedAt: first.observedAt }
+                  : {}),
+                ...(segment.lastEventId === null || segment.lastEventId < last.id
+                  ? { lastEventId: last.id, lastObservedAt: last.observedAt }
+                  : {}),
+              },
+            });
+        }
+        return saved;
+      },
+      { maxWait: 1000, timeout: 10000 },
+    );
   }
 
   public after(symbol: string, eventId: bigint | null, since: Date, limit = 2000) {

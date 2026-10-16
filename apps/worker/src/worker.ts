@@ -1,3 +1,8 @@
+import { runRuntimeLane } from "./runtime-lane";
+import { selectPriorityExit } from "./runtime-priority-exit";
+import { RuntimeLatency } from "./runtime-latency";
+import { RuntimeProtectionWatch, RuntimeProtectionPreempted } from "./runtime-protection-watch";
+import { RuntimeLockBusyError } from "@cryptoanal/persistence";
 import { executionPolicySettingsFromConfig } from "./execution-policy-settings";
 import {
   recoverCausalRuntimeGap,
@@ -128,7 +133,32 @@ const heartbeatIntervalMs = 15_000;
 const workerId = `worker-${randomUUID()}`;
 const watchdogId = `${workerId}:watchdog`;
 const config = loadServerConfig();
-const prisma = createPrismaClient(config.DATABASE_URL);
+const prisma = createPrismaClient(config.DATABASE_URL, {
+  maxConnections: 4,
+  applicationName: "cryptoanal-background",
+});
+const tradingPrisma = createPrismaClient(config.DATABASE_URL, {
+  maxConnections: 6,
+  applicationName: "cryptoanal-trading",
+  statementTimeoutMs: 4000,
+});
+const entryPrisma = createPrismaClient(config.DATABASE_URL, {
+  maxConnections: 2,
+  applicationName: "cryptoanal-entry",
+  statementTimeoutMs: 4000,
+});
+const protectionPrisma = createPrismaClient(config.DATABASE_URL, {
+  maxConnections: 2,
+  applicationName: "cryptoanal-protection",
+  statementTimeoutMs: 4000,
+});
+const journalPrisma = createPrismaClient(config.DATABASE_URL, {
+  maxConnections: 2,
+  applicationName: "cryptoanal-journal",
+  statementTimeoutMs: 4000,
+});
+const latency = new RuntimeLatency();
+const protectionWatch = new RuntimeProtectionWatch();
 const indicatorSeedCache = new RecoveryRequestCache<
   Record<string, { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }>
 >(Date.now, 64, 86400_000);
@@ -164,29 +194,51 @@ const runtimeEntryLiquidityPolicy = {
   makerParticipationBps: config.RUNTIME_ENTRY_MAKER_PARTICIPATION_BPS,
 };
 const fundingRepository = new FundingRepository(prisma);
-const runtimeRepository = new RuntimeRepository(
-  prisma,
-  runtimeRiskPolicy,
-  runtimeMarketEntryPolicy,
-  {
-    retentionDays: config.RUNTIME_TRACE_RETENTION_DAYS,
-    profitProtectionPolicy: runtimeProfitProtectionPolicy,
-  },
-  {
-    ...defaultLiquidityExitPolicy,
-    triggerSource: config.RUNTIME_EXIT_TRIGGER_SOURCE,
-    maximumSpreadBps: config.RUNTIME_EXIT_MAX_SPREAD_BPS,
-    maximumSlippageBps: config.RUNTIME_EXIT_MAX_SLIPPAGE_BPS,
-    maximumBookAgeMs: config.RUNTIME_EXIT_BOOK_MAX_AGE_MS,
-    orderTtlMs: config.RUNTIME_EXIT_ORDER_TTL_MS,
-  },
-  enabledFundingPolicy,
-  causalRecoveryModel,
-);
-const runtimeRiskRepository = new RuntimeRiskRepository(prisma, runtimeRiskPolicy);
+function makeRuntimeRepository(client: typeof prisma) {
+  return new RuntimeRepository(
+    client,
+    runtimeRiskPolicy,
+    runtimeMarketEntryPolicy,
+    {
+      retentionDays: config.RUNTIME_TRACE_RETENTION_DAYS,
+      profitProtectionPolicy: runtimeProfitProtectionPolicy,
+    },
+    {
+      ...defaultLiquidityExitPolicy,
+      triggerSource: config.RUNTIME_EXIT_TRIGGER_SOURCE,
+      maximumSpreadBps: config.RUNTIME_EXIT_MAX_SPREAD_BPS,
+      maximumSlippageBps: config.RUNTIME_EXIT_MAX_SLIPPAGE_BPS,
+      maximumBookAgeMs: config.RUNTIME_EXIT_BOOK_MAX_AGE_MS,
+      orderTtlMs: config.RUNTIME_EXIT_ORDER_TTL_MS,
+    },
+    enabledFundingPolicy,
+    causalRecoveryModel,
+    true,
+  );
+}
+const runtimeRepository = makeRuntimeRepository(tradingPrisma);
+const entryRuntimeRepository = makeRuntimeRepository(entryPrisma);
+const protectionRuntimeRepository = makeRuntimeRepository(protectionPrisma);
+const runtimeRiskRepository = new RuntimeRiskRepository(protectionPrisma, runtimeRiskPolicy, true);
+const entryRiskRepository = new RuntimeRiskRepository(entryPrisma, runtimeRiskPolicy, true);
 const decisionRepository = new DecisionRepository(prisma);
-const priceEventRepository = new PriceEventRepository(prisma);
+const priceEventRepository = new PriceEventRepository(tradingPrisma);
+const priceWriterRepository = new PriceEventRepository(journalPrisma, true);
+const priorityPriceRepository = new PriceEventRepository(protectionPrisma);
+const priorityScans = new Map<string, { version: number; cursor: bigint }>();
+const writerClaims = new Set<Promise<boolean>>();
+async function claimMarketWriter() {
+  if (stopping) return false;
+  const pending = priceWriterRepository.claimWriter(workerId);
+  writerClaims.add(pending);
+  try {
+    return await pending;
+  } finally {
+    writerClaims.delete(pending);
+  }
+}
 const priceArchiveRepository = new PriceArchiveRepository(prisma);
+const tradingPriceArchiveRepository = new PriceArchiveRepository(tradingPrisma);
 const healthRepository = new HealthRepository(prisma);
 const workspaceRepository = new WorkspaceRepository(prisma);
 const exchangeConnectionRepository = new ExchangeConnectionRepository(prisma);
@@ -236,33 +288,69 @@ function beginStream(cause: string) {
         }
       : {}),
   };
-  streamRecord = priceEventRepository
+  streamRecord = priceWriterRepository
     .recordStream(streamContext)
     .catch((err) => logger.warn({ err }, "Stream segment metadata unavailable"));
 }
 const recentRecoveryCache = new RecoveryRequestCache<RecoveryTradeSnapshot>();
-const priceJournal = new OrderedPriceJournal<PriceEventInput>(async (events) => {
-  const saved = await priceEventRepository.append(events, workerId);
-  for (const event of saved) {
-    const current = latestQuotes.get(event.symbol);
-    if (!current || event.observedAt >= current.observedAt) {
-      latestQuotes.set(event.symbol, {
-        id: event.id,
-        symbol: event.symbol,
-        price: Number(event.price),
-        observedAt: event.observedAt,
-        receivedAt: event.receivedAt,
-        streamId: event.streamId,
-      });
+const priceJournal = new OrderedPriceJournal<PriceEventInput>(
+  async (events) => {
+    const startedAt = Date.now();
+    for (const event of events)
+      if (event.receivedAt) latency.observe("journal.queueMs", startedAt - +event.receivedAt);
+    const started = performance.now();
+    const saved = await priceWriterRepository.append(events, workerId);
+    latency.observe("journal.writeMs", performance.now() - started);
+    for (const event of saved) {
+      latency.observe("journal.eventToCommitMs", Date.now() - +event.receivedAt);
+      const current = latestQuotes.get(event.symbol);
+      if (!current || event.observedAt >= current.observedAt) {
+        latestQuotes.set(event.symbol, {
+          id: event.id,
+          symbol: event.symbol,
+          price: Number(event.price),
+          observedAt: event.observedAt,
+          receivedAt: event.receivedAt,
+          streamId: event.streamId,
+        });
+      }
     }
-  }
-});
+  },
+  20000,
+  config.RUNTIME_JOURNAL_BATCH_SIZE,
+  handleJournalOverflow,
+);
+function handleJournalOverflow() {
+  const overflowStream = streamSession,
+    overflowAt = new Date();
+  void streamRecord
+    .then(() =>
+      priceWriterRepository.closeStream(overflowStream, overflowAt, undefined, "journal-overflow"),
+    )
+    .catch((err) => logger.warn({ err }, "Stream overflow metadata unavailable"));
+  lastDisconnect = { at: overflowAt, reason: "journal-overflow" };
+  beginStream("journal-overflow");
+  latestQuotes.clear();
+  logger.error("Market price journal overflow; recovery required");
+}
 
 let stopping = false;
 
 async function writeHeartbeat() {
   const workspaceIds = await workspaceRepository.listOperationalIds();
-  const metadata = { workspaceIds, executionEngineVersion, validationEngineVersion };
+  const metadata = {
+    workspaceIds,
+    executionEngineVersion,
+    validationEngineVersion,
+    latency: latency.snapshot(),
+    queues: {
+      journal: priceJournal.size,
+      journalOldestAgeMs: priceJournal.oldest?.receivedAt
+        ? Date.now() - +priceJournal.oldest.receivedAt
+        : 0,
+      protectedWaits: protectionWatch.size,
+    },
+  };
   await prisma.workerHeartbeat.upsert({
     where: { workerId },
     update: {
@@ -440,13 +528,14 @@ async function marketStreamLoop() {
     const leaseAbort = new AbortController();
     let renewal: ReturnType<typeof setInterval> | undefined;
     try {
-      if (!(await priceEventRepository.claimWriter(workerId))) {
+      if (!(await claimMarketWriter())) {
         await delay(5000);
         continue;
       }
+      if (stopping) break;
       renewal = setInterval(() => {
-        void priceEventRepository
-          .claimWriter(workerId)
+        if (stopping) return;
+        void claimMarketWriter()
           .then((owned) => {
             if (!owned) {
               nextStreamCause = "writer-lease-lost";
@@ -488,6 +577,7 @@ async function marketStreamLoop() {
               quote.observedAt.getTime() > Date.now() + 1000
             )
               return;
+            latency.observe("market.deliveryMs", +quote.receivedAt - +quote.observedAt);
             if (
               !priceJournal.enqueue({
                 eventKey: `bybit-trade:${quote.symbol}:${quote.tradeId}`,
@@ -519,22 +609,7 @@ async function marketStreamLoop() {
                 streamContext,
               })
             ) {
-              const overflowStream = streamSession,
-                overflowAt = new Date();
-              void streamRecord
-                .then(() =>
-                  priceEventRepository.closeStream(
-                    overflowStream,
-                    overflowAt,
-                    undefined,
-                    "journal-overflow",
-                  ),
-                )
-                .catch((err) => logger.warn({ err }, "Stream overflow metadata unavailable"));
-              lastDisconnect = { at: overflowAt, reason: "journal-overflow" };
-              beginStream("journal-overflow");
-              latestQuotes.clear();
-              logger.error("Market price journal overflow; recovery required");
+              latency.increment("journal.overflowDropped");
             }
           },
           onClosedCandle: async (candle) => {
@@ -555,7 +630,7 @@ async function marketStreamLoop() {
             const closedStream = streamSession;
             void streamRecord
               .then(() =>
-                priceEventRepository.closeStream(closedStream, interruptedAt, code, reason),
+                priceWriterRepository.closeStream(closedStream, interruptedAt, code, reason),
               )
               .catch((err) => logger.warn({ err }, "Disconnect metadata unavailable"));
             logger.warn({ code, reason }, "Bybit public market stream disconnected");
@@ -575,13 +650,20 @@ async function marketStreamLoop() {
 }
 
 async function priceJournalLoop() {
+  let retryMs = 50;
   while (!stopping) {
     try {
       await priceJournal.flush();
+      retryMs = 50;
     } catch (error) {
-      logger.error({ err: error }, "Market price journal write failed; entries blocked");
+      latency.increment("journal.writeFailure");
+      if (!runtimeDeferred(error))
+        logger.error({ err: error }, "Market price journal write failed; entries blocked");
+      await delay(retryMs);
+      retryMs = Math.min(1000, retryMs * 2);
+      continue;
     }
-    await delay(50);
+    await delay(priceJournal.size ? 1 : 25);
   }
 }
 
@@ -864,6 +946,7 @@ async function runtimeLoop() {
           try {
             await processRuntimeTarget(target);
           } catch (error) {
+            if (runtimeDeferred(error)) continue;
             logger.error(
               { err: error, workspaceId, deploymentId: target.id },
               "Runtime target failed",
@@ -879,65 +962,229 @@ async function runtimeLoop() {
   }
 }
 
-async function runtimeQuoteLoop() {
-  while (!stopping) {
-    const workspaceIds = await listOperationalWorkspaceIds("runtime quote");
-    for (const workspaceId of workspaceIds) {
-      try {
-        try {
-          await runtimeRepository.cancelInactiveEntryOrders(workspaceId);
-        } catch (error) {
-          logger.error(
-            { err: error, workspaceId },
-            "Entry order cancellation failed; position management continues",
-          );
-        }
-        const [positions, pendingEntries] = await Promise.all([
-          runtimeRepository.listRealtimePositions(workspaceId),
-          runtimeRepository.listRealtimePendingEntries(workspaceId),
-        ]);
-        await forEachConcurrent(
-          positions,
-          config.RUNTIME_POSITION_CONCURRENCY,
-          async (position) => {
-            try {
-              await processRealtimePosition(position);
-            } catch (error) {
-              await runtimeRepository.recordFailure({
-                workspaceId,
-                executionRunId: position.executionRunId,
-                symbol: position.symbol,
-                code: "RUNTIME_RECOVERY_REQUIRED",
-                message: errorMessage(error).slice(0, 500),
-              });
-              logger.error(
-                { err: error, workspaceId, positionId: position.id, symbol: position.symbol },
-                "Realtime position update failed",
-              );
-            }
-          },
-        );
-        for (const pending of pendingEntries) {
-          try {
-            await processRealtimeEntry(pending);
-          } catch (error) {
-            logger.error(
-              {
-                err: error,
-                workspaceId,
-                executionRunId: pending.executionRun.id,
-                symbol: pending.symbol,
-              },
-              "Realtime pending entry failed",
-            );
-          }
-        }
-      } catch (error) {
-        logger.error({ err: error, workspaceId }, "Realtime quote cycle failed");
-      }
-    }
-    await delay(config.RUNTIME_QUOTE_INTERVAL_MS);
+function runtimeDeferred(error: unknown) {
+  if (error instanceof RuntimeProtectionPreempted) {
+    latency.increment("protection.preempted");
+    return true;
   }
+  if (error instanceof RuntimeLockBusyError) {
+    latency.increment("database.lockBusy");
+    return true;
+  }
+  return false;
+}
+async function runtimeQuoteLoop() {
+  await runRuntimeLane({
+    stopping: () => stopping,
+    intervalMs: config.RUNTIME_QUOTE_INTERVAL_MS,
+    concurrency: config.RUNTIME_POSITION_CONCURRENCY,
+    wait: delay,
+    load: async () => {
+      const positions = [];
+      for (const workspaceId of await listOperationalWorkspaceIds("runtime quote"))
+        positions.push(...(await runtimeRepository.listRealtimePositions(workspaceId)));
+      return positions.sort(
+        (a, b) =>
+          Number(!a.exitState) - Number(!b.exitState) ||
+          +(a.managedThroughAt ?? a.openedAt) - +(b.managedThroughAt ?? b.openedAt),
+      );
+    },
+    process: async (position) => {
+      const start = performance.now();
+      try {
+        await processRealtimePosition(position);
+      } finally {
+        latency.observe("position.workMs", performance.now() - start);
+      }
+    },
+    onError: async (error, position) => {
+      if (runtimeDeferred(error)) return;
+      if (position)
+        await runtimeRepository.recordFailure({
+          workspaceId: position.workspaceId,
+          executionRunId: position.executionRunId,
+          symbol: position.symbol,
+          code: "RUNTIME_RECOVERY_REQUIRED",
+          message: errorMessage(error).slice(0, 500),
+        });
+      latency.increment("position.failure");
+      logger.error({ err: error, positionId: position?.id }, "Realtime position update failed");
+    },
+  });
+}
+async function runtimeEntryLoop() {
+  await runRuntimeLane({
+    stopping: () => stopping,
+    intervalMs: config.RUNTIME_ENTRY_INTERVAL_MS,
+    concurrency: config.RUNTIME_ENTRY_CONCURRENCY,
+    wait: delay,
+    load: async () => {
+      const entries = [];
+      for (const workspaceId of await listOperationalWorkspaceIds("runtime entry")) {
+        try {
+          await entryRuntimeRepository.cancelInactiveEntryOrders(workspaceId);
+        } catch (error) {
+          if (!runtimeDeferred(error))
+            logger.error({ err: error, workspaceId }, "Entry cancellation failed");
+        }
+        entries.push(...(await entryRuntimeRepository.listRealtimePendingEntries(workspaceId)));
+      }
+      return entries;
+    },
+    process: async (pending) => {
+      const start = performance.now();
+      try {
+        await processRealtimeEntry(pending);
+      } finally {
+        latency.observe("entry.workMs", performance.now() - start);
+      }
+    },
+    onError: (error, pending) => {
+      if (runtimeDeferred(error)) return;
+      latency.increment("entry.failure");
+      logger.error({ err: error, symbol: pending?.symbol }, "Realtime pending entry failed");
+    },
+  });
+}
+async function runtimeProtectionLoop() {
+  let candidates: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>> = [];
+  let refreshedAt = 0;
+  while (!stopping) {
+    try {
+      await protectionWatch.poll(2, (error) => {
+        if (!runtimeDeferred(error)) logger.error({ err: error }, "Priority protection failed");
+      });
+      if (Date.now() - refreshedAt >= 500) {
+        candidates = [];
+        for (const workspaceId of await listOperationalWorkspaceIds("runtime protection"))
+          candidates.push(
+            ...(await protectionRuntimeRepository.listRealtimePositions(workspaceId)),
+          );
+        refreshedAt = Date.now();
+        const active = new Set(candidates.map((position) => position.id));
+        for (const id of priorityScans.keys()) if (!active.has(id)) priorityScans.delete(id);
+      }
+      await forEachConcurrent(candidates, 2, async (position) => {
+        try {
+          if (position.exitState)
+            await protectionRuntimeRepository.advanceLiquidityPosition({
+              workspaceId: position.workspaceId,
+              executionRunId: position.executionRunId,
+              positionId: position.id,
+              expectedPositionVersion: position.runtimeVersion,
+            });
+          else if (
+            protectionWatch.size > 0 ||
+            latestQuotes.get(position.symbol)?.streamId !== position.priceStreamId
+          )
+            await protectWaitingPosition(
+              position,
+              deserializeExecutionPosition(position),
+              position.managedThroughAt ?? position.openedAt,
+              position.runtimeVersion,
+            );
+        } catch (error) {
+          if (!runtimeDeferred(error))
+            logger.error({ err: error, positionId: position.id }, "Priority exit failed");
+        }
+      });
+    } catch (error) {
+      if (!runtimeDeferred(error)) logger.error({ err: error }, "Priority protection cycle failed");
+    }
+    await delay(config.RUNTIME_PROTECTION_INTERVAL_MS);
+  }
+}
+async function protectWaitingPosition(
+  target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
+  position: ExecutionPosition,
+  through: Date,
+  expectedVersion: number,
+) {
+  const latest = latestQuotes.get(target.symbol),
+    policy = readPinnedExecutionPolicy(target.executionPolicy);
+  const age =
+    policy?.payload.settings.accountSafety.maxQuoteAgeMs ?? config.RUNTIME_QUOTE_MAX_AGE_MS;
+  if (
+    !latest ||
+    latest.id <= (target.priceEventId ?? 0n) ||
+    latest.observedAt < through ||
+    latest.observedAt < position.openedAt ||
+    Date.now() - +latest.receivedAt > age ||
+    Date.now() - +latest.observedAt > age ||
+    +latest.observedAt > Date.now() + 1000
+  )
+    return false;
+  const previous = priorityScans.get(target.id);
+  if (previous && previous.version > expectedVersion) return false;
+  const cursor = previous?.version === expectedVersion ? previous.cursor : target.priceEventId;
+  if (cursor !== null && cursor !== undefined && cursor >= latest.id) return false;
+  const events = (await priorityPriceRepository.after(target.symbol, cursor ?? null, through))
+    .filter((event) => event.id <= latest.id)
+    .map((event) => ({ ...event, price: Number(event.price) }));
+  const selected = selectPriorityExit({
+    position,
+    through,
+    events,
+    latest,
+    config: strategyConfigSchema.parse(target.strategyVersion.config),
+  });
+  if (!selected) {
+    priorityScans.set(target.id, {
+      version: expectedVersion,
+      cursor: events.at(-1)?.id ?? cursor ?? 0n,
+    });
+    return false;
+  }
+  const { event: quote, settlement } = selected;
+  const recovery = {
+    reason:
+      target.priceStreamId === null
+        ? "unconfirmed-stream"
+        : target.priceStreamId !== quote.streamId
+          ? "stream-change"
+          : "history-wait",
+    fromAt: through.toISOString(),
+    toAt: quote.observedAt.toISOString(),
+    source: "journal-protection",
+    quality: "incomplete",
+    ambiguity: "unreconstructed-gap",
+  };
+  const result = await protectionRuntimeRepository.persistRealtimeQuote({
+    workspaceId: target.workspaceId,
+    deploymentId: target.executionRun.deployment.id,
+    executionRunId: target.executionRunId,
+    strategyVersionId: target.strategyVersionId,
+    positionId: target.id,
+    expectedPositionVersion: expectedVersion,
+    symbol: target.symbol,
+    quotePrice: String(quote.price),
+    quoteAt: quote.observedAt,
+    processedPrice: { eventId: quote.id, streamId: quote.streamId, throughAt: quote.observedAt },
+    traceInputs: runtimeTraceInputs({
+      protectBeforeRecovery: true,
+      firstEventId: quote.id,
+      latestProtectiveEvent: quote,
+      policy: policy ? policy.payload.settings.profitProtection : runtimeProfitProtectionPolicy,
+      signals: [],
+      recoveries: [],
+    }),
+    recoveryEvidence: recovery,
+    factors: { source: "current-quote-protection", recovery, priority: "waiting-history" },
+    action: {
+      kind: "close",
+      settlement: serializeSettlement(settlement),
+      protection: {
+        bestPrice: String(position.bestPrice),
+        stopPrice: String(position.stopPrice),
+        trailingPrice: position.trailingPrice === null ? null : String(position.trailingPrice),
+      },
+    },
+  });
+  if (result.applied) {
+    latency.increment("protection.priorityExit");
+    latency.observe("protection.eventToCheckpointMs", Date.now() - +quote.receivedAt);
+  }
+  return result.applied;
 }
 
 async function loadRecoveryCandles(
@@ -1173,9 +1420,26 @@ async function processRealtimePosition(
       checkpoint,
     );
     traceSignals = signalReplay.signals;
+    for (const signal of traceSignals)
+      latency.observe("signal.finalityDelayMs", +signal.availableAt - +signal.closedAt);
     return traceSignals;
   };
   let version = target.runtimeVersion;
+  let confirmedPosition = deserializeExecutionPosition(target);
+  let confirmedThrough = target.managedThroughAt ?? target.openedAt;
+  function protectDuringWait<T>(work: (signal: AbortSignal) => Promise<T>) {
+    const expectedVersion = version,
+      working = { ...confirmedPosition },
+      through = new Date(confirmedThrough);
+    const started = performance.now();
+    return protectionWatch
+      .during(
+        target.id,
+        () => protectWaitingPosition(target, working, through, expectedVersion),
+        work,
+      )
+      .finally(() => latency.observe("history.waitMs", performance.now() - started));
+  }
   let traceEventCursor = target.priceEventId ?? 0n;
   await processRuntimePriceEvents({
     protectBeforeRecovery: true,
@@ -1195,138 +1459,142 @@ async function processRealtimePosition(
     ...(strategyConfig.signal.family === "mean-reversion" ||
     (strategyConfig.signal.family === "ema-crossover" && strategyConfig.exit.exitOnSignalReversal)
       ? {
-          loadSignals: async () => {
-            const lastEventAt = Math.max(
-              +(target.managedThroughAt ?? target.openedAt),
-              ...events.map((event) => +event.observedAt),
-            );
-            const lastOpen = new Date(
-              Math.floor(lastEventAt / signalIntervalMs) * signalIntervalMs - signalIntervalMs,
-            );
-            const baseline =
-              target.signalCandleAt ??
-              new Date(
-                Math.floor(+target.openedAt / signalIntervalMs) * signalIntervalMs -
-                  signalIntervalMs,
+          loadSignals: async () =>
+            protectDuringWait(async (historySignal) => {
+              const lastEventAt = Math.max(
+                +(target.managedThroughAt ?? target.openedAt),
+                ...events.map((event) => +event.observedAt),
               );
-            if (+lastOpen - +baseline > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000)
-              throw new RuntimeRecoveryIncompleteError(
-                "Signal backlog exceeds configured recovery window",
+              const lastOpen = new Date(
+                Math.floor(lastEventAt / signalIntervalMs) * signalIntervalMs - signalIntervalMs,
               );
-            const deadline = AbortSignal.any([
-              marketStreamAbortController.signal,
-              AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
-            ]);
-            return loadPositionSignals(lastOpen, deadline);
-          },
+              const baseline =
+                target.signalCandleAt ??
+                new Date(
+                  Math.floor(+target.openedAt / signalIntervalMs) * signalIntervalMs -
+                    signalIntervalMs,
+                );
+              if (+lastOpen - +baseline > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000)
+                throw new RuntimeRecoveryIncompleteError(
+                  "Signal backlog exceeds configured recovery window",
+                );
+              const deadline = AbortSignal.any([
+                marketStreamAbortController.signal,
+                AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
+              ]);
+              return loadPositionSignals(lastOpen, AbortSignal.any([deadline, historySignal]));
+            }),
         }
       : {}),
     config: strategyConfig,
-    recover: async (position, through, quote, protection) => {
-      if (+quote.observedAt - +through > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000) {
-        throw new RuntimeRecoveryIncompleteError(
-          "Recovery window exceeds configured limit; manual position review required",
-        );
-      }
-      const deadline = AbortSignal.any([
-        marketStreamAbortController.signal,
-        AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
-      ]);
-      const strictMinutes = readExecutionRecoveryModel(target.recoveryModel) !== null;
-      let recent: RecoveryTradeSnapshot | undefined,
-        anchorTradeId: string | undefined,
-        anchorPrice: string | undefined,
-        quoteTradeId: string | undefined,
-        fallbackReason: string | undefined;
-      if (protection.anchorEventId && quote.eventKey) {
-        const [anchor] = await priceArchiveRepository.after(
-          target.symbol,
-          protection.anchorEventId - 1n,
-          protection.anchorEventId,
-          1,
-        );
-        const prefix = `bybit-trade:${target.symbol}:`;
-        if (anchor?.eventKey.startsWith(prefix) && quote.eventKey.startsWith(prefix)) {
-          anchorTradeId = anchor.eventKey.slice(prefix.length);
-          anchorPrice = anchor.price;
-          quoteTradeId = quote.eventKey.slice(prefix.length);
-          try {
-            const loaded = await recentRecoveryCache.get(`${target.symbol}:${quote.id}`, () =>
-              marketClient.getLinearRecentTrades(
-                target.symbol,
-                AbortSignal.any([deadline, AbortSignal.timeout(1500)]),
-              ),
-            );
-            recent = {
-              sampledAt: loaded.sampledAt,
-              trades: loaded.trades.filter(
-                (t) =>
-                  Date.parse(t.observedAt) >= +through &&
-                  Date.parse(t.observedAt) <= +quote.observedAt,
-              ),
-            };
-          } catch {
-            fallbackReason = "RECENT_TRADES_UNAVAILABLE";
+    recover: async (position, through, quote, protection) =>
+      protectDuringWait(async (historySignal) => {
+        if (+quote.observedAt - +through > config.RUNTIME_RECOVERY_MAX_HOURS * 3600_000) {
+          throw new RuntimeRecoveryIncompleteError(
+            "Recovery window exceeds configured limit; manual position review required",
+          );
+        }
+        const deadline = AbortSignal.any([
+          marketStreamAbortController.signal,
+          historySignal,
+          AbortSignal.timeout(config.RUNTIME_RECOVERY_TIMEOUT_MS),
+        ]);
+        const strictMinutes = readExecutionRecoveryModel(target.recoveryModel) !== null;
+        let recent: RecoveryTradeSnapshot | undefined,
+          anchorTradeId: string | undefined,
+          anchorPrice: string | undefined,
+          quoteTradeId: string | undefined,
+          fallbackReason: string | undefined;
+        if (protection.anchorEventId && quote.eventKey) {
+          const [anchor] = await tradingPriceArchiveRepository.after(
+            target.symbol,
+            protection.anchorEventId - 1n,
+            protection.anchorEventId,
+            1,
+          );
+          const prefix = `bybit-trade:${target.symbol}:`;
+          if (anchor?.eventKey.startsWith(prefix) && quote.eventKey.startsWith(prefix)) {
+            anchorTradeId = anchor.eventKey.slice(prefix.length);
+            anchorPrice = anchor.price;
+            quoteTradeId = quote.eventKey.slice(prefix.length);
+            try {
+              const loaded = await recentRecoveryCache.get(`${target.symbol}:${quote.id}`, () =>
+                marketClient.getLinearRecentTrades(
+                  target.symbol,
+                  AbortSignal.any([deadline, AbortSignal.timeout(1500)]),
+                ),
+              );
+              recent = {
+                sampledAt: loaded.sampledAt,
+                trades: loaded.trades.filter(
+                  (t) =>
+                    Date.parse(t.observedAt) >= +through &&
+                    Date.parse(t.observedAt) <= +quote.observedAt,
+                ),
+              };
+            } catch {
+              fallbackReason = "RECENT_TRADES_UNAVAILABLE";
+            }
           }
         }
-      }
-      const causal = {
-        strictMinutes,
-        ...(recent ? { recent } : {}),
-        ...(anchorTradeId ? { anchorTradeId } : {}),
-        ...(anchorPrice ? { anchorPrice } : {}),
-        ...(quoteTradeId ? { quoteTradeId } : {}),
-        ...(fallbackReason ? { fallbackReason } : {}),
-      };
-      const base = {
-        position,
-        since: through,
-        quote,
-        config: strategyConfig,
-        protection,
-        ...causal,
-        minutes: [],
-      };
-      const covered = selectRecoveryTrades(base) !== null;
-      if (!covered && !causal.fallbackReason)
-        causal.fallbackReason = "RECENT_TRADES_BOUNDARIES_NOT_COVERED";
-      const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
-      if (strictMinutes)
-        minuteRange.end = new Date(Math.floor(+quote.observedAt / 60000) * 60000 - 1);
-      const minutes =
-        covered || +quote.observedAt === +through || +minuteRange.end < +minuteRange.start
-          ? []
-          : await loadRecoveryCandles(
-              target.symbol,
-              "1",
-              minuteRange.start,
-              minuteRange.end,
-              deadline,
-            );
-      const recoveryMinutes = minutes.map(toExecutionCandle);
-      traceRecoveries.push({
-        eventId: quote.id,
-        since: through,
-        quote,
-        minutes: recoveryMinutes,
-        causal,
-      });
-      const recovered = recoverCausalRuntimeGap({ ...base, minutes: recoveryMinutes });
-      const segment = await priceEventRepository.streamSegment(quote.streamId);
-      recovered.evidence = {
-        ...recovered.evidence,
-        ...(segment
-          ? {
-              streamCause: segment.cause,
-              ...(segment.interruptedAt
-                ? { interruptedAt: segment.interruptedAt.toISOString() }
-                : {}),
-            }
-          : {}),
-        ...(causal.fallbackReason ? { sourceFailure: causal.fallbackReason } : {}),
-      };
-      return recovered;
-    },
+        const causal = {
+          strictMinutes,
+          ...(recent ? { recent } : {}),
+          ...(anchorTradeId ? { anchorTradeId } : {}),
+          ...(anchorPrice ? { anchorPrice } : {}),
+          ...(quoteTradeId ? { quoteTradeId } : {}),
+          ...(fallbackReason ? { fallbackReason } : {}),
+        };
+        const base = {
+          position,
+          since: through,
+          quote,
+          config: strategyConfig,
+          protection,
+          ...causal,
+          minutes: [],
+        };
+        const covered = selectRecoveryTrades(base) !== null;
+        if (!covered && !causal.fallbackReason)
+          causal.fallbackReason = "RECENT_TRADES_BOUNDARIES_NOT_COVERED";
+        const minuteRange = runtimeRecoveryMinuteRange(through, quote.observedAt);
+        if (strictMinutes)
+          minuteRange.end = new Date(Math.floor(+quote.observedAt / 60000) * 60000 - 1);
+        const minutes =
+          covered || +quote.observedAt === +through || +minuteRange.end < +minuteRange.start
+            ? []
+            : await loadRecoveryCandles(
+                target.symbol,
+                "1",
+                minuteRange.start,
+                minuteRange.end,
+                deadline,
+              );
+        const recoveryMinutes = minutes.map(toExecutionCandle);
+        traceRecoveries.push({
+          eventId: quote.id,
+          since: through,
+          quote,
+          minutes: recoveryMinutes,
+          causal,
+        });
+        historySignal.throwIfAborted();
+        const recovered = recoverCausalRuntimeGap({ ...base, minutes: recoveryMinutes });
+        const segment = await priceEventRepository.streamSegment(quote.streamId);
+        recovered.evidence = {
+          ...recovered.evidence,
+          ...(segment
+            ? {
+                streamCause: segment.cause,
+                ...(segment.interruptedAt
+                  ? { interruptedAt: segment.interruptedAt.toISOString() }
+                  : {}),
+              }
+            : {}),
+          ...(causal.fallbackReason ? { sourceFailure: causal.fallbackReason } : {}),
+        };
+        return recovered;
+      }),
     checkpoint: async ({
       historyIncomplete,
       profitProtectionState,
@@ -1432,7 +1700,20 @@ async function processRealtimePosition(
             },
       });
       if (result.applied) {
+        const mode =
+          Date.now() - +event.receivedAt > config.RUNTIME_QUOTE_MAX_AGE_MS
+            ? "replay"
+            : recovered
+              ? "recovery"
+              : "realtime";
+        latency.observe(`position.${mode}.eventToCheckpointMs`, Date.now() - +event.receivedAt);
+        latency.observe(
+          `position.${strategyConfig.signal.family}.workToCheckpointMs`,
+          Date.now() - +decidedAt,
+        );
         version += 1;
+        confirmedPosition = { ...position };
+        confirmedThrough = new Date(through);
         traceEventCursor = event.id;
       }
       if (result.closed)
@@ -1471,7 +1752,8 @@ async function riskGuardLoop() {
       try {
         await enforceRuntimeRisk(workspaceId);
       } catch (error) {
-        logger.error({ err: error, workspaceId }, "Independent risk guard failed");
+        if (!runtimeDeferred(error))
+          logger.error({ err: error, workspaceId }, "Independent risk guard failed");
       }
     }
     await delay(config.RUNTIME_QUOTE_INTERVAL_MS);
@@ -1479,7 +1761,7 @@ async function riskGuardLoop() {
 }
 
 async function enforceRuntimeRisk(workspaceId: string) {
-  const positions = await runtimeRepository.listRealtimePositions(workspaceId);
+  const positions = await protectionRuntimeRepository.listRealtimePositions(workspaceId);
   const assessed = new Map<string, Awaited<ReturnType<RuntimeRiskRepository["assess"]>>>();
   for (const target of positions) {
     const account = target.executionRun.deployment.exchangeAccountId;
@@ -1503,7 +1785,7 @@ async function enforceRuntimeRisk(workspaceId: string) {
       risk.forceCloseReason,
       strategyConfig,
     );
-    await runtimeRepository.persistRealtimeQuote({
+    await protectionRuntimeRepository.persistRealtimeQuote({
       workspaceId,
       deploymentId: target.executionRun.deployment.id,
       executionRunId: target.executionRunId,
@@ -1545,7 +1827,7 @@ async function processRealtimeEntry(
       !Array.isArray(stored) &&
       stored.mode === "realtime"
     ) {
-      await runtimeRepository.advancePendingEntry({
+      await entryRuntimeRepository.advancePendingEntry({
         ...progress,
         throughEventId: target.pendingPriceEventId,
         rejectionReason: "INVALID_PENDING_SIGNAL",
@@ -1565,16 +1847,17 @@ async function processRealtimeEntry(
     entryMarketPolicy,
   );
   if (Date.now() >= +pending.expiresAt) {
-    await runtimeRepository.advancePendingEntry({
+    const expired = await entryRuntimeRepository.advancePendingEntry({
       ...progress,
       throughEventId: target.pendingPriceEventId,
     });
+    if (expired) latency.increment("entry.expiredBeforeProcessing");
     return;
   }
   const deployment = target.executionRun.deployment;
   const rules = captureInstrumentRules(target.instrument);
   if (rules.reason) {
-    await runtimeRepository.advancePendingEntry({
+    await entryRuntimeRepository.advancePendingEntry({
       ...progress,
       throughEventId: target.pendingPriceEventId,
       waitingReason: rules.reason as RuntimeEntryWaitReason,
@@ -1589,7 +1872,7 @@ async function processRealtimeEntry(
         ? "INSTRUMENT_UNAVAILABLE"
         : entryQuoteWaitReason(target.symbol, maximumQuoteAgeMs);
   if (waitingReason) {
-    await runtimeRepository.advancePendingEntry({
+    await entryRuntimeRepository.advancePendingEntry({
       ...progress,
       throughEventId: target.pendingPriceEventId,
       waitingReason,
@@ -1604,7 +1887,7 @@ async function processRealtimeEntry(
   const rawPending = target.pendingSignal as Record<string, unknown>;
   const storedOrder =
     typeof rawPending.executionOrderId === "string"
-      ? await runtimeRepository.pendingExecutionOrder({
+      ? await entryRuntimeRepository.pendingExecutionOrder({
           workspaceId: progress.workspaceId,
           executionRunId: progress.executionRunId,
           symbol: target.symbol,
@@ -1612,7 +1895,7 @@ async function processRealtimeEntry(
         })
       : null;
   if (rawPending.executionOrderId && (!storedOrder || storedOrder.status !== "OPEN")) {
-    await runtimeRepository.advancePendingEntry({
+    await entryRuntimeRepository.advancePendingEntry({
       ...progress,
       throughEventId: target.pendingPriceEventId,
       rejectionReason: "ENTRY_ORDER_UNAVAILABLE",
@@ -1645,11 +1928,13 @@ async function processRealtimeEntry(
         );
         if (failure) return { status: "rejected", reason: failure };
       }
-      const risk = (entryRisk ??= await runtimeRiskRepository.assess(
+      const admissionStarted = performance.now();
+      const risk = (entryRisk ??= await entryRiskRepository.assess(
         target.executionRun.deployment.workspaceId,
         target.executionRun.deployment.exchangeAccountId,
         target.executionRun.strategyVersion.config,
       ));
+      latency.observe("entry.riskAdmissionMs", performance.now() - admissionStarted);
       if (risk.reason) return { status: "rejected", reason: risk.reason };
       const liquidityPolicy =
         order?.policy ??
@@ -1704,7 +1989,7 @@ async function processRealtimeEntry(
       );
       if (!position) return { status: "rejected", reason: "INVALID_ENTRY_SIZE" };
       if (!order) {
-        const submitted = await runtimeRepository.submitRealtimeEntryOrder({
+        const submitted = await entryRuntimeRepository.submitRealtimeEntryOrder({
           ...progress,
           entryPriceEventId: quote.id,
           position: serializePosition(position),
@@ -1722,7 +2007,7 @@ async function processRealtimeEntry(
           : { status: "conflict" };
       }
       if (!streamConnected || !priceJournal.healthy || quote.streamId !== streamSession) {
-        await runtimeRepository.advancePendingEntry({
+        await entryRuntimeRepository.advancePendingEntry({
           ...progress,
           throughEventId: target.pendingPriceEventId,
           waitingReason: !streamConnected
@@ -1733,7 +2018,7 @@ async function processRealtimeEntry(
         });
         return { status: "conflict" };
       }
-      const result = await runtimeRepository.persistRealtimeEntry({
+      const result = await entryRuntimeRepository.persistRealtimeEntry({
         ...progress,
         entryOrderId: storedOrder!.id,
         entryPriceEventId: quote.id,
@@ -1756,6 +2041,12 @@ async function processRealtimeEntry(
         },
       });
       if (result.applied) {
+        latency.increment("entry.filled");
+        latency.observe("entry.quoteToFillMs", Date.now() - +quote.receivedAt);
+        latency.observe(
+          `entry.${strategyConfig.signal.family}.${strategyConfig.entry.orderType}.finalityToFillMs`,
+          Date.now() - +pending.availableAt,
+        );
         logger.info(
           { executionRunId: target.executionRun.id, symbol: target.symbol },
           "Pending signal filled from durable price event",
@@ -1763,7 +2054,7 @@ async function processRealtimeEntry(
         return { status: "filled" };
       }
       if (result.waitingReason) {
-        await runtimeRepository.advancePendingEntry({
+        await entryRuntimeRepository.advancePendingEntry({
           ...progress,
           throughEventId: target.pendingPriceEventId,
           waitingReason: result.waitingReason,
@@ -1781,8 +2072,12 @@ async function processRealtimeEntry(
     },
   });
   if (outcome.status === "filled" || outcome.status === "conflict") return;
+  if (outcome.status === "expired") latency.increment("entry.expiredDuringProcessing");
+  if (outcome.status === "rejected") latency.increment(`entry.rejected.${outcome.reason}`);
+  if ("waitingReason" in outcome && outcome.waitingReason)
+    latency.increment(`entry.wait.${outcome.waitingReason}`);
   if (outcome.throughEventId !== target.pendingPriceEventId || outcome.status !== "pending") {
-    await runtimeRepository.advancePendingEntry({
+    await entryRuntimeRepository.advancePendingEntry({
       ...progress,
       throughEventId: outcome.throughEventId,
       ...(outcome.status === "rejected" ? { rejectionReason: outcome.reason } : {}),
@@ -2321,6 +2616,18 @@ async function processRuntimeTarget(
         positionAction,
       });
       if (result.applied) {
+        if (signalCandidate) {
+          latency.observe(
+            `signal.${strategyConfig.signal.family}.finalityDelayMs`,
+            +signalAvailableAt - +candleClosedAt,
+          );
+          latency.observe(
+            `signal.${strategyConfig.signal.family}.finalityToDecisionMs`,
+            Date.now() - +signalAvailableAt,
+          );
+          if (decision.reasonCode.includes("EXPIRED"))
+            latency.increment("entry.expiredAtSignalDetection");
+        }
         logger.info(
           {
             deploymentId: target.id,
@@ -2340,6 +2647,7 @@ async function processRuntimeTarget(
       );
     },
     onFailure: async (symbol, error) => {
+      if (runtimeDeferred(error)) return;
       const failure = runtimeFailure(error);
       await runtimeRepository.recordFailure({
         workspaceId: target.workspaceId,
@@ -2755,8 +3063,18 @@ async function shutdown(signal: string) {
   } catch (error) {
     logger.error({ err: error }, "Final journal flush failed; recovery required on restart");
   }
+  await Promise.allSettled([...writerClaims]);
+  await priceWriterRepository
+    .releaseWriter(workerId)
+    .catch((error) =>
+      logger.warn({ err: error }, "Writer lease release failed; expiry remains in effect"),
+    );
   await prisma.workerHeartbeat.deleteMany({ where: { workerId: { in: [workerId, watchdogId] } } });
-  await prisma.$disconnect();
+  await Promise.all(
+    [prisma, tradingPrisma, entryPrisma, protectionPrisma, journalPrisma].map((client) =>
+      client.$disconnect(),
+    ),
+  );
   process.exit(0);
 }
 
@@ -3199,6 +3517,8 @@ await Promise.all([
   exchangeVerificationLoop(),
   runtimeLoop(),
   runtimeQuoteLoop(),
+  runtimeEntryLoop(),
+  runtimeProtectionLoop(),
   riskGuardLoop(),
   watchdogLoop(),
 ]);

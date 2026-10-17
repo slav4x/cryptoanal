@@ -12,6 +12,7 @@ export function createPrismaClient(
     applicationName: string;
     statementTimeoutMs?: number;
     queryTimeoutMs?: number;
+    idleTransactionTimeoutMs?: number;
   },
 ): PrismaClient {
   if (!databaseUrl) {
@@ -27,6 +28,7 @@ export function createPrismaClient(
           connectionTimeoutMillis: 2000,
           query_timeout: options.queryTimeoutMs ?? (options.statementTimeoutMs ?? 28000) + 2000,
           Client: BoundedPgClient,
+          idle_in_transaction_session_timeout: options.idleTransactionTimeoutMs ?? 15000,
           ...(options.statementTimeoutMs ? { statement_timeout: options.statementTimeoutMs } : {}),
         }
       : {}),

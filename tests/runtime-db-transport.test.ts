@@ -4,6 +4,7 @@ import { createServer, connect, type Socket, type AddressInfo } from "node:net";
 import { writeFile } from "node:fs/promises";
 import { test, type TestContext } from "node:test";
 import { Client } from "pg";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createPrismaClient } from "../packages/persistence/src/client";
 import { runRuntimeLane } from "../apps/worker/src/runtime-lane";
 
@@ -11,7 +12,12 @@ const databaseUrl = process.env.RUNTIME_TEST_DATABASE_URL;
 if (databaseUrl && !/^\/cryptoanal_runtime_test_[a-z0-9_]+$/.test(new URL(databaseUrl).pathname))
   throw new Error("Use a dedicated cryptoanal_runtime_test_* database");
 
-async function responseProxy(t: TestContext, drop: (text: string) => boolean, max = 1) {
+async function responseProxy(
+  t: TestContext,
+  drop: (text: string) => boolean,
+  max = 1,
+  options: { preserveServerOnDisconnect?: boolean; idleTransactionTimeoutMs?: number } = {},
+) {
   const target = new URL(databaseUrl!);
   const sockets = new Set<Socket>();
   let withheldBytes = 0,
@@ -33,14 +39,16 @@ async function responseProxy(t: TestContext, drop: (text: string) => boolean, ma
       if (blocked) withheldBytes += data.length;
       else incoming.write(data);
     });
-    for (const socket of [incoming, outgoing]) {
-      socket.on("error", () => {});
-      socket.on("close", () => {
-        sockets.delete(socket);
-        incoming.destroy();
-        outgoing.destroy();
-      });
-    }
+    incoming.on("error", () => {});
+    outgoing.on("error", () => {});
+    incoming.on("close", () => {
+      sockets.delete(incoming);
+      if (!options.preserveServerOnDisconnect) outgoing.destroy();
+    });
+    outgoing.on("close", () => {
+      sockets.delete(outgoing);
+      incoming.destroy();
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = new URL(target);
@@ -51,6 +59,7 @@ async function responseProxy(t: TestContext, drop: (text: string) => boolean, ma
     applicationName: "cryptoanal-test-response-timeout",
     statementTimeoutMs: 100,
     queryTimeoutMs: 250,
+    idleTransactionTimeoutMs: options.idleTransactionTimeoutMs ?? 15000,
   });
   t.after(async () => {
     for (const socket of sockets) socket.destroy();
@@ -159,6 +168,61 @@ test(
           0,
         );
         assert.ok(x.connections() >= 2);
+      },
+    );
+
+    await t.test(
+      "a lost client disconnect cannot leave a server transaction holding its risk lock",
+      async (t) => {
+        const x = await responseProxy(t, (text) => text.includes("n04_idle_marker"), 1, {
+          preserveServerOnDisconnect: true,
+          idleTransactionTimeoutMs: 700,
+        });
+        const [setting] = await x.db.$queryRaw<
+          Array<{ value: string }>
+        >`SELECT current_setting('idle_in_transaction_session_timeout') AS value`;
+        assert.equal(setting!.value, "700ms");
+        const key = `n04-idle-${randomUUID()}`;
+        const started = performance.now();
+        await assert.rejects(
+          x.db.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+            await tx.$queryRaw`SELECT 1 AS n04_idle_marker`;
+          }),
+          transportFailure,
+        );
+        assert.ok(x.withheld() > 0);
+        const locked = async () =>
+          (
+            await control.query<{ locked: boolean }>(
+              "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+              [key],
+            )
+          ).rows[0]!.locked;
+        let acquired = await locked();
+        assert.equal(
+          acquired,
+          false,
+          "server session is still holding the lock after local timeout",
+        );
+        while (!acquired && performance.now() - started < 2500) {
+          await sleep(20);
+          acquired = await locked();
+        }
+        try {
+          assert.equal(
+            acquired,
+            true,
+            "server idle deadline must release the abandoned transaction",
+          );
+        } finally {
+          if (acquired) await control.query("SELECT pg_advisory_unlock(hashtext($1))", [key]);
+        }
+        samples.abandonedServerTransactionMs = performance.now() - started;
+        assert.equal(
+          (await x.db.$queryRaw<Array<{ value: number }>>`SELECT 1 AS value`)[0]!.value,
+          1,
+        );
       },
     );
 

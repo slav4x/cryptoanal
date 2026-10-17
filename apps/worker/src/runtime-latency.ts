@@ -1,5 +1,7 @@
 const bounds = [1, 2, 5, 10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000];
 type Histogram = { counts: number[]; count: number; sum: number; max: number };
+type ObservationContext = Record<string, string | number | Record<string, number>>;
+type Maximum = { milliseconds: number; sampledAt: string; context: ObservationContext };
 type Samples = { metrics: Map<string, Histogram>; counters: Map<string, number> };
 type Phase = "startup" | "steady";
 type Bucket = { all: Samples; phases: Map<Phase, Samples> };
@@ -55,6 +57,10 @@ function summarise(samples: Samples[]) {
 }
 export class RuntimeLatency {
   private readonly buckets = new Map<number, Bucket>();
+  private readonly phaseMaxima = {
+    startup: new Map<string, Maximum>(),
+    steady: new Map<string, Maximum>(),
+  };
   private readonly startedAt: number;
   public constructor(private readonly clock = Date.now) {
     this.startedAt = clock();
@@ -70,12 +76,22 @@ export class RuntimeLatency {
     if (!phased) value.phases.set(phase, (phased = empty()));
     return [value.all, phased];
   }
-  public observe(name: string, milliseconds: number) {
+  public observe(name: string, milliseconds: number, context?: ObservationContext) {
     if (!Number.isFinite(milliseconds)) return;
     if (milliseconds < 0) {
       this.increment("clock.negativeDuration");
       this.increment(`clock.negative.${name}`);
       return;
+    }
+    if (context) {
+      const now = this.clock();
+      const maxima = this.phaseMaxima[now - this.startedAt < 300000 ? "startup" : "steady"];
+      if (milliseconds > (maxima.get(name)?.milliseconds ?? -1))
+        maxima.set(name, {
+          milliseconds,
+          sampledAt: new Date(now).toISOString(),
+          context: structuredClone(context),
+        });
     }
     for (const bucket of this.bucket()) {
       let h = bucket.metrics.get(name);
@@ -106,6 +122,12 @@ export class RuntimeLatency {
       startupMs: 300000,
       percentileMethod: "histogram-upper-bound",
       bucketMs: 10000,
+      phaseMaxima: Object.fromEntries(
+        Object.entries(this.phaseMaxima).map(([phase, maxima]) => [
+          phase,
+          structuredClone(Object.fromEntries(maxima)),
+        ]),
+      ),
       ...summarise(buckets.map((b) => b.all)),
       phases: Object.fromEntries(
         (["startup", "steady"] as const).map((phase) => [

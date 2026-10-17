@@ -3,7 +3,7 @@ import {
   executionSignalExitEnabled,
   executionHoldingDeadline,
 } from "@cryptoanal/application";
-import { runRuntimeLane } from "./runtime-lane";
+import { runRuntimeLane, type RuntimeLaneTiming } from "./runtime-lane";
 import { RuntimeTaskProgress } from "./runtime-task-progress";
 import { selectPriorityExit } from "./runtime-priority-exit";
 import { RuntimeLatency } from "./runtime-latency";
@@ -576,9 +576,9 @@ async function marketStreamLoop() {
             };
           },
           onQuote: () => {},
-          onOrderbookUnavailable: ({ symbol, error }) => {
+          onOrderbookUnavailable: ({ symbol, error, continuity }) => {
             logger.warn(
-              { symbol, err: error },
+              { symbol, err: error, continuity },
               "Orderbook unavailable; public trade stream continues",
             );
           },
@@ -1004,10 +1004,12 @@ async function runtimeQuoteLoop() {
           +(a.managedThroughAt ?? a.openedAt) - +(b.managedThroughAt ?? b.openedAt),
       );
     },
-    process: async (position) => {
+    process: async (position, laneTiming) => {
       const start = performance.now();
       try {
-        await taskProgress.during("position", position.id, () => processRealtimePosition(position));
+        await taskProgress.during("position", position.id, () =>
+          processRealtimePosition(position, laneTiming),
+        );
       } finally {
         latency.observe("position.workMs", performance.now() - start);
       }
@@ -1330,7 +1332,10 @@ async function restoreRuntimeIndicators(
 
 async function processRealtimePosition(
   target: Awaited<ReturnType<RuntimeRepository["listRealtimePositions"]>>[number],
+  laneTiming: RuntimeLaneTiming,
 ) {
+  const workStartedAt = new Date(),
+    workStarted = performance.now();
   if (isLiquidityExitPolicy(target.exitPolicy) && target.exitState) {
     await runtimeRepository.advanceLiquidityPosition({
       workspaceId: target.workspaceId,
@@ -1352,6 +1357,10 @@ async function processRealtimePosition(
     target.managedThroughAt ?? target.openedAt,
   );
   const latestProtection = await priceEventRepository.latest(target.symbol);
+  const eventsLoadedAt = new Date(),
+    eventReadMs = performance.now() - workStarted;
+  let historyWaitMs = 0,
+    priorCheckpointMs = 0;
   const quoteAgeLimit =
     pinnedPolicy?.payload.settings.accountSafety.maxQuoteAgeMs ?? config.RUNTIME_QUOTE_MAX_AGE_MS;
   const latestProtectiveEvent =
@@ -1457,7 +1466,11 @@ async function processRealtimePosition(
         () => protectWaitingPosition(target, working, through, expectedVersion),
         work,
       )
-      .finally(() => latency.observe("history.waitMs", performance.now() - started));
+      .finally(() => {
+        const duration = performance.now() - started;
+        historyWaitMs += duration;
+        latency.observe("history.waitMs", duration);
+      });
   }
   let traceEventCursor = target.priceEventId ?? 0n;
   await processRuntimePriceEvents({
@@ -1628,6 +1641,7 @@ async function processRealtimePosition(
       signalExit,
     }) => {
       const decidedAt = new Date();
+      const checkpointStarted = performance.now();
       const indicatorState = signalCandleAt
         ? signalReplay?.checkpointThrough(signalCandleAt)
         : null;
@@ -1726,14 +1740,40 @@ async function processRealtimePosition(
                 position.trailingPrice === null ? null : String(position.trailingPrice),
             },
       });
+      const committedAt = new Date(),
+        checkpointMs = performance.now() - checkpointStarted;
       if (result.applied) {
         const mode =
-          Date.now() - +event.receivedAt > config.RUNTIME_QUOTE_MAX_AGE_MS
+          +committedAt - +event.receivedAt > config.RUNTIME_QUOTE_MAX_AGE_MS
             ? "replay"
             : recovered
               ? "recovery"
               : "realtime";
-        latency.observe(`position.${mode}.eventToCheckpointMs`, Date.now() - +event.receivedAt);
+        latency.observe(`position.${mode}.eventToCheckpointMs`, +committedAt - +event.receivedAt, {
+          positionId: target.id,
+          executionRunId: target.executionRunId,
+          symbol: target.symbol,
+          eventId: String(event.id),
+          streamId: event.streamId,
+          receivedAt: event.receivedAt.toISOString(),
+          workStartedAt: workStartedAt.toISOString(),
+          eventsLoadedAt: eventsLoadedAt.toISOString(),
+          decidedAt: decidedAt.toISOString(),
+          committedAt: committedAt.toISOString(),
+          stages: {
+            laneLoadMs: laneTiming.loadMs,
+            laneQueueMs: laneTiming.queueMs,
+            eventReadMs,
+            historyWaitMs,
+            priorCheckpointMs,
+            processingMs: Math.max(
+              0,
+              checkpointStarted - workStarted - eventReadMs - historyWaitMs - priorCheckpointMs,
+            ),
+            checkpointMs,
+            receiveToReadEndMs: +eventsLoadedAt - +event.receivedAt,
+          },
+        });
         latency.observe(
           `position.${strategyConfig.signal.family}.workToCheckpointMs`,
           Date.now() - +decidedAt,
@@ -1743,6 +1783,7 @@ async function processRealtimePosition(
         confirmedThrough = new Date(through);
         traceEventCursor = event.id;
       }
+      priorCheckpointMs += checkpointMs;
       if (result.closed)
         logger.info(
           { positionId: target.id, symbol: target.symbol, reason: settlement?.exitReason },

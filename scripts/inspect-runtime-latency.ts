@@ -63,6 +63,7 @@ try {
     ),
     notes: [
       "Five-minute rolling histogram upper bounds; a worker restart clears observations. Missing samples stay unobserved; sparse samples do not establish stable tail latency.",
+      "phaseMaxima retain contextual checkpoint maxima until process exit, independently of the rolling window. Stage timings accumulate per work attempt; lane load/queue and receive-to-read overlap and must not be added together.",
       "Counters measure processing attempts except committed fills/terminal decisions; an expired limit signal alone does not prove a missed profitable entry.",
       "Finality-to-fill includes intentional limit waiting; families and order types are separated. Replay and realtime checkpoints are separate.",
       "Negative cross-clock durations remain counted by metric; affected criteria are clock-uncertain. Raw source times are eight records from the latest 256 journal events, not the entire rolling window.",

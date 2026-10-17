@@ -269,6 +269,65 @@ test("startup and steady observations stay separate across one rolling window", 
   assert.equal(result.windowStartedAt, new Date(10000).toISOString());
 });
 
+test("checkpoint maxima retain the original event and startup stages after the rolling window", () => {
+  let now = 0;
+  const metrics = new RuntimeLatency(() => now);
+  const context = { eventId: "large-id", stages: { historyWaitMs: 3000 } };
+  metrics.observe("position.realtime.eventToCheckpointMs", 3176, context);
+  context.stages.historyWaitMs = 0;
+  now = 300001;
+  metrics.observe("position.realtime.eventToCheckpointMs", 100, { eventId: "new-id" });
+  metrics.observe("position.realtime.eventToCheckpointMs", 99, { eventId: "smaller" });
+  metrics.observe("position.realtime.eventToCheckpointMs", -1, { eventId: "invalid" });
+  const result = metrics.snapshot();
+  const maximum = result.phaseMaxima.startup!["position.realtime.eventToCheckpointMs"]!;
+  assert.equal(result.phases.startup!.metrics["position.realtime.eventToCheckpointMs"], undefined);
+  assert.equal(maximum.milliseconds, 3176);
+  assert.equal(maximum.context.eventId, "large-id");
+  assert.deepEqual(maximum.context.stages, { historyWaitMs: 3000 });
+  assert.equal(
+    result.phaseMaxima.steady!["position.realtime.eventToCheckpointMs"]!.context.eventId,
+    "new-id",
+  );
+  maximum.context.eventId = "modified";
+  assert.equal(
+    metrics.snapshot().phaseMaxima.startup!["position.realtime.eventToCheckpointMs"]!.context
+      .eventId,
+    "large-id",
+  );
+});
+
+test("lane timing separates loading from waiting for an occupied processing slot", async () => {
+  let now = 0,
+    stopped = false;
+  const timings: unknown[] = [];
+  await runRuntimeLane({
+    stopping: () => stopped,
+    clock: () => now,
+    concurrency: 1,
+    intervalMs: 100,
+    load: async () => {
+      now = 30;
+      return [1, 2];
+    },
+    process: async (_item, timing) => {
+      timings.push(timing);
+      now += 80;
+    },
+    onError: (error) => {
+      throw error;
+    },
+    wait: async (ms) => {
+      assert.equal(ms, 1);
+      stopped = true;
+    },
+  });
+  assert.deepEqual(timings, [
+    { loadMs: 30, queueMs: 0 },
+    { loadMs: 30, queueMs: 80 },
+  ]);
+});
+
 test("runtime task progress exposes a stuck lane while other lanes complete", async () => {
   const { RuntimeTaskProgress } = await import("../apps/worker/src/runtime-task-progress");
   let wall = 10000,

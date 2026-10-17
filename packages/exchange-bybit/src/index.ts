@@ -3,7 +3,11 @@ import { createHmac, randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
-import { BybitOrderBookCache, type BybitTopOfBook } from "./orderbook";
+import {
+  BybitOrderBookCache,
+  BybitOrderBookContinuityError,
+  type BybitTopOfBook,
+} from "./orderbook";
 export { BybitOrderBookCache, type BybitTopOfBook } from "./orderbook";
 
 type BybitFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -234,6 +238,7 @@ export type BybitPublicStreamHandlers = {
     symbol: string;
     receivedAt: Date;
     error: Error;
+    continuity?: Pick<BybitOrderBookContinuityError, "reasons" | "previous" | "current">;
   }) => void | Promise<void>;
   onClosedCandle: (candle: BybitMarketCandle) => void | Promise<void>;
   onConnected?: (() => void) | undefined;
@@ -1052,7 +1057,20 @@ export class BybitPublicStreamClient {
         if (handlers.onOrderbookUnavailable)
           invokeHandler(
             handlers.onOrderbookUnavailable,
-            { symbol, receivedAt, error: failure },
+            {
+              symbol,
+              receivedAt,
+              error: failure,
+              ...(error instanceof BybitOrderBookContinuityError
+                ? {
+                    continuity: {
+                      reasons: error.reasons,
+                      previous: error.previous,
+                      current: error.current,
+                    },
+                  }
+                : {}),
+            },
             handlers.onError,
           );
         else handlers.onError?.(failure);

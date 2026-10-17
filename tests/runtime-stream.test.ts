@@ -9,6 +9,7 @@ const { WebSocketServer } = createRequire(
 import {
   BybitPublicStreamClient,
   type BybitPublicTrade,
+  type BybitPublicStreamHandlers,
 } from "../packages/exchange-bybit/src/index";
 
 test(
@@ -303,6 +304,9 @@ test(
     const trades: BybitPublicTrade[] = [];
     const errors: string[] = [],
       unavailable: string[] = [];
+    const failures: Parameters<
+      NonNullable<BybitPublicStreamHandlers["onOrderbookUnavailable"]>
+    >[0][] = [];
     let connections = 0,
       done!: () => void;
     const received = new Promise<void>((resolve) => {
@@ -339,7 +343,7 @@ test(
         socket.send(JSON.stringify(book));
         sendTrade("before");
         const invalid = structuredClone(book);
-        invalid.data.b[0]![0] = "102";
+        invalid.data.b[0]![1] = "1";
         socket.send(JSON.stringify(invalid));
         sendTrade("without-book");
         socket.send(JSON.stringify(book));
@@ -359,9 +363,9 @@ test(
         onError: (error) => {
           errors.push(error.message);
         },
-        onOrderbookUnavailable: ({ symbol, error }) => {
-          unavailable.push(symbol);
-          assert.ok(error.cause instanceof Error);
+        onOrderbookUnavailable: (failure) => {
+          unavailable.push(failure.symbol);
+          failures.push(failure);
         },
         onTrade: (trade) => {
           trades.push(trade);
@@ -375,6 +379,13 @@ test(
       assert.equal(connections, 1);
       assert.deepEqual(errors, []);
       assert.deepEqual(unavailable, ["BTCUSDT"]);
+      assert.ok(failures[0]!.error.cause instanceof Error);
+      const continuity = failures[0]!.continuity!;
+      assert.deepEqual(continuity.reasons, ["changed-without-update"]);
+      assert.deepEqual(continuity.previous.bid, ["99", "2"]);
+      assert.deepEqual(continuity.current.data.b, [["99", "1"]]);
+      assert.equal(continuity.previous.updateId, String(continuity.current.data.u));
+      assert.ok(continuity.previous.receivedAt <= continuity.current.receivedAt);
       assert.ok(trades[0]!.book);
       assert.equal(trades[1]!.book, null);
       assert.ok(trades[2]!.book);

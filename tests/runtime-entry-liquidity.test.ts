@@ -130,6 +130,32 @@ test("IOC never reuses liquidity consumed by the source trade or another fill", 
   assert.equal(evaluateExecutionEntryOrder(order(), quote, "2").kind, "cancel");
   assert.throws(() => evaluateExecutionEntryOrder(order(), quote, "-1"), /consumed/);
 });
+for (const side of ["long", "short"] as const) {
+  test(`${side}: a heartbeat with advancing sequence cannot replenish consumed IOC liquidity`, () => {
+    const input = order(side),
+      quote = event(side);
+    input.quantity = "10";
+    const first = evaluateExecutionEntryOrder(input, quote);
+    assert.equal(first.kind, "fill");
+    if (first.kind !== "fill") return;
+    const data = quote.executionData as ExecutionEntryOrder["placementData"];
+    data[5]![4] = at + 100;
+    data[5]![5] = at + 200;
+    data[5]![7] = "999";
+    quote.id = 3n;
+    quote.observedAt = new Date(at + 200);
+    quote.receivedAt = new Date(at + 201);
+    const consumed = new Map([[first.sourceKey, first.quantity]]);
+    const offered = evaluateExecutionEntryOrder(input, quote);
+    assert.equal(offered.kind, "fill");
+    if (offered.kind !== "fill") return;
+    assert.equal(offered.sourceKey, first.sourceKey);
+    assert.deepEqual(evaluateExecutionEntryOrder(input, quote, consumed.get(offered.sourceKey)), {
+      kind: "cancel",
+      reason: "ENTRY_LIQUIDITY_UNAVAILABLE",
+    });
+  });
+}
 test("submission, both expiry clocks, stream changes and missing/stale/future books are explicit", () => {
   const input = order(),
     quote = event();

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BybitOrderBookCache } from "../packages/exchange-bybit/src/orderbook";
+import heartbeats from "./fixtures/bybit-l1-heartbeats.json";
 import {
   executionBookFailure,
   readExecutionMarketData,
@@ -56,10 +57,33 @@ test("book snapshots allow skipped IDs and unchanged heartbeat, but reject regre
   books.apply(snapshot(200, 105, 205), new Date(210));
   books.apply(snapshot(300, 105, 205), new Date(310));
   assert.equal(+books.atTrade("BTCUSDT", new Date(320), new Date(330))!.receivedAt, 310);
+  books.apply(snapshot(301, 105, 206), new Date(311));
+  assert.throws(() => books.apply(snapshot(302, 106, 205), new Date(320)), /regressed/);
+  assert.throws(() => books.apply(snapshot(300, 106, 207), new Date(320)), /regressed/);
   assert.throws(() => books.apply(snapshot(301, 104, 206), new Date(320)), /regressed/);
-  const changed = snapshot(301, 105, 205);
+  const changed = snapshot(302, 105, 206);
   changed.data.b[0]![1] = "1";
   assert.throws(() => books.apply(changed, new Date(320)), /without an update/);
+});
+
+test("captured L1 heartbeats may advance cross-sequence without changing update ID or liquidity", () => {
+  for (const { previous, current, receivedAt } of heartbeats.pairs) {
+    const books = new BybitOrderBookCache(),
+      received = new Date(receivedAt);
+    books.apply(previous, received);
+    books.apply(current, received);
+    const selected = books.atTrade(current.data.s, new Date(current.cts), received)!;
+    assert.equal(selected.updateId, String(previous.data.u));
+    assert.equal(selected.sequence, String(current.data.seq));
+    assert.ok(current.data.seq > previous.data.seq);
+    assert.deepEqual(selected.bid, previous.data.b[0]);
+    assert.deepEqual(selected.ask, previous.data.a[0]);
+    assert.equal(+selected.observedAt, current.cts);
+    assert.equal(
+      books.atTrade(current.data.s, new Date(previous.cts), received)!.sequence,
+      String(previous.data.seq),
+    );
+  }
 });
 test("service restart, unsubscribe and empty snapshot invalidate former book history", () => {
   const books = new BybitOrderBookCache();

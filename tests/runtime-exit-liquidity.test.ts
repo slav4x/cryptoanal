@@ -88,6 +88,15 @@ for (const side of ["BUY", "SELL"] as const) {
       evaluateLiquidityExitOrder(order, event(3n, 10, "1.23"), "1", "0.23").kind,
       "cancel",
     );
+    const heartbeat = event(4n, 20, "1.239");
+    const data = heartbeat.executionData as { 5: string[] };
+    data[5][6] = "3";
+    const offered = evaluateLiquidityExitOrder(order, heartbeat);
+    assert.equal(offered.kind, "fill");
+    if (offered.kind === "fill") {
+      assert.equal(offered.sourceKey, `stream:BTCUSDT:book:3:${side === "BUY" ? "short" : "long"}`);
+      assert.equal(evaluateLiquidityExitOrder(order, heartbeat, "1.23", "0.009").kind, "cancel");
+    }
     assert.deepEqual(evaluateLiquidityExitOrder(order, event(2n, 0)), {
       kind: "wait",
       reason: "EXIT_BEFORE_SUBMISSION",

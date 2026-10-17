@@ -33,7 +33,18 @@ export type BybitTopOfBook = {
   sequence: string;
 };
 
-// Level 1 is a snapshot-only feed. Its update IDs need not be consecutive.
+export class BybitOrderBookContinuityError extends Error {
+  public constructor(
+    public readonly reasons: string[],
+    public readonly previous: BybitTopOfBook,
+    public readonly current: z.infer<typeof messageSchema> & { receivedAt: Date },
+  ) {
+    super("Bybit orderbook regressed or changed without an update");
+    this.name = "BybitOrderBookContinuityError";
+  }
+}
+
+// L1 snapshot IDs may skip; unchanged heartbeats retain u while cross-sequence advances.
 export class BybitOrderBookCache {
   private readonly histories = new Map<string, BybitTopOfBook[]>();
 
@@ -46,7 +57,8 @@ export class BybitOrderBookCache {
   }
 
   public apply(payload: unknown, receivedAt: Date) {
-    const { data, topic, cts, ts } = messageSchema.parse(payload);
+    const message = messageSchema.parse(payload);
+    const { data, topic, cts, ts } = message;
     if (topic !== `orderbook.1.${data.s}` || cts > +receivedAt + 1000 || cts > ts)
       throw new Error("Invalid Bybit orderbook topic or time");
     if (!data.b.length || !data.a.length) {
@@ -60,18 +72,23 @@ export class BybitOrderBookCache {
     const previous = history.at(-1);
     if (data.u === 1) history = [];
     else if (previous) {
-      if (
-        BigInt(data.u) < BigInt(previous.updateId) ||
-        BigInt(data.seq) < BigInt(previous.sequence) ||
-        cts < +previous.observedAt ||
-        (String(data.u) === previous.updateId &&
-          (String(data.seq) !== previous.sequence ||
-            !new Decimal(bid[0]).eq(previous.bid[0]) ||
-            !new Decimal(bid[1]).eq(previous.bid[1]) ||
-            !new Decimal(ask[0]).eq(previous.ask[0]) ||
-            !new Decimal(ask[1]).eq(previous.ask[1])))
-      )
-        throw new Error("Bybit orderbook regressed or changed without an update");
+      const reasons = [
+        ...(BigInt(data.u) < BigInt(previous.updateId) ? ["update-id-regressed"] : []),
+        ...(BigInt(data.seq) < BigInt(previous.sequence) ? ["sequence-regressed"] : []),
+        ...(cts < +previous.observedAt ? ["engine-time-regressed"] : []),
+        ...(String(data.u) === previous.updateId &&
+        (!new Decimal(bid[0]).eq(previous.bid[0]) ||
+          !new Decimal(bid[1]).eq(previous.bid[1]) ||
+          !new Decimal(ask[0]).eq(previous.ask[0]) ||
+          !new Decimal(ask[1]).eq(previous.ask[1]))
+          ? ["changed-without-update"]
+          : []),
+      ];
+      if (reasons.length)
+        throw new BybitOrderBookContinuityError(reasons, structuredClone(previous), {
+          ...message,
+          receivedAt: new Date(+receivedAt),
+        });
     }
     history.push({
       symbol: data.s,

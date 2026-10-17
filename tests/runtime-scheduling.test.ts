@@ -245,3 +245,67 @@ test("a prolonged overflow emits one gap per episode instead of flooding stream 
   await journal.flushAll();
   assert.equal(journal.healthy, true);
 });
+
+test("startup and steady observations stay separate across one rolling window", () => {
+  let now = 0;
+  const metrics = new RuntimeLatency(() => now);
+  now = 299999;
+  metrics.observe("position.recovery.eventToCheckpointMs", 8508);
+  metrics.observe("market.deliveryMs", -350);
+  now = 300001;
+  metrics.observe("position.realtime.eventToCheckpointMs", 100);
+  metrics.observe("market.deliveryMs", 20);
+  const result = metrics.snapshot();
+  assert.equal(
+    result.phases.startup!.metrics["position.recovery.eventToCheckpointMs"]!.maxMs,
+    8508,
+  );
+  assert.equal(result.phases.steady!.metrics["position.recovery.eventToCheckpointMs"], undefined);
+  assert.equal(result.phases.steady!.metrics["position.realtime.eventToCheckpointMs"]!.count, 1);
+  assert.equal(result.phases.startup!.counters["clock.negative.market.deliveryMs"], 1);
+  assert.equal(result.counters["clock.negativeDuration"], 1);
+  assert.equal(result.metrics["market.deliveryMs"]!.count, 1);
+  assert.equal(result.startedAt, new Date(0).toISOString());
+  assert.equal(result.windowStartedAt, new Date(10000).toISOString());
+});
+
+test("runtime task progress exposes a stuck lane while other lanes complete", async () => {
+  const { RuntimeTaskProgress } = await import("../apps/worker/src/runtime-task-progress");
+  let wall = 10000,
+    tick = 0,
+    release!: () => void;
+  const tracker = new RuntimeTaskProgress(
+    () => wall,
+    () => tick,
+  );
+  const stuck = tracker.during(
+    "funding",
+    "BTCUSDT",
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  await tracker.during("position", "position-1", async () => 1);
+  wall = 9000;
+  tick = 1234;
+  const snapshot = tracker.snapshot();
+  assert.deepEqual(snapshot.active, [
+    { lane: "funding", key: "BTCUSDT", startedAt: new Date(10000).toISOString(), ageMs: 1234 },
+  ]);
+  assert.equal(snapshot.lanes.position!.completed, 1);
+  assert.equal(snapshot.lanes.funding!.completed, 0);
+  await assert.rejects(
+    tracker.during("funding", "BTCUSDT", async () => {}),
+    /Duplicate runtime task/,
+  );
+  release();
+  await stuck;
+  assert.deepEqual(tracker.snapshot().active, []);
+  await assert.rejects(
+    tracker.during("entry", "entry-1", async () => {
+      throw new Error("response timed out");
+    }),
+  );
+  assert.equal(tracker.snapshot().lanes.entry!.failed, 1);
+});

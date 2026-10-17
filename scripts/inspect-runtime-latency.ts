@@ -1,6 +1,11 @@
 import "dotenv/config";
 import { Client } from "pg";
 import { writeFile } from "node:fs/promises";
+import {
+  assessRuntimeLatency,
+  runtimeLatencyLimits,
+  latencyTailSampleFloor,
+} from "./lib/runtime-latency-report";
 import type { RuntimeLatency } from "../apps/worker/src/runtime-latency";
 
 const output = process.argv.slice(2).filter((a) => a !== "--")[0];
@@ -15,36 +20,38 @@ try {
   );
   const latency = heartbeat?.metadata?.latency as
     ReturnType<RuntimeLatency["snapshot"]> | undefined;
-  const limits = {
-    "market.deliveryMs": 1000,
-    "journal.eventToCommitMs": 500,
-    "position.realtime.eventToCheckpointMs": 2000,
-    "position.recovery.eventToCheckpointMs": 5000,
-    "protection.eventToCheckpointMs": 1000,
-    "entry.quoteToFillMs": 1000,
-  };
+  const limits = runtimeLatencyLimits;
   const fresh = !!heartbeat && Date.now() - +heartbeat.lastSeenAt <= 45000;
+  const criteria = (
+    samples: Pick<ReturnType<RuntimeLatency["snapshot"]>, "metrics" | "counters">,
+  ) => assessRuntimeLatency(samples, fresh, latency?.version ?? 1);
   const data = {
     asOf: new Date().toISOString(),
     worker: heartbeat?.lastSeenAt ?? null,
     fresh,
     latency: latency ?? null,
     queues: heartbeat?.metadata?.queues ?? null,
-    criteria: Object.entries(limits).map(([metric, p99LimitMs]) => {
-      const sample = latency?.metrics[metric];
-      return {
-        metric,
-        p99LimitMs,
-        samples: sample?.count ?? 0,
-        status: !fresh
-          ? "stale"
-          : !sample
-            ? "unobserved"
-            : sample.p99Ms <= p99LimitMs
-              ? "passed"
-              : "exceeded",
-      };
-    }),
+    taskProgress: heartbeat?.metadata?.taskProgress ?? null,
+    tailSampleFloor: latencyTailSampleFloor,
+    criteria: latency
+      ? criteria(latency)
+      : Object.entries(limits).map(([metric, p99LimitMs]) => ({
+          metric,
+          p99LimitMs,
+          samples: 0,
+          status: fresh ? "unobserved" : "stale",
+        })),
+    phases: latency?.phases
+      ? Object.fromEntries(
+          Object.entries(latency.phases).map(([phase, samples]) => [
+            phase,
+            { ...samples, criteria: criteria(samples) },
+          ]),
+        )
+      : null,
+    rawSourceTimes: await rows(
+      `SELECT id::text,"eventKey","observedAt","receivedAt",extract(epoch FROM ("receivedAt"-"observedAt"))*1000 AS "sourceToReceiveMs" FROM (SELECT id,"eventKey","observedAt","receivedAt" FROM "MarketPriceEvent" ORDER BY id DESC LIMIT 256) recent ORDER BY id DESC LIMIT 8`,
+    ),
     pending: await rows(
       `SELECT "executionRunId",symbol,"pendingSignal"->>'availableAt' AS "availableAt","pendingSignal"->>'expiresAt' AS "expiresAt" FROM "RuntimeCursor" WHERE "pendingSignal" IS NOT NULL`,
     ),
@@ -55,9 +62,10 @@ try {
       `SELECT application_name,state,wait_event_type,count(*)::int FROM pg_stat_activity WHERE application_name LIKE 'cryptoanal-%' GROUP BY 1,2,3 ORDER BY 1,2`,
     ),
     notes: [
-      "Five-minute rolling histogram upper bounds; a worker restart clears observations. Missing samples stay unobserved.",
+      "Five-minute rolling histogram upper bounds; a worker restart clears observations. Missing samples stay unobserved; sparse samples do not establish stable tail latency.",
       "Counters measure processing attempts except committed fills/terminal decisions; an expired limit signal alone does not prove a missed profitable entry.",
       "Finality-to-fill includes intentional limit waiting; families and order types are separated. Replay and realtime checkpoints are separate.",
+      "Negative cross-clock durations remain counted by metric; affected criteria are clock-uncertain. Raw source times are eight records from the latest 256 journal events, not the entire rolling window.",
       "These operational targets are for this DRY_RUN worker and do not establish Demo/Live fill latency or exchange execution readiness.",
     ],
   };

@@ -4,6 +4,7 @@ import {
   executionHoldingDeadline,
 } from "@cryptoanal/application";
 import { runRuntimeLane } from "./runtime-lane";
+import { RuntimeTaskProgress } from "./runtime-task-progress";
 import { selectPriorityExit } from "./runtime-priority-exit";
 import { RuntimeLatency } from "./runtime-latency";
 import { RuntimeProtectionWatch, RuntimeProtectionPreempted } from "./runtime-protection-watch";
@@ -164,6 +165,7 @@ const journalPrisma = createPrismaClient(config.DATABASE_URL, {
   statementTimeoutMs: 4000,
 });
 const latency = new RuntimeLatency();
+const taskProgress = new RuntimeTaskProgress();
 const protectionWatch = new RuntimeProtectionWatch();
 const indicatorSeedCache = new RecoveryRequestCache<
   Record<string, { checkpoint: ExecutionIndicatorCheckpoint; candle: EnrichedExecutionCandle }>
@@ -349,6 +351,7 @@ async function writeHeartbeat() {
     executionEngineVersion,
     validationEngineVersion,
     latency: latency.snapshot(),
+    taskProgress: taskProgress.snapshot(),
     queues: {
       journal: priceJournal.size,
       journalOldestAgeMs: priceJournal.oldest?.receivedAt
@@ -466,54 +469,60 @@ async function instrumentMetadataLoop() {
 async function fundingLoop() {
   while (!stopping) {
     try {
-      const [tickers, positions, series] = await Promise.all([
-        marketClient.getLinearTickers(),
-        fundingRepository.listOpen(),
-        listRequiredMarketSeries(),
-      ]);
+      const [tickers, positions, series] = await taskProgress.during("funding", "load", () =>
+        Promise.all([
+          marketClient.getLinearTickers(),
+          fundingRepository.listOpen(),
+          listRequiredMarketSeries(),
+        ]),
+      );
       const symbols = [
         ...new Set([...series.map((s) => s.symbol), ...positions.map((p) => p.symbol)]),
       ].filter((s) => s.endsWith("USDT"));
       for (const symbol of symbols) {
         if (stopping) break;
         try {
-          const ticker = tickers.find((t) => t.symbol === symbol);
-          if (!ticker?.nextFundingAt || ticker.nextFundingAt <= ticker.observedAt)
-            throw new Error("Funding schedule unavailable");
-          const held = positions.filter((p) => p.symbol === symbol),
-            throughAt = new Date(Math.min(Date.now(), +ticker.observedAt));
-          const startsAt = new Date(
-            held.reduce((min, p) => Math.min(min, +p.openedAt), +throughAt),
-          );
-          const prior = await prisma.fundingMarketState.findUnique({
-            where: { symbol },
-            include: { snapshot: true },
+          await taskProgress.during("funding", symbol, async () => {
+            const ticker = tickers.find((t) => t.symbol === symbol);
+            if (!ticker?.nextFundingAt || ticker.nextFundingAt <= ticker.observedAt)
+              throw new Error("Funding schedule unavailable");
+            const held = positions.filter((p) => p.symbol === symbol),
+              throughAt = new Date(Math.min(Date.now(), +ticker.observedAt));
+            const startsAt = new Date(
+              held.reduce((min, p) => Math.min(min, +p.openedAt), +throughAt),
+            );
+            const prior = await prisma.fundingMarketState.findUnique({
+              where: { symbol },
+              include: { snapshot: true },
+            });
+            if (prior && hashTracePayload(prior.snapshot.payload) !== prior.snapshot.payloadHash)
+              throw new Error("Funding cache checksum mismatch");
+            const reusable =
+              prior &&
+              prior.checkedFrom <= startsAt &&
+              +prior.nextFundingAt === +ticker.nextFundingAt &&
+              prior.nextFundingAt > throughAt &&
+              !held.some(
+                (p) => (p.fundingState as { status?: string } | null)?.status === "pending",
+              );
+            const data: ExecutionFundingDataset = reusable
+              ? (prior.snapshot.payload as unknown as ExecutionFundingDataset)
+              : {
+                  version: 1,
+                  policy: enabledFundingPolicy,
+                  symbols: [symbol],
+                  startsAt: startsAt.toISOString(),
+                  throughAt: throughAt.toISOString(),
+                  coverage: "complete",
+                  events: await marketClient.getLinearFundingHistory(symbol, startsAt, throughAt),
+                };
+            await fundingRepository.saveMarket({
+              data,
+              nextFundingAt: ticker.nextFundingAt,
+              observedAt: ticker.observedAt,
+            });
+            for (const p of held) await fundingRepository.synchronizePosition(p.id);
           });
-          if (prior && hashTracePayload(prior.snapshot.payload) !== prior.snapshot.payloadHash)
-            throw new Error("Funding cache checksum mismatch");
-          const reusable =
-            prior &&
-            prior.checkedFrom <= startsAt &&
-            +prior.nextFundingAt === +ticker.nextFundingAt &&
-            prior.nextFundingAt > throughAt &&
-            !held.some((p) => (p.fundingState as { status?: string } | null)?.status === "pending");
-          const data: ExecutionFundingDataset = reusable
-            ? (prior.snapshot.payload as unknown as ExecutionFundingDataset)
-            : {
-                version: 1,
-                policy: enabledFundingPolicy,
-                symbols: [symbol],
-                startsAt: startsAt.toISOString(),
-                throughAt: throughAt.toISOString(),
-                coverage: "complete",
-                events: await marketClient.getLinearFundingHistory(symbol, startsAt, throughAt),
-              };
-          await fundingRepository.saveMarket({
-            data,
-            nextFundingAt: ticker.nextFundingAt,
-            observedAt: ticker.observedAt,
-          });
-          for (const p of held) await fundingRepository.synchronizePosition(p.id);
         } catch (error) {
           await fundingRepository.markUnavailable(symbol, "FUNDING_SOURCE_UNAVAILABLE");
           logger.warn(
@@ -998,7 +1007,7 @@ async function runtimeQuoteLoop() {
     process: async (position) => {
       const start = performance.now();
       try {
-        await processRealtimePosition(position);
+        await taskProgress.during("position", position.id, () => processRealtimePosition(position));
       } finally {
         latency.observe("position.workMs", performance.now() - start);
       }
@@ -1040,7 +1049,9 @@ async function runtimeEntryLoop() {
     process: async (pending) => {
       const start = performance.now();
       try {
-        await processRealtimeEntry(pending);
+        await taskProgress.during("entry", `${pending.executionRun.id}:${pending.symbol}`, () =>
+          processRealtimeEntry(pending),
+        );
       } finally {
         latency.observe("entry.workMs", performance.now() - start);
       }

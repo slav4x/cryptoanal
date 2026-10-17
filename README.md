@@ -433,6 +433,17 @@ docker compose ps
 docker compose logs -f api worker
 ```
 
+Dockerfile кэширует установку зависимостей по lockfile и manifest-файлам workspace;
+генерация Prisma имеет отдельный слой по схеме и `prisma.config.ts`.
+Изменение кода приложений и общих пакетов не переустанавливает зависимости и не перегенерирует клиент.
+Локальный generated-клиент исключён из build context и создаётся внутри образа.
+При добавлении workspace-пакета добавьте его `package.json` в список `COPY` перед установкой.
+
+API, worker, dashboard и trade-auditor имеют отдельные build targets.
+Например, `docker compose build worker` собирает только worker; API и dashboard
+при этом не собираются. `trade-auditor` проверяет TypeScript своего контура.
+Команда сборки не перезапускает работающие контейнеры.
+
 Остановка приложений без удаления базы:
 
 ```bash

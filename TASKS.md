@@ -433,6 +433,15 @@ runtime replay, единый provenance метрик и явная disabled poli
 
 ## Этап 9 — Production readiness и Bybit Demo
 
+- [x] Очистить неиспользуемый кэш Docker build, сохранив образы, контейнеры и тома:
+      17 октября освобождено 18,94 ГБ по отчёту Docker.
+- [x] Отделить установку зависимостей и Prisma generation от исходников в Dockerfile;
+      сборка worker не должна собирать API/dashboard.
+- [x] Проверить все четыре Docker target и повторную сборку после изменения исходника:
+      установка зависимостей и Prisma generation используют кэш. Обновить документацию.
+      17 октября: четыре сборки, cache probe 1,08 с, container smoke checks,
+      typecheck/lint/format прошли; работающие сервисы не перезапускались.
+
 - [ ] Подготовить постоянное окружение вне ноутбука: server/VPS, HTTPS, домен, закрытая
       административная поверхность и воспроизводимый deployment/rollback runbook.
 - [ ] Добавить CI для typecheck, lint, build, проверки Prisma migrations и сборки Docker

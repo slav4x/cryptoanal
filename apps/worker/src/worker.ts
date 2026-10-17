@@ -141,6 +141,7 @@ const config = loadServerConfig();
 const prisma = createPrismaClient(config.DATABASE_URL, {
   maxConnections: 4,
   applicationName: "cryptoanal-background",
+  statementTimeoutMs: 20000,
 });
 const tradingPrisma = createPrismaClient(config.DATABASE_URL, {
   maxConnections: 6,

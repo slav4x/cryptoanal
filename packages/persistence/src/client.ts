@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/prisma/client";
+import { BoundedPgClient } from "./bounded-pg-client";
 
 export type CryptoAnalPrismaClient = PrismaClient;
 
@@ -10,6 +11,7 @@ export function createPrismaClient(
     maxConnections: number;
     applicationName: string;
     statementTimeoutMs?: number;
+    queryTimeoutMs?: number;
   },
 ): PrismaClient {
   if (!databaseUrl) {
@@ -23,6 +25,8 @@ export function createPrismaClient(
           max: options.maxConnections,
           application_name: options.applicationName,
           connectionTimeoutMillis: 2000,
+          query_timeout: options.queryTimeoutMs ?? (options.statementTimeoutMs ?? 28000) + 2000,
+          Client: BoundedPgClient,
           ...(options.statementTimeoutMs ? { statement_timeout: options.statementTimeoutMs } : {}),
         }
       : {}),
